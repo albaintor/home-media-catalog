@@ -4,8 +4,6 @@
 
 Home Media Catalog combines a responsive, self-hosted **web application** with a native **iOS/iPadOS app**. The iOS app can manage a catalogue **standalone, without installing a server**. A Docker server is optional for a shared catalogue, web access and AI features; it runs on Linux, macOS/Windows with Docker Desktop, a home server or a NAS.
 
-**Status (30 October 2026):** active development. The server/web project and native iOS client have separate release schedules. See [iOS release preparation](#ios-release-preparation).
-
 
 ## Highlights
 
@@ -42,8 +40,7 @@ Collection-only catalogs do not require Kodi.
 
 ### Automatic HTTPS pairing (no certificate management)
 
-The Docker server automatically creates a persistent self-signed TLS identity at
-`./data/tls/server.crt` and `./data/tls/server.key`. The existing web UI
+The server automatically creates a persistent self-signed TLS identity. The existing web UI
 continues to run over HTTP on `PORT=8099`, and the native API adds
 `https://NAS:8443/` (configurable using `TLS_PORT`).
 
@@ -54,11 +51,7 @@ encrypted pairing exchange and retains the fingerprint in its device-only
 Keychain. No publicly trusted certificate, DNS name or CA installation is
 required.
 
-**Backwards compatibility:** old eight-digit HTTP pairing and saved HTTP
-connections continue working, but they do not establish a TLS pin or securely
-synchronize SMB/SFTP passwords and OneDrive credentials. Scan the QR to enable
-secure credential synchronization. Keep `./data/tls/` backed up: deletion or
-regeneration changes the pinned identity and requires re-pairing. Never expose
+Deletion or regeneration changes the pinned identity and requires re-pairing. Never expose
 the legacy HTTP port on the public Internet. Private NAS addresses still need
 VPN/routing for off-LAN access.
 
@@ -66,7 +59,7 @@ VPN/routing for off-LAN access.
 
 **Home Media Catalog for iOS/iPadOS** provides ordinary catalogue search **inside the main poster/list view** on iPhone and iPad. An optional sparkles action in the top toolbar opens a separate conversational AI search page when a configured server supports it. Search results and follow-up context remain available when returning from media details.
 
-The current native Xcode project targets **iOS/iPadOS 18.0 or later**. Standalone catalogue import, browsing and direct Kodi remote control do not require the Docker server. AI search and shared web/iOS catalogue synchronization do require a compatible server.
+Standalone catalogue import, browsing and direct Kodi remote control do not require the server. AI search and shared web/iOS catalogue synchronization do require the compatible server.
 
 The web and native iOS settings can select **one language-model provider at a time**:
 **OpenAI, Anthropic (Claude), or Google (Gemini)**. Credentials are configured
@@ -108,13 +101,13 @@ Codec, Blu-ray navigation, audio output and MEMC availability depend on the medi
 
 
 
-The project now includes **more than collection management**:
+The project includes **more than collection management**:
 
 - **Web video playback:** network location browser for SMB/FTP/SFTP and configured NFS mounts, HTTP Range streaming, thumbnails sampled from actual videos, and FFmpeg-powered progressive MP4 transcoding of selected non-browser-friendly formats. Browser formats, transcoding quality and seek behaviour depend on source, codec and server CPU.
 - **Cloud media:** OneDrive is currently the only supported integrated provider (including Device Code sign-in for private NAS deployments). Other cloud connectors are not exposed until supported. OneDrive OAuth tokens remain encrypted on the server. Apple's iCloud Drive remains accessible through **iOS Files**, not a server-side iCloud connector.
 - **Native iOS playback:** AVPlayer plus an optional PrismCore/FFmpeg-assisted route for compatible AVC/H.264, HEVC/H.265 and VC-1 videos, track/subtitle selection, chapters, multichannel audio (including Dolby Atmos on compatible playback paths), technical diagnostics, Blu-ray ISO/BDMV playback and offline files. Importing via Files copies the video to app storage; it is not a zero-copy third-party stream.
-- **iOS MEMC motion interpolation:** 48/60 fps targets with Apple VideoToolbox and Vision/Metal optical-flow processing, coarse-to-fine motion estimation and artifact-protection profiles. MEMC can be disabled at any time; Dolby Vision output depends on the selected video processing path.
-- **Catalogue/sync:** improved Kodi synchronisation and cleanup, JSON backups, multi-source libraries, personalised lists and optional conversational AI search.
+- **iOS MEMC motion interpolation:** 48/60 fps targets with Apple VideoToolbox, Vision/Metal optical-flow or AI RIFE processing, coarse-to-fine motion estimation and artifact-protection profiles. MEMC can be disabled at any time; Dolby Vision output depends on the selected video processing path.
+- **Catalogue/sync:** Kodi synchronisation and cleanup, JSON backups, multi-source libraries, personalised lists and optional conversational AI search.
 
 
 ### iOS evaluation, purchase and support
@@ -150,7 +143,7 @@ for component details and unresolved compliance checks.
 
 ### iOS/iPadOS without a server
 
-1. Build/install the native client from the [iOS project](https://github.com/albaintor/home-media-catalog-ios) (App Store availability is not asserted here), and choose **standalone mode**.
+1. Build/install the mobile app from the App Store
 2. Add a Kodi instance via local-network discovery or its hostname/IP address. Enable and configure Kodi's **HTTP JSON-RPC remote control**. Import the library directly from Kodi; an external MariaDB database is **not required** for the normal JSON-RPC import.
 3. Alternatively, import a compatible CLZ Movies, My Movies or Filmotech XML collection. Configure media playback sources separately as needed. AI search and browser access are unavailable without a server.
 
@@ -162,7 +155,6 @@ for component details and unresolved compliance checks.
 
 ## Documentation
 
-- [Native iOS/iPadOS project and standalone setup](https://github.com/albaintor/home-media-catalog-ios)
 - [Server installation, configuration, updates and troubleshooting](docs/installation.md)
 - [iOS / Xcode Cloud setup, SwiftPM recovery and signing](docs/ios-xcode-cloud.md)
 - [iOS StoreKit purchases, trial and Debug reset](docs/ios-storekit.md)
@@ -172,13 +164,10 @@ for component details and unresolved compliance checks.
 - [Data model and backups](docs/model.md) · [Development and testing](docs/development.md)
 - [Third-party licences, component usage and distribution obligations](THIRD_PARTY_NOTICES.md)
 
-Home Media Catalog now includes an **optional network/cloud media browser and video playback workflow**. The browser can transcode some remote video formats with FFmpeg; this consumes server CPU and is not equivalent to direct/native playback. Native iOS playback uses AVPlayer and PrismCore. Use **HTTPS or a VPN** for remote access.
+Home Media Catalog includes an **optional network/cloud media browser and video playback workflow**. The browser can transcode some remote video formats with FFmpeg; this consumes server CPU and is not equivalent to direct/native playback. Native iOS playback uses AVPlayer and PrismCore. Use **HTTPS or a VPN** for remote access.
 
 [Support the project on Buy Me a Coffee](https://www.buymeacoffee.com/albaintor)
 
-## iOS release preparation
-
-Before making the app available, verify the build and signing on a physical device, video playback and network sources, the StoreKit purchase and restoration flow, and the current iOS screenshots. Configure the App Store Connect listing and privacy-policy link for the submitted version.
 
 ## Support
 
