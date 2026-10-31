@@ -78,9 +78,9 @@ from .models import (
     PairingRedeem,
     PairingRequest,
     PersonalInput,
-    PlaybackResumeInput,
     PlaybackLocationInput,
     PlaybackLocationView,
+    PlaybackResumeInput,
     PlayerInput,
     PlayerView,
     PlayInput,
@@ -91,6 +91,7 @@ from .models import (
     SessionView,
     SortField,
     SourceInput,
+    SourceType,
     SourceView,
     WatchStatus,
     WritebackStatus,
@@ -109,7 +110,7 @@ from .playback_media import (
 from .playback_operations import mutate_location, search_location
 from .playback_thumbnails import thumbnail_location
 from .playback_transcode import browser_transcode
-from .players import play
+from .players import connection, play
 from .players import probe as probe_player
 from .settings import Settings
 from .store import Store
@@ -311,6 +312,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "playback_cloud_oauth",
                 "kodi_clean",
                 "media_details_batch",
+                "music_library",
             ],
         }
 
@@ -753,7 +755,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         genre: str | None = Query(None, max_length=120),
         format: list[str] | None = Query(None),
         collection: str | None = Query(None, max_length=200),
-        source_type: Literal["kodi", "clz", "mymovies", "filmotech"] | None = None,
+        source_type: SourceType | None = None,
         source_id: str | None = None,
         parent_id: str | None = None,
         season: int | None = Query(None, ge=0, le=10000),
@@ -2495,6 +2497,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return store.writeback_history(source_id=source_id, limit=limit)
 
     @app.post(
+        API + "/imports/discogs",
+        response_model=JobView,
+        status_code=202,
+        tags=["Imports"],
+        dependencies=[Depends(writable)],
+    )
+    @app.post(
+        API + "/imports/clz_music",
+        response_model=JobView,
+        status_code=202,
+        tags=["Imports"],
+        dependencies=[Depends(writable)],
+    )
+    @app.post(
+        API + "/imports/music_csv",
+        response_model=JobView,
+        status_code=202,
+        tags=["Imports"],
+        dependencies=[Depends(writable)],
+    )
+    @app.post(
         API + "/imports/clz",
         response_model=JobView,
         status_code=202,
@@ -2531,11 +2554,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             length += len(chunk)
             if length > settings.max_import_bytes:
                 await file.close()
-                raise HTTPException(413, "The XML export exceeds the 20 MiB import limit.")
+                raise HTTPException(413, "The export exceeds the 20 MiB import limit.")
             chunks.append(chunk)
         await file.close()
         if not length:
-            raise HTTPException(422, "Upload a non-empty XML file.")
+            raise HTTPException(422, "Upload a non-empty export file.")
         try:
             return await sync.submit(source_id, b"".join(chunks))
         except BusyError as exc:
@@ -2660,6 +2683,164 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await play(player, detail, data.edition_id, data.resume)
         except ConnectorError as exc:
             raise HTTPException(502, str(exc)) from exc
+
+    # --- Music library ---------------------------------------------------
+    # Music works (artist → album → song) share the catalogue store but are
+    # never returned by /media, so older clients keep their video-only view.
+
+    def _music_error(exc: ValueError) -> HTTPException:
+        return HTTPException(422, str(exc))
+
+    @app.get(API + "/music/status", tags=["Music"], dependencies=[Depends(authenticated)])
+    def music_status():
+        """Counts and a revision token that changes whenever music is republished."""
+        return store.music_status()
+
+    @app.get(API + "/music/facets", tags=["Music"], dependencies=[Depends(authenticated)])
+    def music_facets():
+        return store.music_facets()
+
+    @app.get(API + "/music/artists", tags=["Music"], dependencies=[Depends(authenticated)])
+    def music_artists(
+        q: str = Query("", max_length=200),
+        source_id: str | None = None,
+        sort: Literal["name", "date_added"] = "name",
+        order: Literal["asc", "desc"] = "asc",
+        limit: int = Query(100, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ):
+        try:
+            return store.music_artists(
+                q=q, source_id=source_id, sort=sort, order=order, limit=limit, offset=offset
+            )
+        except ValueError as exc:
+            raise _music_error(exc) from exc
+
+    @app.get(
+        API + "/music/artists/{artist_id}", tags=["Music"], dependencies=[Depends(authenticated)]
+    )
+    def music_artist(artist_id: str):
+        if value := store.music_artist(artist_id):
+            return value
+        raise HTTPException(404, "Unknown artist.")
+
+    @app.get(API + "/music/albums", tags=["Music"], dependencies=[Depends(authenticated)])
+    def music_albums(
+        q: str = Query("", max_length=200),
+        artist_id: str | None = None,
+        genre: str | None = Query(None, max_length=120),
+        format: str | None = Query(None, max_length=120),
+        source_type: SourceType | None = None,
+        source_id: str | None = None,
+        physical: bool | None = None,
+        year: int | None = Query(None, ge=1000, le=3000),
+        sort: Literal[
+            "artist", "title", "year", "date_added", "rating", "user_rating", "last_played"
+        ] = "artist",
+        order: Literal["asc", "desc"] = "asc",
+        limit: int = Query(60, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ):
+        try:
+            return store.music_albums(
+                q=q,
+                artist_id=artist_id,
+                genre=genre,
+                format=format,
+                source_type=source_type,
+                source_id=source_id,
+                physical=physical,
+                year=year,
+                sort=sort,
+                order=order,
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as exc:
+            raise _music_error(exc) from exc
+
+    @app.get(
+        API + "/music/albums/{album_id}", tags=["Music"], dependencies=[Depends(authenticated)]
+    )
+    def music_album(album_id: str):
+        """Album with editions (Kodi files, CDs, vinyls...) and its track list."""
+        if value := store.music_album(album_id):
+            return value
+        raise HTTPException(404, "Unknown album.")
+
+    @app.get(API + "/music/songs", tags=["Music"], dependencies=[Depends(authenticated)])
+    def music_songs(
+        q: str = Query("", max_length=200),
+        album_id: str | None = None,
+        artist_id: str | None = None,
+        sort: Literal["album", "title", "date_added", "last_played", "play_count"] = "album",
+        order: Literal["asc", "desc"] = "asc",
+        limit: int = Query(200, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+    ):
+        try:
+            return store.music_songs(
+                q=q,
+                album_id=album_id,
+                artist_id=artist_id,
+                sort=sort,
+                order=order,
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as exc:
+            raise _music_error(exc) from exc
+
+    @app.get(API + "/music/export", tags=["Music"], dependencies=[Depends(authenticated)])
+    def music_export(
+        kind: Literal["artist", "album", "song"],
+        limit: int = Query(1000, ge=1, le=2000),
+        offset: int = Query(0, ge=0),
+    ):
+        """Compact, ID-ordered pages for an offline replica (mobile clients)."""
+        try:
+            return store.music_export(kind, limit=limit, offset=offset)
+        except ValueError as exc:
+            raise _music_error(exc) from exc
+
+    @app.post(
+        API + "/sources/{source_id}/sync-music",
+        response_model=JobView,
+        status_code=202,
+        tags=["Music"],
+        dependencies=[Depends(writable)],
+    )
+    async def synchronize_music(source_id: str, mariadb_only: bool = False):
+        """Import Kodi's AudioLibrary (JSON-RPC, then the MyMusic SQL fallback)."""
+        if not await asyncio.to_thread(store.source, source_id):
+            raise HTTPException(404, "Unknown source.")
+        try:
+            return await sync.submit_music(source_id, mariadb_only=mariadb_only)
+        except BusyError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post(
+        API + "/players/{player_id}/play-music",
+        tags=["Music"],
+        dependencies=[Depends(writable)],
+    )
+    async def play_music(player_id: str, data: PlayInput):
+        """Play an album or a song of the Kodi music library on a Kodi instance."""
+        player = await asyncio.to_thread(store.player, player_id)
+        target = await asyncio.to_thread(store.music_kodi_target, data.media_id)
+        if not player or not target:
+            raise HTTPException(404, "Unknown player or music item.")
+        if target["source_id"] != player["source_id"] or target["kodi_id"] is None:
+            raise HTTPException(422, "This item has no Kodi edition for this player's source.")
+        key = "albumid" if target["kind"] == "album" else "songid"
+        try:
+            async with connection(player["config"]) as rpc:
+                await rpc("Player.Open", {"item": {key: target["kodi_id"]}})
+        except ConnectorError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return {"player_id": player_id, "media_id": data.media_id, "status": "started"}
 
     # Remote-control API and authenticated Kodi notification relay.
     from .remote import router as remote_router

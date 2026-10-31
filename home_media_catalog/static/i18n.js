@@ -3,6 +3,32 @@
  * preferences or the explicit language selector. Persist the user's choice.
  */
 const EN = {
+  // Music library
+  "Musique": "Music",
+  "Albums": "Albums",
+  "Artistes": "Artists",
+  "Artiste, album, titre…": "Artist, album, track…",
+  "Toute la musique": "All music",
+  "Collection physique (CD, vinyles…)": "Physical collection (CD, vinyl…)",
+  "Bibliothèque Kodi": "Kodi library",
+  "Tous les supports": "All media",
+  "Artiste": "Artist",
+  "Ajout récent": "Recently added",
+  "‹ Tous les albums": "‹ All albums",
+  "Aucun album.": "No album.",
+  "Aucun artiste.": "No artist.",
+  "Éditions": "Editions",
+  "Titres": "Tracks",
+  "Physique": "Physical",
+  "Lire sur Kodi": "Play on Kodi",
+  "Lire l’album sur Kodi": "Play the album on Kodi",
+  "Lecture lancée sur Kodi.": "Playback started on Kodi.",
+  "Synchroniser la musique": "Sync music",
+  "Synchronisation de la musique Kodi demandée.": "Kodi music synchronization requested.",
+  "Bibliothèque musicale Kodi": "Kodi music library",
+  "Synchroniser aussi la bibliothèque musicale (artistes, albums, titres)": "Also synchronize the music library (artists, albums, tracks)",
+  "Base MyMusic (repli MariaDB)": "MyMusic database (MariaDB fallback)",
+  "Aucune musique. Activez la bibliothèque musicale sur une source Kodi, ou importez votre liste de CD/vinyles (Discogs, CLZ Music, CSV) dans les paramètres.": "No music yet. Enable the music library on a Kodi source, or import your CD/vinyl list (Discogs, CLZ Music, CSV) in Settings.",
   // Web video player
   "Analyse du fichier (pistes, chapitres)…": "Analysing the file (tracks, chapters)…",
   "Appuyez sur lecture pour démarrer.": "Press play to start.",

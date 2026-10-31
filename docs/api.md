@@ -56,6 +56,56 @@ contract and keep the discovery handshake backwards-readable.
 
 `/healthz` exposes only process health without authentication. `/docs` is protected and exposes Swagger UI; its Swagger assets are served from FastAPI's default CDN.
 
+## Music Library
+
+Music shares the work/edition model of the video catalogue, with three kinds:
+`artist` → `album` → `song` (a song's `parent_id` is its album, an album's
+`parent_id` is its primary album artist). Music works are never returned by
+`/media`, `/facets` or the AI index, so existing clients keep a video-only view.
+Servers advertise the `music_library` capability in `/discovery`.
+
+**Sources.** A Kodi source reads Kodi's music library when its configuration
+has `"music_enabled": true` (it is then synchronized after the video library by
+`/sources/{id}/sync`) or on demand with `/sources/{id}/sync-music`. The server
+uses `AudioLibrary.GetArtists/GetAlbums/GetSongs` over JSON-RPC (Kodi 17+
+properties, paginated), then falls back to the source's MariaDB account on the
+`MyMusicNN` database (`music_database`, empty = most recent; `artistview`,
+`albumview`, `songview`, `album_artist`, `art`). Music and video snapshots of
+one source are published independently: one never removes the other.
+
+Physical collections are separate source types, imported as files:
+`discogs` (Discogs *Export collection* CSV), `clz_music` (CLZ Music XML) and
+`music_csv` (any CSV with `Artist`/`Artiste`, `Album`/`Title`, and optional
+`Year`, `Format`/`Support`, `Label`, `Genre`, `Barcode`/`EAN`, `Rating`,
+`Notes` columns; `,`, `;` or tab separated). Media descriptions are normalized
+to `CD`, `Vinyl`, `Cassette`, `SACD`, `Blu-ray Audio`, `DVD-Audio`, `MiniDisc`,
+`Digital`, `Box Set`. Physical editions are flagged `physical: true,
+playable: false`; future playable services (streaming) will be new source types
+reusing the same records.
+
+**Reconciliation.** A Kodi album, a CD and a vinyl of the same album become
+editions of a single album work: MusicBrainz release-group IDs first, then an
+unambiguous folded *album artist + title* key (edition noise such as
+"(Remastered)" is ignored, "The Beatles" = "Beatles, The"). Two albums of one
+Kodi library are never merged; songs are never merged across albums.
+
+| Method | Route after `/api/v1` | Result |
+|---|---|---|
+| GET | `/music/status` | Artist/album/song counts, physical album count, sources and a `revision` that changes on every music publication |
+| GET | `/music/facets` | Album genres, formats (FLAC, CD, Vinyl…) and years |
+| GET | `/music/artists` | `q`, `source_id`, `sort=name\|date_added`, `order`, `limit≤200`, `offset` |
+| GET | `/music/artists/{id}` | Artist with its albums and sources |
+| GET | `/music/albums` | `q` (title, artist), `artist_id`, `genre`, `format`, `source_type`, `source_id`, `physical=true\|false`, `year`, `sort=artist\|title\|year\|date_added\|rating\|user_rating\|last_played` |
+| GET | `/music/albums/{id}` | Album, editions (source, format, label, catalogue number, barcode, condition, Kodi file), songs, physical track list |
+| GET | `/music/songs` | `q`, `album_id`, `artist_id`, `sort=album\|title\|date_added\|last_played\|play_count`, `limit≤500` |
+| GET | `/music/export?kind=artist\|album\|song` | ID-ordered compact pages (`limit≤2000`) for mobile offline replicas, with the current `revision` |
+| POST | `/sources/{id}/sync-music` | Kodi music import job (`kodi_music_sync`), `mariadb_only` optional |
+| POST | `/imports/discogs`, `/imports/clz_music`, `/imports/music_csv` | Multipart `source_id` + `file`; job `music_import` |
+| POST | `/players/{id}/play-music` | `{"media_id": album_or_song_id}` → Kodi `Player.Open` with `albumid`/`songid` |
+
+A first import of 150,000 songs took about one minute in benchmarks (expect more on low-power NAS CPUs); an
+unchanged re-synchronization only compares payloads and rewrites nothing.
+
 ## Search, Filters, and Pagination
 
 `GET /media` accepts: `q`, `kind` (`movie`, `tvshow`, `episode`), `watch_status` (`watched`, `unwatched`, `in_progress`, `unknown`), `genre`, `format`, `collection`, `source_type` (`kodi`, `clz`), `source_id`, `parent_id`, `year`, and `recent_days` (1–3650).

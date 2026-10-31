@@ -30,6 +30,7 @@ def test_public_discovery_is_minimal_and_pairing_is_admin_only(client, admin):
             "playback_cloud_oauth",
             "kodi_clean",
             "media_details_batch",
+            "music_library",
         ],
     }
     assert client.post("/api/v1/pairing/start", json={}).status_code == 401

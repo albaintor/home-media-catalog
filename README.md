@@ -9,6 +9,7 @@ Home Media Catalog combines a responsive, self-hosted **web application** with a
 
 - **Combine** Kodi and CLZ Movies, MyMovies, or Filmotech (XML imports), with editions grouped by title.
 - **Explore** movies, TV shows and episodes with posters, cast, formats, advanced filters and optional TMDB metadata.
+- **Music library:** synchronize Kodi's music library (AudioLibrary JSON-RPC, MyMusic MariaDB fallback) and import your physical CDs, vinyls and cassettes (Discogs CSV, CLZ Music XML or a simple CSV). A Kodi album and the CD/LP you own are grouped as editions of the same album; browse by artist → album → tracks on the web and on iOS.
 - **Organize** your collection using custom lists, personal ratings and watched status.
 - **Play** selected titles on an existing Kodi player, with advanced playback controls and media information.
 - **Stream across your network:** browse SMB, NFS, FTP and SFTP sources on iPhone/iPad, directly in standalone mode or with your own server; also access local files and OneDrive.

@@ -13,7 +13,14 @@ from uuid import uuid4
 
 from .connectors.base import Record
 from .connectors.collection_xml import COLLECTION_TYPES, SOURCE_TYPES
+from .connectors.music import (
+    KIND_ORDER,
+    MUSIC_KINDS,
+    VIDEO_KINDS,
+    music_match_keys,
+)
 from .media_formats import canonical_format, canonical_source_format
+from .music_store import MusicQueries
 from .people import category as credit_category
 from .people import person_view, youtube_url
 from .utils import fold, now
@@ -230,7 +237,7 @@ def person_roles(work_id: str, members: Any) -> list[tuple[str, str, str]]:
     return result
 
 
-class Store:
+class Store(MusicQueries):
     def __init__(self, path: Path):
         self.path = path
 
@@ -875,9 +882,9 @@ class Store:
                 )
             ]
             conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
-            for work_id in affected:
-                self._rebuild(conn, work_id)
+            self._rebuild_many(conn, set(affected))
             self._prune(conn)
+            self._set_music_revision(conn)
 
     def has_multiple_kodi_movie_versions(self, source_id: str) -> bool:
         """Protect SQL-imported movie editions not enumerable by standard JSON-RPC."""
@@ -898,15 +905,31 @@ class Store:
             movies.add(movie_id)
         return False
 
-    def apply_snapshot(self, source_id: str, records: list[Record]) -> dict[str, Any]:
-        """Atomic replacement per source; stable edition IDs across subsequent imports."""
+    def apply_snapshot(
+        self, source_id: str, records: list[Record], *, scope: str = "video"
+    ) -> dict[str, Any]:
+        """Atomic replacement per source; stable edition IDs across subsequent imports.
+
+        ``scope`` limits the replacement to video or music records: a Kodi
+        source holds both libraries, which are synchronized independently.
+        """
+        kinds = {"video": VIDEO_KINDS, "music": MUSIC_KINDS}.get(scope)
+        if kinds is None:
+            raise ValueError("Unknown snapshot scope.")
+        if any(record.kind not in kinds for record in records):
+            raise ValueError(f"The snapshot contains records outside the {scope} library.")
+        marks = ",".join("?" for _ in kinds)
         with self.connect() as conn:
             source = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
             if not source:
                 raise ValueError("Source no longer exists.")
             old = {
                 r["external_key"]: r
-                for r in conn.execute("SELECT * FROM records WHERE source_id=?", (source_id,))
+                for r in conn.execute(
+                    "SELECT * FROM records WHERE source_id=? AND json_extract(payload,'$.kind') "
+                    f"IN ({marks})",
+                    (source_id, *sorted(kinds)),
+                )
             }
             # Only changed/removed works need their metadata and FTS rebuilt.
             # A no-op snapshot must not rewrite thousands of SQLite rows.
@@ -915,7 +938,7 @@ class Store:
             resolved = {}
             inserted = updated = unchanged = conflicts = reassigned = 0
             # Parents first ensures episode links are available in the same import.
-            for record in sorted(records, key=lambda r: r.kind == "episode"):
+            for record in sorted(records, key=lambda r: KIND_ORDER.get(r.kind, 1)):
                 if record.external_key in seen:
                     raise ValueError("The source snapshot contains duplicate identifiers.")
                 seen.add(record.external_key)
@@ -932,14 +955,20 @@ class Store:
                     )
                     if changed_identity:
                         work_id, conflict = self._match_work(
-                            conn, record, exclude=work_id, source_type=source["type"]
+                            conn,
+                            record,
+                            exclude=work_id,
+                            source_type=source["type"],
+                            source_id=source_id,
                         )
                         conflicts += conflict
                         affected.add(existing["work_id"])
                         reassigned += work_id != existing["work_id"]
                     updated += 1
                 else:
-                    work_id, conflict = self._match_work(conn, record, source_type=source["type"])
+                    work_id, conflict = self._match_work(
+                        conn, record, source_type=source["type"], source_id=source_id
+                    )
                     record_id = str(uuid4())
                     conflicts += conflict
                     inserted += 1
@@ -963,7 +992,11 @@ class Store:
                 )
                 # Register immediately so two physical editions in this same import
                 # can resolve to one work. Rebuild removes obsolete identifiers.
-                for namespace, value in record.identifiers.items():
+                match_ids = {
+                    **record.identifiers,
+                    **music_match_keys(record.kind, record.title, record.metadata),
+                }
+                for namespace, value in match_ids.items():
                     conn.execute(
                         "INSERT OR IGNORE INTO identifiers VALUES(?,?,?,?)",
                         (work_id, record.kind, namespace, value),
@@ -988,18 +1021,19 @@ class Store:
             actual_keys = {
                 row[0]
                 for row in conn.execute(
-                    "SELECT external_key FROM records WHERE source_id=?", (source_id,)
+                    "SELECT external_key FROM records WHERE source_id=? AND "
+                    f"json_extract(payload,'$.kind') IN ({marks})",
+                    (source_id, *sorted(kinds)),
                 )
             }
             if actual_keys != seen:
                 raise RuntimeError("Snapshot reconciliation mismatch; transaction rolled back.")
-            for work_id in affected:
-                self._rebuild(conn, work_id)
+            self._rebuild_many(conn, affected)
             if deleted or reassigned:
                 self._prune(conn)
             # Includes legacy works imported before title matching existed. Only
             # perform the scan if the source snapshot has actual changes.
-            if affected:
+            if affected and scope == "video":
                 self._reconcile_titles(conn)
 
             # An absent Kodi edition may have been the last source of a work,
@@ -1020,10 +1054,13 @@ class Store:
                     elif remaining_types == {"clz"}:
                         kept_clz_works += 1
 
+            if scope == "music":
+                self._set_music_revision(conn)
             conn.execute(
                 "UPDATE sources SET last_sync=?,last_error=NULL WHERE id=?", (now(), source_id)
             )
             return {
+                "scope": scope,
                 "imported": len(records),
                 "created_editions": inserted,
                 "updated_editions": updated,
@@ -1070,7 +1107,10 @@ class Store:
         record: Record,
         exclude: str | None = None,
         source_type: str | None = None,
+        source_id: str | None = None,
     ) -> tuple[str, int]:
+        if record.kind in MUSIC_KINDS:
+            return cls._match_music_work(conn, record, exclude, source_type, source_id)
         candidates = set()
         for namespace, value in record.identifiers.items():
             candidates.update(
@@ -1125,6 +1165,69 @@ class Store:
         work_id = str(uuid4())
         conn.execute("INSERT INTO works(id,kind) VALUES(?,?)", (work_id, record.kind))
         return work_id, int(bool(candidates))
+
+    @classmethod
+    def _match_music_work(
+        cls,
+        conn: sqlite3.Connection,
+        record: Record,
+        exclude: str | None,
+        source_type: str | None,
+        source_id: str | None,
+    ) -> tuple[str, int]:
+        """Group a Kodi album, a CD and an LP of the same album as editions.
+
+        Strong MusicBrainz IDs first, then an unambiguous folded artist+title
+        key. Two entries of one Kodi library are never merged (Kodi already
+        lists them separately), while a physical list may own the same album
+        on several media (CD and vinyl), which become editions of one work.
+        Songs are never merged: one recording may appear on several albums.
+        """
+        if record.kind != "song":
+            match_ids = {
+                **record.identifiers,
+                **music_match_keys(record.kind, record.title, record.metadata),
+            }
+            candidates: set[str] = set()
+            for namespace, value in match_ids.items():
+                candidates.update(
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT work_id FROM identifiers WHERE kind=? AND namespace=? AND value=?",
+                        (record.kind, namespace, value),
+                    )
+                    if r[0] != exclude
+                )
+            new_ids = {key: {value} for key, value in match_ids.items()}
+            eligible = []
+            for candidate in sorted(candidates):
+                if not cls._ids_compatible(new_ids, cls._work_ids(conn, candidate)):
+                    continue
+                if source_type == "kodi" and conn.execute(
+                    "SELECT 1 FROM records WHERE work_id=? AND source_id=? LIMIT 1",
+                    (candidate, source_id),
+                ).fetchone():
+                    continue
+                eligible.append(candidate)
+            if len(eligible) == 1:
+                return eligible[0], 0
+            conflict = int(len(eligible) > 1)
+        else:
+            conflict = 0
+        work_id = str(uuid4())
+        conn.execute(
+            "INSERT INTO works(id,kind,title,sort_title) VALUES(?,?,?,?)",
+            (work_id, record.kind, record.title, fold(record.sort_title or record.title or "")),
+        )
+        return work_id, conflict
+
+    @staticmethod
+    def _set_music_revision(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "INSERT INTO catalogue_meta(key,value) VALUES('music_revision',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(uuid4()),),
+        )
 
     @classmethod
     def _reconcile_titles(cls, conn: sqlite3.Connection) -> int:
@@ -1245,18 +1348,48 @@ class Store:
             merged += 1
         return merged
 
+    @classmethod
+    def _rebuild_many(cls, conn: sqlite3.Connection, work_ids: set[str]) -> None:
+        """Rebuild many works with one pass over derived tables.
+
+        The FTS tables are keyed by an UNINDEXED work ID: deleting one work at
+        a time scans them for every song of a large music import (quadratic).
+        """
+        if len(work_ids) < 50:
+            for work_id in work_ids:
+                cls._rebuild(conn, work_id)
+            return
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS rebuild_ids(id TEXT PRIMARY KEY)")
+        conn.execute("DELETE FROM temp.rebuild_ids")
+        conn.executemany(
+            "INSERT OR IGNORE INTO temp.rebuild_ids VALUES(?)", ((w,) for w in work_ids)
+        )
+        for table in (
+            "identifiers",
+            "work_person_ids",
+            "work_person_names",
+            "work_person_roles",
+            "works_fts",
+            "works_title_fts",
+        ):
+            conn.execute(f"DELETE FROM {table} WHERE work_id IN (SELECT id FROM temp.rebuild_ids)")
+        conn.execute("DELETE FROM temp.rebuild_ids")
+        for work_id in work_ids:
+            cls._rebuild(conn, work_id, cleaned=True)
+
     @staticmethod
-    def _rebuild(conn: sqlite3.Connection, work_id: str) -> None:
+    def _rebuild(conn: sqlite3.Connection, work_id: str, *, cleaned: bool = False) -> None:
         rows = conn.execute(
             "SELECT r.payload,s.type FROM records r JOIN sources s ON s.id=r.source_id WHERE r.work_id=?",
             (work_id,),
         ).fetchall()
-        conn.execute("DELETE FROM identifiers WHERE work_id=?", (work_id,))
-        conn.execute("DELETE FROM work_person_ids WHERE work_id=?", (work_id,))
-        conn.execute("DELETE FROM work_person_names WHERE work_id=?", (work_id,))
-        conn.execute("DELETE FROM work_person_roles WHERE work_id=?", (work_id,))
-        conn.execute("DELETE FROM works_fts WHERE work_id=?", (work_id,))
-        conn.execute("DELETE FROM works_title_fts WHERE work_id=?", (work_id,))
+        if not cleaned:
+            conn.execute("DELETE FROM identifiers WHERE work_id=?", (work_id,))
+            conn.execute("DELETE FROM work_person_ids WHERE work_id=?", (work_id,))
+            conn.execute("DELETE FROM work_person_names WHERE work_id=?", (work_id,))
+            conn.execute("DELETE FROM work_person_roles WHERE work_id=?", (work_id,))
+            conn.execute("DELETE FROM works_fts WHERE work_id=?", (work_id,))
+            conn.execute("DELETE FROM works_title_fts WHERE work_id=?", (work_id,))
         if not rows:
             return
         entries = [(json.loads(row["payload"]), row["type"]) for row in rows]
@@ -1307,7 +1440,7 @@ class Store:
         search_text += " " + " ".join(
             str(p.get("metadata", {}).get(n) or "")
             for p, _ in entries
-            for n in ("director", "show_title", "tags", "cast", "people")
+            for n in ("director", "show_title", "tags", "cast", "people", "artist", "album", "label")
         )
         enrichment = conn.execute(
             "SELECT payload FROM enrichment WHERE work_id=?", (work_id,)
@@ -1395,6 +1528,11 @@ class Store:
             "fanart": encode(fanarts),
             "search_text": fold(search_text),
         }
+        if primary["kind"] in MUSIC_KINDS:
+            # Music has no resume point: keep the track/album length.
+            values["total_seconds"] = max(
+                (p.get("total_seconds") or 0 for p, _ in entries), default=0
+            )
         personal = conn.execute("SELECT * FROM personal WHERE work_id=?", (work_id,)).fetchone()
         if personal:
             if personal["user_rating"] is not None:
@@ -1413,12 +1551,22 @@ class Store:
         title_text = " ".join(
             str(p.get(name) or "") for p, _ in entries for name in ("title", "original_title")
         )
+        if primary["kind"] in MUSIC_KINDS:
+            title_text += " " + " ".join(
+                str((p.get("metadata") or {}).get(name) or "")
+                for p, _ in entries
+                for name in ("artist", "album")
+            )
         conn.execute(
             "INSERT INTO works_title_fts(work_id,titles) VALUES(?,?)",
             (work_id, fold(title_text)),
         )
         for payload, _ in entries:
-            for namespace, value in payload.get("identifiers", {}).items():
+            match_ids = {
+                **payload.get("identifiers", {}),
+                **music_match_keys(payload["kind"], payload.get("title"), payload.get("metadata")),
+            }
+            for namespace, value in match_ids.items():
                 conn.execute(
                     "INSERT OR IGNORE INTO identifiers VALUES(?,?,?,?)",
                     (work_id, primary["kind"], namespace, value),
@@ -2571,7 +2719,9 @@ class Store:
                 name: [
                     r[0]
                     for r in conn.execute(
-                        f"SELECT DISTINCT j.value FROM works w,json_each(w.{name}) j ORDER BY j.value COLLATE NOCASE"
+                        f"SELECT DISTINCT j.value FROM works w,json_each(w.{name}) j "
+                        "WHERE w.kind IN ('movie','tvshow','episode') "
+                        "ORDER BY j.value COLLATE NOCASE"
                     )
                 ]
                 for name in ("genres", "formats", "collections")
@@ -2582,7 +2732,8 @@ class Store:
             value["years"] = [
                 r[0]
                 for r in conn.execute(
-                    "SELECT DISTINCT year FROM works WHERE year IS NOT NULL ORDER BY year DESC"
+                    "SELECT DISTINCT year FROM works WHERE year IS NOT NULL "
+                    "AND kind IN ('movie','tvshow','episode') ORDER BY year DESC"
                 )
             ]
         value["sources"] = self.sources()
@@ -2602,7 +2753,14 @@ class Store:
         }
 
     def new_job(self, source_id: str, operation: str = "kodi_sync") -> dict[str, Any]:
-        if operation not in {"kodi_sync", "kodi_scan", "kodi_clean", "collection_import"}:
+        if operation not in {
+            "kodi_sync",
+            "kodi_scan",
+            "kodi_clean",
+            "collection_import",
+            "kodi_music_sync",
+            "music_import",
+        }:
             raise ValueError("Unsupported job operation.")
         job_id = str(uuid4())
         with self.connect() as conn:
@@ -2641,11 +2799,19 @@ class Store:
             "parsing_clz": (2, 92),
             "parsing_mymovies": (2, 92),
             "parsing_filmotech": (2, 92),
+            "parsing_discogs": (2, 60),
+            "parsing_clz_music": (2, 60),
+            "parsing_music_csv": (2, 60),
+            "music_artists": (8, 15),
+            "music_albums": (15, 30),
+            "music_songs": (30, 90),
             "publishing": (97, 99),
         }.get(phase, (0, 0))
         current = max(0, int(job.get("progress_current") or 0))
         total = max(0, int(job.get("progress_total") or 0))
-        if total and phase in ("movies", "series", "episodes"):
+        if total and phase in (
+            "movies", "series", "episodes", "music_artists", "music_albums", "music_songs"
+        ):
             return start + (end - start) * min(current, total) // total
         if phase == "publishing":
             return start

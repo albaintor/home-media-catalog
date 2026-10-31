@@ -10,6 +10,9 @@ class Kind(StrEnum):
     MOVIE = "movie"
     TVSHOW = "tvshow"
     EPISODE = "episode"
+    ARTIST = "artist"
+    ALBUM = "album"
+    SONG = "song"
 
 
 class WatchStatus(StrEnum):
@@ -27,6 +30,9 @@ class SortField(StrEnum):
     USER_RATING = "user_rating"
     LAST_PLAYED = "last_played"
     EPISODE = "episode"
+
+
+SourceType = Literal["kodi", "clz", "mymovies", "filmotech", "discogs", "clz_music", "music_csv"]
 
 
 class StrictModel(BaseModel):
@@ -57,8 +63,11 @@ class SourceConfig(StrictModel):
     remote_api_key: SecretStr | None = None
     remote_enabled: bool = False
     mariadb_write_enabled: bool = False
+    # Kodi music library (AudioLibrary JSON-RPC, MyMusicNN SQL fallback).
+    music_enabled: bool = False
+    music_database: str = Field(default="", max_length=128)
 
-    @field_validator("database")
+    @field_validator("database", "music_database")
     @classmethod
     def safe_database(cls, value: str) -> str:
         if value and not all(c.isascii() and (c.isalnum() or c == "_") for c in value):
@@ -68,7 +77,7 @@ class SourceConfig(StrictModel):
 
 class SourceInput(StrictModel):
     name: str = Field(min_length=1, max_length=120)
-    type: Literal["kodi", "clz", "mymovies", "filmotech"]
+    type: SourceType
     config: SourceConfig = Field(default_factory=SourceConfig)
     enabled: bool = True
 
@@ -112,7 +121,7 @@ class ConnectionResult(BaseModel):
 class SourceView(BaseModel):
     id: str
     name: str
-    type: Literal["kodi", "clz", "mymovies", "filmotech"]
+    type: SourceType
     enabled: bool
     config: dict[str, Any]
     last_sync: str | None = None
@@ -128,7 +137,7 @@ class ArtworkLinks(BaseModel):
 class MediaSource(BaseModel):
     id: str
     name: str
-    type: Literal["kodi", "clz", "mymovies", "filmotech"]
+    type: SourceType
     type_count: int = 1
 
 
@@ -442,7 +451,14 @@ class JobView(BaseModel):
     id: str
     source_id: str
     status: Literal["pending", "running", "completed", "failed"]
-    operation: Literal["kodi_sync", "kodi_scan", "kodi_clean", "collection_import"] = "kodi_sync"
+    operation: Literal[
+        "kodi_sync",
+        "kodi_scan",
+        "kodi_clean",
+        "collection_import",
+        "kodi_music_sync",
+        "music_import",
+    ] = "kodi_sync"
     created_at: str
     finished_at: str | None = None
     result: dict[str, Any] | None = None

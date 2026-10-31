@@ -40,6 +40,7 @@
       <div class="brand"><img class="brand-mark" src="static/cinema.svg" alt="" width="36" height="36"><span>MEDIA <b>CATALOG</b></span></div>
       <nav aria-label="Actions">
         <label class="language-control header-language" for="header-language"><span class="visually-hidden">Langue / Language</span><select id="header-language" data-language-select aria-label="Langue / Language"><option value="fr">FR</option><option value="en">EN</option></select></label>
+        <button id="music-button" class="quiet" type="button" aria-pressed="false">Musique</button>
         <button id="lists-button" class="quiet">Mes listes</button>
         <button id="kodi-remote-button" class="quiet kodi-header-button" type="button" aria-label="Ouvrir Kodi Remote"><img src="static/kodi-logo.svg" width="19" height="19" alt="">Kodi</button>
         <a class="quiet" href="docs" target="_blank" rel="noopener">API</a>
@@ -111,6 +112,32 @@
       <div id="pagination" class="pagination catalogue-loading" hidden><span id="page-info" aria-live="polite"></span><p id="load-more-status" role="status"></p><button id="load-more" class="secondary" type="button" aria-controls="results">Charger la suite</button><div id="load-more-trigger" aria-hidden="true"></div></div>
       <footer class="catalogue-footer"><span>Home Media Catalog</span><span id="server-version"></span><span id="sync-status"></span></footer>
     </section>
+    <section id="music-view" class="music-view" aria-labelledby="music-title" hidden>
+      <div class="music-toolbar">
+        <h2 id="music-title">Musique</h2>
+        <div class="music-tabs" role="tablist" aria-label="Bibliothèque musicale">
+          <button type="button" role="tab" id="music-tab-albums" aria-selected="true">Albums</button>
+          <button type="button" role="tab" id="music-tab-artists" aria-selected="false">Artistes</button>
+        </div>
+        <input type="search" id="music-search" placeholder="Artiste, album, titre…" aria-label="Rechercher dans la musique" autocomplete="off">
+        <select id="music-origin" aria-label="Origine">
+          <option value="">Toute la musique</option>
+          <option value="physical">Collection physique (CD, vinyles…)</option>
+          <option value="digital">Bibliothèque Kodi</option>
+        </select>
+        <select id="music-format" aria-label="Support"><option value="">Tous les supports</option></select>
+        <select id="music-sort" aria-label="Tri">
+          <option value="artist">Artiste</option>
+          <option value="title">Titre</option>
+          <option value="year">Année</option>
+          <option value="date_added">Ajout récent</option>
+        </select>
+        <button type="button" id="music-back" class="secondary" hidden>‹ Tous les albums</button>
+      </div>
+      <p id="music-status" class="muted" role="status" aria-live="polite"></p>
+      <section id="music-results" class="music-grid" aria-label="Bibliothèque musicale"></section>
+      <div class="pagination"><button id="music-more" class="secondary" type="button" hidden>Charger la suite</button></div>
+    </section>
   </main>
   <dialog id="detail-dialog" class="detail-dialog"><button class="dialog-close" data-close="detail-dialog" aria-label="Fermer la fiche">×</button><div id="detail-content"></div></dialog>
   <dialog id="artwork-gallery-dialog" class="artwork-gallery-dialog" aria-label="Galerie d’images du média"><button type="button" class="dialog-close" data-close="artwork-gallery-dialog" aria-label="Fermer la galerie">×</button><div class="artwork-gallery-layout"><div class="artwork-gallery-header"><strong id="artwork-gallery-title"></strong><span id="artwork-gallery-counter" aria-live="polite"></span></div><div class="artwork-gallery-frame"><button type="button" id="artwork-gallery-prev" class="artwork-gallery-step" data-artwork-step="-1" aria-label="Image précédente">‹</button><img id="artwork-gallery-image" draggable="false" alt=""><button type="button" id="artwork-gallery-next" class="artwork-gallery-step" data-artwork-step="1" aria-label="Image suivante">›</button></div><div id="artwork-gallery-caption" class="artwork-gallery-caption" aria-live="polite"></div></div></dialog>
@@ -151,6 +178,7 @@
   <dialog id="lists-dialog" class="lists-dialog"><button class="dialog-close" data-close="lists-dialog" aria-label="Fermer les listes">×</button><p class="eyebrow">VOTRE SÉLECTION</p><h2>Mes listes</h2><div id="lists-content"></div></dialog>
   <dialog id="choose-list-dialog" class="small-dialog"><button class="dialog-close" data-close="choose-list-dialog" aria-label="Fermer l’ajout aux listes">×</button><h2>Ajouter à une liste</h2><div id="choose-list-content"></div></dialog>
   <dialog id="play-dialog" class="small-dialog playback-dialog" aria-labelledby="play-title"><button class="dialog-close" data-close="play-dialog" aria-label="Fermer les options de lecture">×</button><h2 id="play-title"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="14" rx="2"/><path d="M9.5 8v6l5-3z"/><path d="M9 21h6"/></svg>Lire sur…</h2><div id="play-content"></div></dialog>
+  <dialog id="music-dialog" class="detail-dialog music-dialog" aria-label="Album"><button class="dialog-close" data-close="music-dialog" aria-label="Fermer l’album">×</button><div id="music-detail"></div></dialog>
   <dialog id="trailers-dialog" class="small-dialog" aria-labelledby="trailers-title"><button class="dialog-close" data-close="trailers-dialog" aria-label="Fermer les bandes-annonces">×</button><h2 id="trailers-title">Bandes-annonces</h2><div id="trailers-content"></div></dialog>
 </body>
 </html>
