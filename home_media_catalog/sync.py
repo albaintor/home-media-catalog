@@ -11,7 +11,10 @@ from .connectors.clz import parse_clz
 from .connectors.collection_xml import COLLECTION_TYPES, parse_collection
 from .connectors.kodi import KodiConnector
 from .connectors.kodi_jsonrpc import fetch_kodi_snapshot
+from .connectors.kodi_music import KodiMusicConnector, fetch_kodi_music_snapshot
+from .connectors.music_collections import parse_music_collection
 from .kodi_scan import KodiScanUnavailable, clean_until_finished, scan_until_finished
+from .music import MUSIC_COLLECTION_TYPES, MusicCatalogue
 from .players import KodiUnavailable, connection
 
 LOGGER = logging.getLogger(__name__)
@@ -39,6 +42,8 @@ class SyncManager:
         source = await asyncio.to_thread(self.store.source, source_id, private=True)
         if not source:
             raise ValueError("Unknown source.")
+        if source["type"] in MUSIC_COLLECTION_TYPES:
+            raise ValueError("Music collections are refreshed by uploading their export.")
         if xml is None and source["type"] != "kodi":
             raise ValueError("Collection sources are refreshed by uploading an XML export.")
         if xml is not None and source["type"] not in COLLECTION_TYPES:
@@ -346,6 +351,10 @@ class SyncManager:
                 result["database"] = database
                 result["mariadb_read_ms"] = mariadb_read_ms
                 result.update(connector.snapshot_report)
+            if xml is None and source["config"].get("music_enabled"):
+                # Music is best-effort: a failing AudioLibrary never fails or
+                # rolls back the video snapshot that was just published.
+                result.update(await self._music_from_kodi(job, source, transport))
             await asyncio.to_thread(self.store.finish_job, job["id"], result=result)
             if result.get("rebuilt_works") and self.on_catalog_changed:
                 # Failure to refresh the optional AI index must never roll back
@@ -365,6 +374,113 @@ class SyncManager:
             )
         finally:
             self.active.discard(source["id"])
+
+    # ------------------------------------------------------------------ music
+    async def submit_music(self, source_id: str, data: bytes | None = None, *,
+                           mariadb_only: bool = False) -> dict[str, Any]:
+        """Kodi AudioLibrary refresh (data=None) or a physical collection import."""
+        if source_id in self.active:
+            raise BusyError("An import or synchronization is already running for this source.")
+        source = await asyncio.to_thread(self.store.source, source_id, private=True)
+        if not source:
+            raise ValueError("Unknown source.")
+        if not source["enabled"]:
+            raise ValueError("Enable the source before synchronizing it.")
+        if data is None and source["type"] != "kodi":
+            raise ValueError("Music collections are refreshed by uploading their export.")
+        if data is not None and source["type"] not in MUSIC_COLLECTION_TYPES:
+            raise ValueError("Music imports require a music collection source.")
+        if source_id in self.active:
+            raise BusyError("A synchronization is already running for this source.")
+        self.active.add(source_id)
+        try:
+            job = await asyncio.to_thread(
+                self.store.new_job, source_id, "music_import" if data is not None else "music_sync"
+            )
+        except Exception:
+            self.active.discard(source_id)
+            raise
+        task = asyncio.create_task(self._run_music(job, source, data, mariadb_only))
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return job
+
+    async def _run_music(self, job, source, data, mariadb_only):
+        try:
+            await asyncio.to_thread(self.store.start_job, job["id"])
+            if data is not None:
+                await asyncio.to_thread(
+                    self.store.update_job_progress, job["id"], f"parsing_{source['type']}"
+                )
+                snapshot = await asyncio.to_thread(parse_music_collection, data, source["type"])
+                await asyncio.to_thread(self.store.update_job_progress, job["id"], "publishing")
+                result = await asyncio.to_thread(
+                    MusicCatalogue(self.store).apply_snapshot, source["id"], snapshot
+                )
+            else:
+                result = await self._music_from_kodi(job, source, None, raise_errors=True,
+                                                     mariadb_only=mariadb_only)
+            await asyncio.to_thread(self.store.finish_job, job["id"], result=result)
+        except (ConnectorError, ValueError) as exc:
+            await asyncio.to_thread(self.store.finish_job, job["id"], error=str(exc))
+        except Exception:
+            LOGGER.exception("Unexpected music job failure")
+            await asyncio.to_thread(
+                self.store.finish_job,
+                job["id"],
+                error="Unexpected music import failure; see server logs. "
+                "The previous music catalogue was retained.",
+            )
+        finally:
+            self.active.discard(source["id"])
+
+    async def _music_from_kodi(self, job, source, video_transport, *, raise_errors=False,
+                               mariadb_only=False) -> dict[str, Any]:
+        """AudioLibrary via the reachable Kodi instance, else the MyMusic schema."""
+
+        def progress(phase, current, total):
+            self.store.update_job_progress(job["id"], phase, current, total)
+
+        snapshot = None
+        errors = []
+        mariadb_available = bool(
+            source["config"].get("host") and source["config"].get("username")
+        )
+        try:
+            if not mariadb_only and video_transport != "mariadb":
+                players = await asyncio.to_thread(self.store.players)
+                candidates = [p for p in players if p["source_id"] == source["id"]]
+                preferred = self.last_reachable_kodi_players.get(source["id"])
+                candidates.sort(key=lambda player: player["id"] != preferred)
+                for player in candidates:
+                    private = await asyncio.to_thread(self.store.player, player["id"])
+                    if private is None:
+                        continue
+                    try:
+                        async with asyncio.timeout(3.0):
+                            async with connection(private["config"], timeout=3.0) as rpc:
+                                if await rpc("JSONRPC.Ping", {}) != "pong":
+                                    raise ConnectorError("Kodi returned an invalid ping.")
+                        snapshot = await fetch_kodi_music_snapshot(private["config"], progress)
+                        break
+                    except (ConnectorError, TimeoutError) as exc:
+                        errors.append(f"{player['name']}: {exc}")
+            if snapshot is None and mariadb_available:
+                connector = KodiMusicConnector(source["config"], progress=progress)
+                snapshot = await asyncio.to_thread(connector.fetch_music)
+            if snapshot is None:
+                raise ConnectorError(
+                    "Kodi AudioLibrary is unavailable and no MariaDB fallback is configured."
+                    + (f" ({'; '.join(errors)})" if errors else "")
+                )
+            await asyncio.to_thread(self.store.update_job_progress, job["id"], "publishing")
+            return await asyncio.to_thread(
+                MusicCatalogue(self.store).apply_snapshot, source["id"], snapshot
+            )
+        except (ConnectorError, ValueError) as exc:
+            if raise_errors:
+                raise
+            return {"music_error": str(exc)}
 
     async def sync_stale_on_open(self) -> list[dict[str, Any]]:
         """Schedule a SQL-only refresh on open if the last successful one exceeds 24h.

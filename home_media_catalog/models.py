@@ -57,8 +57,11 @@ class SourceConfig(StrictModel):
     remote_api_key: SecretStr | None = None
     remote_enabled: bool = False
     mariadb_write_enabled: bool = False
+    # Kodi music library (AudioLibrary JSON-RPC, MyMusic MariaDB fallback).
+    music_enabled: bool = False
+    music_database: str = Field(default="", max_length=128)
 
-    @field_validator("database")
+    @field_validator("database", "music_database")
     @classmethod
     def safe_database(cls, value: str) -> str:
         if value and not all(c.isascii() and (c.isalnum() or c == "_") for c in value):
@@ -68,7 +71,7 @@ class SourceConfig(StrictModel):
 
 class SourceInput(StrictModel):
     name: str = Field(min_length=1, max_length=120)
-    type: Literal["kodi", "clz", "mymovies", "filmotech"]
+    type: Literal["kodi", "clz", "mymovies", "filmotech", "music_csv", "discogs", "clz_music"]
     config: SourceConfig = Field(default_factory=SourceConfig)
     enabled: bool = True
 
@@ -112,12 +115,13 @@ class ConnectionResult(BaseModel):
 class SourceView(BaseModel):
     id: str
     name: str
-    type: Literal["kodi", "clz", "mymovies", "filmotech"]
+    type: Literal["kodi", "clz", "mymovies", "filmotech", "music_csv", "discogs", "clz_music"]
     enabled: bool
     config: dict[str, Any]
     last_sync: str | None = None
     last_error: str | None = None
     item_count: int = 0
+    music_count: int = 0
 
 
 class ArtworkLinks(BaseModel):
@@ -442,7 +446,9 @@ class JobView(BaseModel):
     id: str
     source_id: str
     status: Literal["pending", "running", "completed", "failed"]
-    operation: Literal["kodi_sync", "kodi_scan", "kodi_clean", "collection_import"] = "kodi_sync"
+    operation: Literal[
+        "kodi_sync", "kodi_scan", "kodi_clean", "collection_import", "music_sync", "music_import"
+    ] = "kodi_sync"
     created_at: str
     finished_at: str | None = None
     result: dict[str, Any] | None = None
@@ -543,3 +549,165 @@ class CatalogueStatus(BaseModel):
     counts: dict[str, int]
     sources: list[SourceView]
     tmdb_available: bool = False
+
+
+# --------------------------------------------------------------------- music
+
+
+class MusicArtist(BaseModel):
+    id: str
+    name: str
+    sort_name: str = ""
+    mbid: str | None = None
+    genres: list[str] = Field(default_factory=list)
+    album_count: int = 0
+    track_count: int = 0
+    thumb: str | None = None
+    fanart: str | None = None
+
+
+class MusicAlbum(BaseModel):
+    id: str
+    title: str
+    artist: str = ""
+    artist_id: str | None = None
+    artist_ids: list[str] | None = None
+    year: int | None = None
+    release_type: str | None = None
+    compilation: bool = False
+    label: str | None = None
+    genres: list[str] = Field(default_factory=list)
+    rating: float | None = None
+    user_rating: float | None = None
+    play_count: int | None = None
+    last_played: str | None = None
+    date_added: str | None = None
+    formats: list[str] = Field(default_factory=list)
+    source_types: list[str] = Field(default_factory=list)
+    track_count: int = 0
+    duration_seconds: float = 0
+    playable: bool = False
+    owned_physical: bool = False
+    thumb: str | None = None
+    fanart: str | None = None
+    updated_at: str | None = None
+
+
+class MusicTrack(BaseModel):
+    id: str
+    title: str
+    artist: str = ""
+    artist_id: str | None = None
+    album: str = ""
+    album_id: str | None = None
+    edition_id: str | None = None
+    source_id: str
+    disc: int | None = None
+    track: int | None = None
+    position: str | None = None
+    duration_seconds: float | None = None
+    year: int | None = None
+    genres: list[str] = Field(default_factory=list)
+    playable: bool = False
+    format: str = "Digital"
+    file: str | None = None
+    rating: float | None = None
+    user_rating: float | None = None
+    play_count: int | None = None
+    last_played: str | None = None
+    date_added: str | None = None
+    audio: dict[str, Any] = Field(default_factory=dict)
+
+
+class MusicEdition(BaseModel):
+    id: str
+    source_id: str
+    source_name: str
+    source_type: str
+    format: str
+    format_detail: str | None = None
+    label: str | None = None
+    catalog_number: str | None = None
+    barcode: str | None = None
+    country: str | None = None
+    discogs_id: str | None = None
+    mbid: str | None = None
+    release_group_mbid: str | None = None
+    release_date: str | None = None
+    year: int | None = None
+    disc_count: int | None = None
+    media_condition: str | None = None
+    sleeve_condition: str | None = None
+    notes: str | None = None
+    purchase_date: str | None = None
+    kodi_id: int | None = None
+
+
+class MusicAlbumDetail(MusicAlbum):
+    artists: list[dict[str, str]] = Field(default_factory=list)
+    editions: list[MusicEdition] = Field(default_factory=list)
+    tracks: list[MusicTrack] = Field(default_factory=list)
+
+
+class MusicArtistDetail(MusicArtist):
+    biography: str | None = None
+    albums: list[MusicAlbum] = Field(default_factory=list)
+    appears_on: list[MusicAlbum] = Field(default_factory=list)
+
+
+class MusicArtistPage(BaseModel):
+    items: list[MusicArtist]
+    total: int
+    offset: int
+    limit: int
+
+
+class MusicAlbumPage(BaseModel):
+    items: list[MusicAlbum]
+    total: int
+    offset: int
+    limit: int
+
+
+class MusicTrackPage(BaseModel):
+    items: list[MusicTrack]
+    total: int
+    offset: int
+    limit: int
+
+
+class MusicSearchResult(BaseModel):
+    artists: list[MusicArtist]
+    albums: list[MusicAlbum]
+    tracks: list[MusicTrack]
+
+
+class MusicStatus(BaseModel):
+    artists: int
+    albums: int
+    tracks: int
+    playable_tracks: int
+    physical_albums: int
+    formats: dict[str, int]
+    sources: list[dict[str, Any]]
+    revision: int
+
+
+class MusicFacets(BaseModel):
+    genres: list[str]
+    formats: list[str]
+    years: list[int]
+
+
+class MusicExportPage(BaseModel):
+    items: list[dict[str, Any]]
+    next: int | None = None
+    total: int
+    revision: int
+
+
+class MusicPlayInput(StrictModel):
+    track_id: str | None = None
+    album_id: str | None = None
+    artist_id: str | None = None
+    shuffle: bool = False

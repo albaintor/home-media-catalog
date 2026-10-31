@@ -52,7 +52,17 @@ contract and keep the discovery handshake backwards-readable.
 | GET | `/players/{id}/local-media/{ticket}/subtitles/{stream}.vtt` | Text subtitle stream as WebVTT (extracted once, cached) |
 | GET | `/players/{id}/local-media/{ticket}/stream.mp4` | Fragmented MP4 from `start` seconds with `audio` stream, optional burned-in bitmap `subtitle`, `copy=h264,hevc` codecs the client can decode and `height` cap |
 | GET | `/playback/media/{location_id}/probe`, `/subtitles/{stream}.vtt`, `/stream.mp4` | Same three operations for a file in an SMB/NFS/FTP/SFTP playback location (`path` query parameter) |
+| GET | `/music/status`, `/music/facets`, `/music/search` | Music library counts/revision, filter values and combined search |
+| GET | `/music/artists`, `/music/albums`, `/music/tracks` (+ `/{id}`) | Paged music browsing; album detail lists physical/digital editions and tracks |
+| GET | `/music/export/{artists\|albums\|tracks}` | Keyset pages for native offline mirrors (`after`, `limit` ≤ 5000) |
+| GET | `/music/{albums\|artists}/{id}/artwork/{thumb\|fanart}` | Cached cover art |
+| POST | `/sources/{id}/music/sync` | Kodi music library refresh (AudioLibrary, MyMusic fallback), HTTP 202 |
+| POST | `/imports/music/{discogs\|clz_music\|music_csv}` | Multipart physical music collection, `source_id` and `file`, HTTP 202 |
+| POST | `/players/{id}/music-stream` | Short-lived byte-range URL for one Kodi song |
+| POST | `/players/{id}/music/play` | Play a song, album or artist on Kodi |
 | GET | `/openapi.json` | Typed OpenAPI contract; authentication required |
+
+See [the music library guide](music.md) for sources, matching and synchronisation.
 
 `/healthz` exposes only process health without authentication. `/docs` is protected and exposes Swagger UI; its Swagger assets are served from FastAPI's default CDN.
 

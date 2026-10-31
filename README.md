@@ -93,6 +93,7 @@ limits. See the [AI setup and privacy guide](docs/ai-search.md).
 | **Network explorer** | SMB, FTP, SFTP and mounted NFS sources; browser playback/remux/transcoding | Direct SMB/NFS/FTP/SFTP access in standalone or server-paired mode, plus OneDrive; browsing and file operations |
 | **Playback** | Audio tracks, subtitles and chapters; remux or FFmpeg conversion | AVC/HEVC/VC-1 where supported, selectable tracks/subtitles, compatible Atmos audio, offline video and 48/60 fps MEMC |
 | **Disc navigation** | Kodi library/catalogue entries | Blu-ray ISO and BDMV folder playback, with compatible title/playlist selection and DVD IFO support |
+| **Music library** | Kodi `AudioLibrary` sync with MyMusic MariaDB fallback, Discogs / CLZ Music / CSV imports of CDs and vinyls, albums merged across digital and physical editions, browser playback | Music tab: artists → albums → tracks, offline mirror, persistent mini-player, lock-screen controls |
 | **Access and synchronization** | Authenticated catalogue API, server backups, Kodi sync jobs | Standalone Kodi catalogue mode or optional paired server; source management and direct Kodi remote control |
 
 Codec, Blu-ray navigation, audio output and MEMC availability depend on the media, device and playback configuration.
@@ -161,6 +162,7 @@ for component details and unresolved compliance checks.
 - [Features and usage](docs/features.md) · [AI search and model setup](docs/ai-search.md)
 - [Home Assistant access](docs/home-assistant.md)
 - [REST API](docs/api.md) · [OpenAPI schema](docs/openapi-v1.json)
+- [Music library: Kodi sync and physical collections](docs/music.md)
 - [Data model and backups](docs/model.md) · [Development and testing](docs/development.md)
 - [Third-party licences, component usage and distribution obligations](THIRD_PARTY_NOTICES.md)
 

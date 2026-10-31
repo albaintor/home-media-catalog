@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from .auth import authenticated
 from .connectors.base import ConnectorError
-from .models import PlayInput
+from .models import MusicPlayInput, PlayInput
 from .playback_browser import _credentials, safe_path, stream_location
 from .playback_media import (
     kodi_source,
@@ -39,7 +39,7 @@ LOG = logging.getLogger(__name__)
 # uses a non-reusable-to-other-media, high-entropy capability ticket.
 _TICKETS = OrderedDict()
 _TICKET_TTL = 4 * 3600
-_TICKET_LIMIT = 128
+_TICKET_LIMIT = 512
 _RANGE = re.compile(r"^bytes=(?:\d+-\d*|-\d+)$")
 
 
@@ -276,6 +276,63 @@ async def create_local_stream(
         "resolution_ms": resolved_ms,
         "preferred_transport": matched[0]["kind"] if matched else "kodi",
         "preferred_location": matched[0].get("name") if matched else None,
+    }
+
+
+AUDIO_STREAM_EXTENSIONS = {
+    "mp3", "m4a", "aac", "flac", "alac", "ogg", "oga", "opus", "wav", "aiff", "aif", "aifc",
+    "caf", "wma", "ape", "wv", "dsf", "dff", "mka", "mp2", "ac3", "eac3", "dts", "mpc", "tta",
+}
+
+
+@router.post("/{player_id}/music-stream")
+async def create_music_stream(
+    player_id: str, data: MusicPlayInput, request: Request, _=Depends(authenticated)
+):
+    """Short-lived byte-range URL for one Kodi music file (iOS player, web <audio>).
+
+    The song must belong to the Kodi source linked to this player. Network
+    credentials stay on the server exactly as for video files.
+    """
+    from .music import MusicCatalogue
+
+    player = _lookup(request, player_id)
+    if not data.track_id:
+        raise HTTPException(422, "track_id is required.")
+    track = await asyncio.to_thread(MusicCatalogue(request.app.state.store).track, data.track_id)
+    if (
+        not track
+        or track["source_id"] != player["source_id"]
+        or not track["playable"]
+        or not track.get("file")
+    ):
+        raise HTTPException(404, "This song has no playable file on this Kodi source.")
+    file_path = track["file"]
+    matched = _registered_media_location(request, file_path)
+    current = time.monotonic()
+    for old, value in list(_TICKETS.items()):
+        if value["expires"] <= current:
+            _TICKETS.pop(old, None)
+    suffix = urlsplit(file_path).path.rsplit("/", 1)[-1].rsplit(".", 1)
+    extension = suffix[-1].lower() if len(suffix) == 2 else "mp3"
+    if extension not in AUDIO_STREAM_EXTENSIONS:
+        extension = "mp3"
+    filename = f"audio.{extension}"
+    token = secrets.token_urlsafe(40)
+    _TICKETS[token] = {
+        "player_id": player_id,
+        "file": file_path,
+        "filename": filename,
+        "expires": current + _TICKET_TTL,
+    }
+    while len(_TICKETS) > _TICKET_LIMIT:
+        _TICKETS.popitem(last=False)
+    return {
+        "path": f"/api/v1/players/{player_id}/local-stream/{token}/{filename}",
+        "track_id": track["id"],
+        "expires_in": _TICKET_TTL,
+        "preferred_transport": matched[0]["kind"] if matched else "kodi",
+        "file_extension": extension,
     }
 
 

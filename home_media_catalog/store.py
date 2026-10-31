@@ -245,6 +245,10 @@ class Store:
                 )
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            # Music tables are additive and independent from video works.
+            from .music import MusicCatalogue
+
+            MusicCatalogue.initialize(conn)
             # Remove obsolete separate-writer secrets on existing installations.
             for row in conn.execute("SELECT id,config FROM sources WHERE type='kodi'"):
                 saved = json.loads(row["config"])
@@ -810,7 +814,9 @@ class Store:
     def sources(self) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT s.*,COUNT(r.id) AS item_count FROM sources s LEFT JOIN records r ON r.source_id=s.id GROUP BY s.id ORDER BY s.name"
+                "SELECT s.*,COUNT(r.id) AS item_count,"
+                "(SELECT COUNT(*) FROM music_album_editions e WHERE e.source_id=s.id) AS music_count "
+                "FROM sources s LEFT JOIN records r ON r.source_id=s.id GROUP BY s.id ORDER BY s.name"
             ).fetchall()
             return [self._source_view(r) for r in rows]
 
@@ -827,7 +833,9 @@ class Store:
     def source(self, source_id: str, *, private: bool = False) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT s.*, (SELECT COUNT(*) FROM records r WHERE r.source_id=s.id) AS item_count FROM sources s WHERE id=?",
+                "SELECT s.*, (SELECT COUNT(*) FROM records r WHERE r.source_id=s.id) AS item_count,"
+                " (SELECT COUNT(*) FROM music_album_editions e WHERE e.source_id=s.id) AS music_count"
+                " FROM sources s WHERE id=?",
                 (source_id,),
             ).fetchone()
             if row is None:
@@ -874,6 +882,9 @@ class Store:
                     "SELECT DISTINCT work_id FROM records WHERE source_id=?", (source_id,)
                 )
             ]
+            from .music import MusicCatalogue
+
+            MusicCatalogue(self).remove_source(conn, source_id)
             conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
             for work_id in affected:
                 self._rebuild(conn, work_id)
@@ -2602,7 +2613,14 @@ class Store:
         }
 
     def new_job(self, source_id: str, operation: str = "kodi_sync") -> dict[str, Any]:
-        if operation not in {"kodi_sync", "kodi_scan", "kodi_clean", "collection_import"}:
+        if operation not in {
+            "kodi_sync",
+            "kodi_scan",
+            "kodi_clean",
+            "collection_import",
+            "music_sync",
+            "music_import",
+        }:
             raise ValueError("Unsupported job operation.")
         job_id = str(uuid4())
         with self.connect() as conn:
@@ -2641,11 +2659,19 @@ class Store:
             "parsing_clz": (2, 92),
             "parsing_mymovies": (2, 92),
             "parsing_filmotech": (2, 92),
+            "music_artists": (5, 15),
+            "music_albums": (15, 35),
+            "music_songs": (35, 92),
+            "parsing_music_csv": (2, 92),
+            "parsing_discogs": (2, 92),
+            "parsing_clz_music": (2, 92),
             "publishing": (97, 99),
         }.get(phase, (0, 0))
         current = max(0, int(job.get("progress_current") or 0))
         total = max(0, int(job.get("progress_total") or 0))
-        if total and phase in ("movies", "series", "episodes"):
+        if total and phase in (
+            "movies", "series", "episodes", "music_artists", "music_albums", "music_songs"
+        ):
             return start + (end - start) * min(current, total) // total
         if phase == "publishing":
             return start
@@ -2721,7 +2747,7 @@ class Store:
             conn.execute(
                 "UPDATE jobs SET status='running',"
                 "progress_phase=CASE WHEN operation='kodi_scan' THEN 'kodi_scanning' "
-                "WHEN operation='collection_import' THEN 'reading_collection' "
+                "WHEN operation IN ('collection_import','music_import') THEN 'reading_collection' "
                 "ELSE 'connecting' END,"
                 "progress_current=0,progress_total=0 WHERE id=?",
                 (job_id,),

@@ -7,6 +7,7 @@
   <title>Home Media Catalog</title>
   <link rel="icon" type="image/svg+xml" href="static/cinema.svg">
   <link rel="stylesheet" href="static/app.css">
+  <link rel="stylesheet" href="static/music.css">
   <script type="module" src="static/app.js"></script>
 </head>
 <body>
@@ -41,6 +42,7 @@
       <nav aria-label="Actions">
         <label class="language-control header-language" for="header-language"><span class="visually-hidden">Langue / Language</span><select id="header-language" data-language-select aria-label="Langue / Language"><option value="fr">FR</option><option value="en">EN</option></select></label>
         <button id="lists-button" class="quiet">Mes listes</button>
+        <button id="music-button" class="quiet music-header-button" type="button" aria-label="Ouvrir la bibliothèque musicale">♫ Musique</button>
         <button id="kodi-remote-button" class="quiet kodi-header-button" type="button" aria-label="Ouvrir Kodi Remote"><img src="static/kodi-logo.svg" width="19" height="19" alt="">Kodi</button>
         <a class="quiet" href="docs" target="_blank" rel="noopener">API</a>
         <button id="activity-indicator" class="activity-indicator" type="button" aria-live="polite" aria-label="Activité des synchronisations et imports" hidden><span class="activity-spinner" aria-hidden="true"></span><span id="activity-label">Synchronisation…</span><progress id="activity-progress" class="header-progress" value="0" max="100" hidden></progress></button>
@@ -152,5 +154,33 @@
   <dialog id="choose-list-dialog" class="small-dialog"><button class="dialog-close" data-close="choose-list-dialog" aria-label="Fermer l’ajout aux listes">×</button><h2>Ajouter à une liste</h2><div id="choose-list-content"></div></dialog>
   <dialog id="play-dialog" class="small-dialog playback-dialog" aria-labelledby="play-title"><button class="dialog-close" data-close="play-dialog" aria-label="Fermer les options de lecture">×</button><h2 id="play-title"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="14" rx="2"/><path d="M9.5 8v6l5-3z"/><path d="M9 21h6"/></svg>Lire sur…</h2><div id="play-content"></div></dialog>
   <dialog id="trailers-dialog" class="small-dialog" aria-labelledby="trailers-title"><button class="dialog-close" data-close="trailers-dialog" aria-label="Fermer les bandes-annonces">×</button><h2 id="trailers-title">Bandes-annonces</h2><div id="trailers-content"></div></dialog>
+  <dialog id="music-dialog" class="music-dialog" aria-labelledby="music-title">
+    <button class="dialog-close" data-close="music-dialog" aria-label="Fermer la bibliothèque musicale">×</button>
+    <p class="eyebrow">VOTRE DISCOTHÈQUE</p>
+    <h2 id="music-title">Musique</h2>
+    <p id="music-summary" class="muted"></p>
+    <div class="music-tabs" role="tablist" aria-label="Sections de la musique">
+      <button type="button" role="tab" data-music-tab="albums" aria-selected="true">Albums</button>
+      <button type="button" role="tab" data-music-tab="artists" aria-selected="false">Artistes</button>
+      <button type="button" role="tab" data-music-tab="tracks" aria-selected="false">Titres</button>
+      <button type="button" role="tab" data-music-tab="sources" aria-selected="false">Sources</button>
+    </div>
+    <section id="music-browse">
+      <div class="music-toolbar">
+        <div class="search-box"><span aria-hidden="true">⌕</span><input id="music-search" type="search" autocomplete="off" aria-label="Rechercher dans la musique" placeholder="Artiste, album, titre, référence…"></div>
+        <select id="music-format" aria-label="Filtrer par support"></select>
+      </div>
+      <div id="music-results" class="music-grid" aria-live="polite"></div>
+      <button id="music-more" class="secondary" type="button" hidden>Charger la suite</button>
+    </section>
+    <section id="music-sources" hidden></section>
+  </dialog>
+  <dialog id="music-detail-dialog" class="detail-dialog music-detail-dialog"><button class="dialog-close" data-close="music-detail-dialog" aria-label="Fermer la fiche">×</button><div id="music-detail"></div></dialog>
+  <div id="music-player" class="music-player" role="region" aria-label="Lecteur audio" hidden>
+    <div class="music-now"><strong id="music-now-title"></strong><span id="music-now-artist"></span></div>
+    <button id="music-prev" type="button" class="icon-button" aria-label="Titre précédent">⏮</button>
+    <audio id="music-audio" controls preload="auto"></audio>
+    <button id="music-next" type="button" class="icon-button" aria-label="Titre suivant">⏭</button>
+  </div>
 </body>
 </html>

@@ -78,9 +78,9 @@ from .models import (
     PairingRedeem,
     PairingRequest,
     PersonalInput,
-    PlaybackResumeInput,
     PlaybackLocationInput,
     PlaybackLocationView,
+    PlaybackResumeInput,
     PlayerInput,
     PlayerView,
     PlayInput,
@@ -2660,6 +2660,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await play(player, detail, data.edition_id, data.resume)
         except ConnectorError as exc:
             raise HTTPException(502, str(exc)) from exc
+
+    # Music library: artists, albums (physical and digital editions), tracks.
+    from .music_api import router as music_router
+
+    app.include_router(music_router)
 
     # Remote-control API and authenticated Kodi notification relay.
     from .remote import router as remote_router

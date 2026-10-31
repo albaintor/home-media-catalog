@@ -25,6 +25,15 @@ TABLES = (
     "catalogue_meta",
     "players",
 )
+# Music tables (added later). Older backups without them remain importable.
+MUSIC_TABLES = (
+    "music_artists",
+    "music_artist_sources",
+    "music_albums",
+    "music_album_artists",
+    "music_album_editions",
+    "music_tracks",
+)
 SECRETS = {"password", "remote_api_key", "api_key", "access_token", "token", "secret"}
 
 
@@ -44,7 +53,7 @@ def export_backup(store) -> dict:
     with store.connect() as conn:
         conn.execute("BEGIN")
         tables = {}
-        for table in TABLES:
+        for table in TABLES + MUSIC_TABLES:
             rows = [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
             if table in ("sources", "players"):
                 for row in rows:
@@ -70,20 +79,21 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
     ):
         raise ValueError("Unsupported backup format or database schema.")
     tables = document.get("tables")
-    if not isinstance(tables, dict) or set(tables) != set(TABLES):
+    if not isinstance(tables, dict) or set(tables) - set(MUSIC_TABLES) != set(TABLES):
         raise ValueError("Backup is missing required catalogue tables.")
+    restored = TABLES + tuple(t for t in MUSIC_TABLES if t in tables)
     if any(
         not isinstance(tables[name], list) or any(not isinstance(row, dict) for row in tables[name])
-        for name in TABLES
+        for name in restored
     ):
         raise ValueError("Invalid backup table data.")
 
     with store.connect() as conn:
         columns = {
             name: {column["name"] for column in conn.execute(f"PRAGMA table_info({name})")}
-            for name in TABLES
+            for name in restored
         }
-        for table in TABLES:
+        for table in restored:
             for row in tables[table]:
                 if not row or set(row) - columns[table]:
                     raise ValueError(f"Invalid columns in backup table {table}.")
@@ -111,6 +121,15 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
         conn.execute("PRAGMA defer_foreign_keys=ON")
         try:
             for table in (
+                "music_tracks_fts",
+                "music_albums_fts",
+                "music_artists_fts",
+                "music_tracks",
+                "music_album_editions",
+                "music_album_artists",
+                "music_albums",
+                "music_artist_sources",
+                "music_artists",
                 "writeback_pending",
                 "writeback_audit",
                 "jobs",
@@ -131,7 +150,7 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
             ):
                 conn.execute(f"DELETE FROM {table}")
 
-            for table in TABLES:
+            for table in restored:
                 for original in tables[table]:
                     row = dict(original)
                     if table in ("sources", "players"):
@@ -174,6 +193,33 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
                 (
                     (row["id"], fold(" ".join(filter(None, (row["title"], row["original_title"])))))
                     for row in conn.execute("SELECT id,title,original_title FROM works")
+                ),
+            )
+            # Music search indexes are derived data.
+            conn.execute(
+                "INSERT INTO music_artists_fts(rowid,text) SELECT rid,name FROM music_artists"
+            )
+            conn.executemany(
+                "INSERT INTO music_albums_fts(rowid,text) VALUES(?,?)",
+                (
+                    (row["rid"], fold(" ".join(filter(None, (row["title"], row["artist_name"])))))
+                    for row in conn.execute("SELECT rid,title,artist_name FROM music_albums")
+                ),
+            )
+            conn.executemany(
+                "INSERT INTO music_tracks_fts(rowid,text) VALUES(?,?)",
+                (
+                    (
+                        row["rid"],
+                        fold(
+                            " ".join(
+                                filter(None, (row["title"], row["artist_name"], row["album_title"]))
+                            )
+                        ),
+                    )
+                    for row in conn.execute(
+                        "SELECT rid,title,artist_name,album_title FROM music_tracks"
+                    )
                 ),
             )
             if conn.execute("PRAGMA foreign_key_check").fetchone():
