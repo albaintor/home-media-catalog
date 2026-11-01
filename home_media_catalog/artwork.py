@@ -124,13 +124,18 @@ class Artwork:
                 path.unlink(missing_ok=True)
                 path.with_suffix(".json").unlink(missing_ok=True)
 
-    async def get(self, candidates: list[str]) -> tuple[bytes, str]:
+    async def get(
+        self, candidates: list[str], *, persist: bool = True
+    ) -> tuple[bytes, str]:
         async with self.semaphore:
             for url in candidates:
                 key = hashlib.sha256(url.encode()).hexdigest()
                 try:
-                    if cached := await asyncio.to_thread(self._cached, key):
-                        return cached
+                    # Music artwork is fetched on demand and never written
+                    # to the persistent server artwork cache.
+                    if persist:
+                        if cached := await asyncio.to_thread(self._cached, key):
+                            return cached
                     mounted = await asyncio.to_thread(self._mounted, url)
                     if mounted:
                         size = (await asyncio.to_thread(mounted.stat)).st_size
@@ -179,7 +184,8 @@ class Artwork:
                                     chunks.append(chunk)
                                 data = b"".join(chunks)
                     content_type = self._image_type(data)
-                    await asyncio.to_thread(self._save, key, data, content_type)
+                    if persist:
+                        await asyncio.to_thread(self._save, key, data, content_type)
                     return data, content_type
                 except (ArtworkError, aiohttp.ClientError, OSError, ValueError, TimeoutError):
                     continue
