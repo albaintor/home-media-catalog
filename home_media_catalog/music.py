@@ -280,7 +280,7 @@ class MusicCatalogue:
                 (identifier, name, timestamp, timestamp),
             )
             conn.commit()
-        return {"id": identifier, "name": name,
+        return {"id": identifier, "name": name, "track_count": 0,
                 "created_at": timestamp, "updated_at": timestamp, "tracks": []}
 
     def rename_playlist(self, playlist_id: str, name: str) -> bool:
