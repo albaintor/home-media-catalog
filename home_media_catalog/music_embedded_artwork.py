@@ -12,6 +12,7 @@ import logging
 import subprocess
 from urllib.parse import urlsplit
 
+from .artwork import ArtworkError
 from .local_stream import _registered_media_location
 from .playback_browser import _credentials
 from .playback_media import LoopbackBridge, network_source
@@ -35,7 +36,7 @@ def extract_embedded_cover(request, candidate: str) -> bytes | None:
     # It is confined to the configured local root by Artwork._mounted.
     try:
         mounted = request.app.state.artwork._mounted(path)
-    except (OSError, ValueError):
+    except (ArtworkError, OSError, ValueError):
         mounted = None
 
     if mounted is not None:
@@ -80,7 +81,7 @@ def extract_embedded_cover(request, candidate: str) -> bytes | None:
             result.returncode != 0
             or not result.stdout
             or len(result.stdout) > _MAX_IMAGE_BYTES
-            or not result.stdout.startswith(b"\\xff\\xd8\\xff")
+            or not result.stdout.startswith(bytes((0xFF, 0xD8, 0xFF)))
         ):
             return None
         return result.stdout
