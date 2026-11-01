@@ -188,17 +188,17 @@
   <div id="music-player" class="music-player" role="region" aria-label="Lecteur audio" hidden>
     <img id="music-now-cover" class="music-now-cover" alt="Pochette de l’album" hidden>
     <div class="music-now"><strong id="music-now-title"></strong><span id="music-now-artist"></span></div>
-    <button id="music-prev" type="button" class="icon-button" aria-label="Titre précédent">⏮</button>
+    <button id="music-prev" type="button" class="icon-button" aria-label="Titre précédent" title="Titre précédent"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 5h2v14H5zm3 7 11-7v14L8 12Z"/></svg></button>
     <audio id="music-audio" preload="auto"></audio>
     <div class="music-transport">
-      <button id="music-play-pause" type="button" class="music-transport-button" aria-label="Pause">⏸</button>
+      <button id="music-play-pause" type="button" class="music-transport-button" aria-label="Pause" title="Lecture / pause"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path id="music-icon-play" d="m8 5 11 7-11 7V5Z" hidden/><path id="music-icon-pause" d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg></button>
       <span id="music-elapsed" class="music-time">0:00</span>
       <input id="music-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Position de lecture" />
       <span id="music-duration" class="music-time">0:00</span>
       <button id="music-mute" type="button" class="music-transport-button music-volume-button" aria-label="Couper le son" title="Couper le son"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path id="music-volume-wave" d="M15 9a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12"/></svg></button>
       <input id="music-volume" type="range" min="0" max="100" step="1" value="100" aria-label="Volume" />
     </div>
-    <button id="music-next" type="button" class="icon-button" aria-label="Titre suivant">⏭</button>
+    <button id="music-next" type="button" class="icon-button" aria-label="Titre suivant" title="Titre suivant"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17 5h2v14h-2zm-1 7L5 5v14l11-7Z"/></svg></button>
     <button id="music-shuffle" type="button" class="icon-button" aria-label="Lecture aléatoire" title="Lecture aléatoire" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3c5 0 5 10 10 10h3"/><path d="m17 14 3 3-3 3"/><path d="M4 17h3c2.5 0 3.5-2.5 4.5-5"/><path d="M13 8c1-1 2-1 4-1h3"/><path d="m17 4 3 3-3 3"/></svg></button>
     <button id="music-repeat" type="button" class="icon-button" aria-label="Ne pas répéter" title="Répétition" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="m7 22-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg><span id="music-repeat-one" class="music-repeat-one" hidden>1</span></button>
     <button id="music-queue-button" type="button" class="icon-button" aria-label="File de lecture" title="File de lecture" aria-expanded="false" aria-controls="music-queue-panel"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h12M9 12h12M9 18h12M3 6h2M3 12h2M3 18h2"/></svg></button>
