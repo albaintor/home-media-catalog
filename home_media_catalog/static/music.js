@@ -365,6 +365,9 @@ async function playCurrent(startAt=0, preferTranscode=false) {
     updateMusicTransport();
   } catch (error) {
     if (token !== state.playbackToken) return;
+    // The old native decoder may reject after the error event already
+    // started a new MP3 transcoder. Do not report a false error or restart.
+    if (state.streamTranscoded && !preferTranscode) return;
     if (!state.transcodeTried && tryMP3Fallback()) return;
     toast((await musicStreamError(track, preferTranscode)) + ' (' + error.message + ')');
   }
