@@ -170,11 +170,11 @@ async function showArtist(id) {
 }
 
 // ---------------------------------------------------------------- playback
-async function streamURL(track) {
-  const player = state.players.find(p => p.source_id === track.source_id);
-  if (!player) throw new Error(tr('Aucune instance Kodi n’est associée à la source de ce titre.'));
-  const ticket = await api(`players/${encodeURIComponent(player.id)}/music-stream`, {method:'POST', json:{track_id: track.id}});
-  return url(ticket.path.replace(/^\/+/, ''));
+// Unlike a POST ticket followed by audio.play(), this authenticated GET
+// can be attached synchronously during the user's click. Safari otherwise
+// rejects play() after an asynchronous network round trip.
+function streamURL(track) {
+  return url(`api/v1/players/music/tracks/${encodeURIComponent(track.id)}/stream`);
 }
 
 function playableTracks(tracks) {
@@ -256,9 +256,8 @@ async function playCurrent() {
     audio.pause();
     audio.removeAttribute('src');
     audio.load();
-    const source = await streamURL(track);
     if (token !== state.playbackToken) return;
-    audio.src = source;
+    audio.src = streamURL(track);
     await audio.play();
   } catch (error) { if (token === state.playbackToken) toast(error.message); }
 }
@@ -372,6 +371,14 @@ export function startMusic() {
   $('music-more').addEventListener('click', loadMore);
   const audio = $('music-audio');
   audio.addEventListener('ended', completed);
+  audio.addEventListener('error', () => {
+    if (state.queue[state.queueIndex] && audio.getAttribute('src')) {
+      const errorCode = audio.error?.code;
+      toast(errorCode === 4
+        ? 'Format audio non pris en charge ou flux réseau inaccessible.'
+        : 'Impossible de lire ce titre. Vérifiez la connexion réseau ou Kodi.');
+    }
+  });
   audio.addEventListener('play', () => { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; });
   audio.addEventListener('pause', () => { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; });
   audio.addEventListener('seeked', updateMediaPosition);
