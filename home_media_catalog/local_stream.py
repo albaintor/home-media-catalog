@@ -209,6 +209,8 @@ async def kodi_local_file_size(
     path, edition = await _resolve_video(
         request, player, PlayInput(media_id=media_id, edition_id=edition_id)
     )
+    if network_only:
+        raise HTTPException(503, "Configured network access is unavailable for this song.")
     base = endpoint(player["config"]).removesuffix("/jsonrpc")
     vfs_url = f"{base}/vfs/{quote(path, safe='')}"
     config = player["config"]
@@ -305,19 +307,22 @@ async def create_music_stream(
     """
     from .music import MusicCatalogue
 
-    player = _lookup(request, player_id)
+    network_only = player_id == "network"
+    player = None if network_only else _lookup(request, player_id)
     if not data.track_id:
         raise HTTPException(422, "track_id is required.")
     track = await asyncio.to_thread(MusicCatalogue(request.app.state.store).track, data.track_id)
     if (
         not track
-        or track["source_id"] != player["source_id"]
+        or (player is not None and track["source_id"] != player["source_id"])
         or not track["playable"]
         or not track.get("file")
     ):
-        raise HTTPException(404, "This song has no playable file on this Kodi source.")
+        raise HTTPException(404, "This song has no playable file on this source.")
     file_path = track["file"]
     matched = _registered_media_location(request, file_path)
+    if network_only and not matched:
+        raise HTTPException(404, "No matching configured network access for this song.")
     current = time.monotonic()
     for old, value in list(_TICKETS.items()):
         if value["expires"] <= current:
@@ -356,7 +361,11 @@ async def stream_local_video(player_id: str, ticket: str, filename: str, request
         or item["expires"] <= time.monotonic()
     ):
         raise HTTPException(403, "Stream ticket is invalid or expired.")
-    player = _lookup(request, player_id)
+    # A network-only ticket is restricted to a catalogue track whose file
+    # matched a configured share when the ticket was issued. Do not depend
+    # on Kodi for that path; ordinary player tickets retain their VFS fallback.
+    network_only = player_id == "network"
+    player = None if network_only else _lookup(request, player_id)
     start = time.monotonic()
     range_header = request.headers.get("range")
     if range_header and not _RANGE.fullmatch(range_header):
