@@ -221,7 +221,12 @@ async function playQueue(tracks, index) {
   state.canonicalQueue = playable.slice();
   if (state.shuffle) {
     const current = playable.find(t => t.id === selected?.id) || playable[0];
-    state.queue = [current, ...playable.filter(t => t !== current).sort(() => Math.random() - 0.5)];
+    const remaining = playable.filter(t => t !== current);
+    for (let i = remaining.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
+    }
+    state.queue = [current, ...remaining];
     state.queueIndex = 0;
   } else {
     state.queue = playable.slice();
