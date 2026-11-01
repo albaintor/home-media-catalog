@@ -9,6 +9,8 @@ import logging
 import mimetypes
 import re
 import secrets
+import shutil
+import subprocess
 import time
 from collections import OrderedDict
 from urllib.parse import quote, unquote, urlsplit
@@ -22,6 +24,7 @@ from .connectors.base import ConnectorError
 from .models import MusicPlayInput, PlayInput
 from .playback_browser import _credentials, safe_path, stream_location
 from .playback_media import (
+    LoopbackBridge,
     kodi_source,
     media_stream,
     network_source,
@@ -352,7 +355,7 @@ async def create_music_stream(
     }
 
 
-@router.get("/music/tracks/{track_id}/stream")
+@router.api_route("/music/tracks/{track_id}/stream", methods=["GET", "HEAD"])
 async def browser_music_stream(
     track_id: str, request: Request, _=Depends(authenticated)
 ):
@@ -395,6 +398,97 @@ async def browser_music_stream(
     while len(_TICKETS) > _TICKET_LIMIT:
         _TICKETS.popitem(last=False)
     return await stream_local_video(player_id, token, filename, request)
+
+
+@router.get("/music/tracks/{track_id}/transcode.mp3")
+async def browser_music_transcode(
+    track_id: str, request: Request, _=Depends(authenticated),
+):
+    """Fallback for browsers without support for the source audio codec.
+
+    FFmpeg sees only a private localhost Range bridge backed by a registered
+    network share or a source-matched Kodi VFS; credentials and source paths
+    never leave the server. Audio is encoded incrementally, not staged.
+    """
+    from .music import MusicCatalogue
+
+    if not shutil.which("ffmpeg"):
+        raise HTTPException(503, "Audio transcoding is not installed on the server.")
+    track = await asyncio.to_thread(
+        MusicCatalogue(request.app.state.store).track, track_id,
+    )
+    if not track or not track["playable"] or not track.get("file"):
+        raise HTTPException(404, "This catalogue song is not playable.")
+    matched = _registered_media_location(request, track["file"])
+    if matched:
+        location, relative = matched
+        password = _credentials(
+            request.app.state.store, request.app.state.playback_oauth, location["id"],
+        )
+        source = await asyncio.to_thread(
+            network_source, location, relative, password,
+            request.app.state.playback_nfs_mounts,
+        )
+    else:
+        players = await asyncio.to_thread(request.app.state.store.players)
+        player = next(
+            (item for item in players if item["source_id"] == track["source_id"]),
+            None,
+        )
+        if player is None:
+            raise HTTPException(404, "No matching network share or Kodi instance.")
+        config = player["config"]
+        base = endpoint(config).removesuffix("/jsonrpc")
+        vfs_url = f"{base}/vfs/{quote(track['file'], safe='')}"
+        auth = (
+            (config["username"], config.get("password") or "")
+            if config.get("username") else None
+        )
+        source = await asyncio.to_thread(
+            kodi_source, vfs_url, auth, "music:" + track_id,
+        )
+
+    def start_encoder():
+        bridge = LoopbackBridge(source, name="music.mp3")
+        bridge.__enter__()
+        try:
+            process = subprocess.Popen(
+                [
+                    "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+                    "-i", bridge.url, "-map", "0:a:0", "-vn",
+                    "-c:a", "libmp3lame", "-q:a", "3",
+                    "-f", "mp3", "pipe:1",
+                ],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+            )
+            return bridge, process
+        except Exception:
+            bridge.close()
+            raise
+
+    bridge, process = await asyncio.to_thread(start_encoder)
+
+    async def chunks():
+        try:
+            while True:
+                chunk = await asyncio.to_thread(process.stdout.read, 64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            process.kill() if process.poll() is None else None
+            await asyncio.to_thread(process.wait)
+            await asyncio.to_thread(bridge.close)
+
+    return StreamingResponse(
+        chunks(), media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "private, no-store",
+            "Accept-Ranges": "none",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.api_route("/{player_id}/local-stream/{ticket}/{filename}", methods=["GET", "HEAD"])
