@@ -41,6 +41,16 @@ Create a source of type `discogs`, `clz_music` or `music_csv`, then upload the
 export with `POST /api/v1/imports/music/{type}` (multipart: `source_id`,
 `file`, 50 MiB max). Each upload replaces that source's previous snapshot.
 
+Native iOS clients may alternatively use
+`POST /api/v1/imports/music/{type}/json` with JSON
+`{"source_id":"<uuid>","content_base64":"<base64-encoded-file>"}`.
+This endpoint has the same 50 MiB file limit, source-type validation,
+authenticated write permission and atomic per-source publication as the
+multipart route. When a device was used standalone, its offline collection
+can be transferred to a paired server through the Music tab; a server job ID
+is retained locally so interrupted transfers can be resumed without creating
+a second source.
+
 Generic lists need at least an **artist** and an **album/title** column.
 Recognised headers (English or French, case and accents ignored): year /
 année, format / support, label, catalog number / référence, barcode /
