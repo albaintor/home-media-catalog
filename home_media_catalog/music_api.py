@@ -6,6 +6,7 @@ import asyncio
 import base64
 import binascii
 import hashlib
+import time
 from typing import Literal
 from urllib.parse import quote
 
@@ -45,6 +46,12 @@ from .players import connection, endpoint
 from .sync import BusyError
 
 router = APIRouter(prefix="/api/v1", tags=["Music"])
+
+# Broken Kodi HTTP endpoints must not stall every album tile. The in-memory
+# cooldown expires automatically and is scoped to the individual player.
+_MUSIC_ARTWORK_UNREACHABLE: dict[str, float] = {}
+_MUSIC_ARTWORK_SEMAPHORE = asyncio.Semaphore(4)
+
 
 
 def _music(request: Request) -> MusicCatalogue:
@@ -295,37 +302,55 @@ async def music_artwork(
         return Response(data, media_type=content_type)
     except ArtworkError:
         pass
-    # Kodi-generated art ("embedded cover in the FLAC", "folder.jpg on an SMB
-    # share") is only reachable through Kodi's own /image/ endpoint.
+    # Kodi-generated art may refer to album art embedded in FLAC/M4A on a
+    # network share. The iOS client prefers its configured SMB/NFS connector;
+    # this server fallback only attempts Kodi players whose HTTP port responds.
     players = await asyncio.to_thread(store.players)
-    for candidate in candidates:
-        original = "image://" + quote(candidate, safe="") + "/"
-        key = hashlib.sha256(original.encode()).hexdigest()
-        if cached := await asyncio.to_thread(artwork._cached, key):
-            return Response(cached[0], media_type=cached[1])
-        for summary in players:
-            player = await asyncio.to_thread(store.player, summary["id"])
-            if player is None:
-                continue
-            config = player["config"]
-            base = endpoint(config).removesuffix("/jsonrpc")
-            auth = (
-                (config["username"], config.get("password") or "")
-                if config.get("username")
-                else None
-            )
-            try:
-                async with httpx.AsyncClient(
-                    timeout=8, auth=auth, trust_env=False, follow_redirects=False
-                ) as client:
-                    response = await client.get(f"{base}/image/{quote(original, safe='')}")
-                if response.status_code != 200 or len(response.content) > 8 * 1024 * 1024:
+    async with _MUSIC_ARTWORK_SEMAPHORE:
+        for candidate in candidates:
+            original = "image://" + quote(candidate, safe="") + "/"
+            key = hashlib.sha256(original.encode()).hexdigest()
+            if cached := await asyncio.to_thread(artwork._cached, key):
+                return Response(cached[0], media_type=cached[1])
+            for summary in players:
+                player_id = summary["id"]
+                if time.monotonic() < _MUSIC_ARTWORK_UNREACHABLE.get(player_id, 0):
                     continue
-                content_type = artwork._image_type(response.content)
-                await asyncio.to_thread(artwork._save, key, response.content, content_type)
-                return Response(response.content, media_type=content_type)
-            except (httpx.HTTPError, ArtworkError, ValueError):
-                continue
+                player = await asyncio.to_thread(store.player, player_id)
+                if player is None:
+                    continue
+                config = player["config"]
+                base = endpoint(config).removesuffix("/jsonrpc")
+                auth = (
+                    (config["username"], config.get("password") or "")
+                    if config.get("username")
+                    else None
+                )
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=2.5, auth=auth, trust_env=False,
+                        follow_redirects=False
+                    ) as client:
+                        response = await client.get(
+                            f"{base}/image/{quote(original, safe='')}"
+                        )
+                    if response.status_code != 200:
+                        if response.status_code in (401, 403, 502, 503):
+                            _MUSIC_ARTWORK_UNREACHABLE[player_id] = (
+                                time.monotonic() + 90
+                            )
+                        continue
+                    if len(response.content) > 8 * 1024 * 1024:
+                        continue
+                    content_type = artwork._image_type(response.content)
+                    await asyncio.to_thread(
+                        artwork._save, key, response.content, content_type
+                    )
+                    return Response(response.content, media_type=content_type)
+                except (httpx.HTTPError, ArtworkError, ValueError):
+                    _MUSIC_ARTWORK_UNREACHABLE[player_id] = (
+                        time.monotonic() + 90
+                    )
     raise HTTPException(404, "No accessible artwork.")
 
 
