@@ -181,6 +181,13 @@
     <button id="music-prev" type="button" class="icon-button" aria-label="Titre précédent">⏮</button>
     <audio id="music-audio" controls preload="auto"></audio>
     <button id="music-next" type="button" class="icon-button" aria-label="Titre suivant">⏭</button>
+    <button id="music-shuffle" type="button" class="icon-button" aria-label="Lecture aléatoire" aria-pressed="false">🔀</button>
+    <button id="music-repeat" type="button" class="icon-button" aria-label="Ne pas répéter" aria-pressed="false">🔁</button>
+    <button id="music-queue-button" type="button" class="icon-button" aria-label="File de lecture" aria-expanded="false" aria-controls="music-queue-panel">☷</button>
+    <div id="music-queue-panel" class="music-queue-panel" hidden>
+      <strong>File de lecture</strong>
+      <ol id="music-queue-list"></ol>
+    </div>
   </div>
 </body>
 </html>
