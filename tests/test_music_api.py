@@ -127,3 +127,51 @@ def test_music_export_and_stream_ticket(client, admin):
     assert client.get("/api/v1/music/albums", headers=admin).json()["items"][0]["playable"]
     unauthenticated = client.get("/api/v1/music/albums")
     assert unauthenticated.status_code == 401
+
+
+def test_browser_music_stream_uses_matching_smb_share_without_kodi(client, admin, monkeypatch):
+    """A browser audio GET must stream without a Kodi player or a POST ticket."""
+    from fastapi.responses import StreamingResponse
+    from home_media_catalog import local_stream
+
+    source = client.post(
+        "/api/v1/sources",
+        headers=admin,
+        json={"name": "Kodi music", "type": "kodi", "config": {"music_enabled": True}},
+    ).json()
+    MusicCatalogue(client.app.state.store).apply_snapshot(
+        source["id"],
+        MusicSnapshot(
+            albums=[MusicAlbumRecord(external_key="album:1", title="Album", artists=["Artist"])],
+            tracks=[MusicTrackRecord(
+                external_key="song:1", title="Song", album_key="album:1",
+                artists=["Artist"], track=1,
+                file="smb://nas/Music/Artist/Song.flac", playable=True,
+            )],
+        ),
+    )
+    location = client.post(
+        "/api/v1/playback/locations", headers=admin,
+        json={"name": "NAS", "kind": "smb", "target": "smb://nas/Music"},
+    )
+    assert location.status_code == 201, location.text
+
+    seen = []
+
+    async def fake_stream(location, relative, range_header, *args, **kwargs):
+        seen.append((location["kind"], relative, range_header))
+        return StreamingResponse(
+            iter([b"audio bytes"]), status_code=206, media_type="audio/flac",
+            headers={"Content-Range": "bytes 0-10/11", "Content-Length": "11"},
+        )
+
+    monkeypatch.setattr(local_stream, "stream_location", fake_stream)
+    track_id = client.get(
+        "/api/v1/music/tracks", headers=admin
+    ).json()["items"][0]["id"]
+    path = f"/api/v1/players/music/tracks/{track_id}/stream"
+    assert client.get(path).status_code == 401
+    response = client.get(path, headers={**admin, "Range": "bytes=0-10"})
+    assert response.status_code == 206, response.text
+    assert response.content == b"audio bytes"
+    assert seen == [("smb", "Artist/Song.flac", "bytes=0-10")]
