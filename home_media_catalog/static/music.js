@@ -199,16 +199,22 @@ async function musicStreamError(track, transcode) {
   } catch (error) { return 'Flux audio inaccessible : ' + error.message; }
 }
 
+function relocateMusicPlayer() {
+  const player = $('music-player');
+  // A popover that is not descended from a modal <dialog> remains INERT in
+  // Chromium even if it is visibly above the dialog (z-index/top layer does
+  // not restore pointer events). Place the persistent player directly inside
+  // the currently active modal instead. DOM reparenting preserves the audio
+  // element, the active stream, and all registered control listeners.
+  const openDialogs = [...document.querySelectorAll('dialog[open]')];
+  const destination = openDialogs.at(-1) || document.body;
+  if (player.parentElement !== destination) destination.appendChild(player);
+}
+
 function showMusicPlayer() {
   const player = $('music-player');
   player.hidden = false;
-  // Modal dialogs make all non-descendant elements inert. A manual popover
-  // puts the single persistent player in the top layer above both dialogs.
-  if (typeof player.showPopover === 'function' && !player.matches(':popover-open')) {
-    try { player.showPopover(); } catch (error) {
-      console.warn('Music player top-layer presentation unavailable:', error);
-    }
-  }
+  relocateMusicPlayer();
 }
 
 function tryMP3Fallback() {
@@ -473,6 +479,19 @@ async function toggleAuto(sourceId, enabled) {
 export function startMusic() {
   if (!$('music-button')) return;
   $('music-button').addEventListener('click', open);
+  // Both the music catalogue and album detail are modal; modal transitions
+  // change which subtree accepts pointer and keyboard events. Observe every
+  // dialog (including other app dialogs) and move this ONE player to the
+  // newest open modal without recreating its <audio> element.
+  const musicDialogObserver = new MutationObserver(() => {
+    if (!$('music-player').hidden) relocateMusicPlayer();
+  });
+  for (const dialog of document.querySelectorAll('dialog')) {
+    musicDialogObserver.observe(dialog, {attributes:true, attributeFilter:['open']});
+    dialog.addEventListener('close', () => {
+      if (!$('music-player').hidden) relocateMusicPlayer();
+    });
+  }
   for (const button of document.querySelectorAll('[data-music-tab]')) button.addEventListener('click', () => switchTab(button.dataset.musicTab));
   $('music-search').addEventListener('input', event => {
     clearTimeout(state.debounce);
