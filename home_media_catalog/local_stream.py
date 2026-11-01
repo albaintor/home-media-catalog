@@ -83,9 +83,13 @@ def _registered_media_location(request: Request, kodi_path: str):
     for location in request.app.state.store.playback_locations():
         if location.get("kind") != kind:
             continue
+        # A valid saved share may omit the optional host/hostname fields.
+        # In that case the authoritative target URL still identifies the NAS.
+        target_host = urlsplit(location.get("target") or "").hostname or ""
         known_hosts = {
             str(location.get("host") or "").lower().rstrip("."),
             str(location.get("hostname") or "").lower().rstrip("."),
+            target_host.lower().rstrip("."),
         }
         # Kodi commonly stores the short Bonjour name ("jedi") while
         # a saved connection uses its ".local" hostname ("jedi.local").
