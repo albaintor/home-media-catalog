@@ -300,3 +300,63 @@ def test_browser_music_transcode_falls_back_from_share_to_kodi(client, admin, mo
         ("smb", "Test Artist/01.flac"),
         ("kodi", "music:" + track_id),
     ]
+
+
+def test_music_artwork_unwraps_and_never_persists(client, admin, monkeypatch):
+    """A Kodi image:// SMB folder.jpg is decoded and returned without writing disk cache."""
+    from home_media_catalog import music_api
+
+    source = client.post(
+        "/api/v1/sources", headers=admin,
+        json={"name": "Artwork Kodi", "type": "kodi", "config": {}},
+    ).json()
+    MusicCatalogue(client.app.state.store).apply_snapshot(
+        source["id"], MusicSnapshot(
+            albums=[
+                MusicAlbumRecord(
+                    external_key="album:cover", title="Music with Folder Art",
+                    artists=["Artist"],
+                    thumb=["image://smb%3A%2F%2Fnas%2FMusic%2Ffolder.jpg/"],
+                )
+            ]
+        ),
+    )
+    images = []
+    jpeg = b"\\xff\\xd8\\xff\\xe0" + b"fake-bounded-test-image"
+
+    def network_cover(_request, reference):
+        images.append(reference)
+        return jpeg
+
+    monkeypatch.setattr(music_api, "_music_network_cover", network_cover)
+
+    def unexpected_save(*_args, **_kwargs):
+        raise AssertionError("Music artwork must not persist on the server")
+
+    monkeypatch.setattr(client.app.state.artwork, "_save", unexpected_save)
+    album = client.get("/api/v1/music/albums", headers=admin).json()["items"][0]
+    response = client.get(
+        f"/api/v1/music/albums/{album['id']}/artwork/thumb", headers=admin
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"].startswith("private")
+    assert response.content == jpeg
+    assert images == ["smb://nas/Music/folder.jpg"]
+    assert music_api._unwrapped_music_artwork("image://music%40smb%3A%2F%2Fnas%2Ftrack.flac/") == (
+        "music@smb://nas/track.flac"
+    )
+
+
+def test_web_music_controls_and_seek_offset_are_wired():
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[1] / "home_media_catalog" / "static"
+    markup = (static / "index.html").read_text()
+    js = (static / "music.js").read_text()
+    for control in ("music-play-pause", "music-seek", "music-duration", "music-volume", "music-mute"):
+        assert f'id="{control}"' in markup
+    assert "audio.pause();" in js
+    assert "audio.volume =" in js
+    assert "audio.addEventListener(name, updateMusicTransport)" in js
+    assert "playCurrent(destination, true)" in js
