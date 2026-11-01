@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 from typing import Literal
 from urllib.parse import quote
 
 import httpx
+from pydantic import BaseModel, Field
 from fastapi import (
     APIRouter,
     Depends,
@@ -306,6 +309,53 @@ async def music_import(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
+
+
+
+class MusicJSONImport(BaseModel):
+    """JSON transport for native clients that cannot post multipart forms."""
+    source_id: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1)
+
+
+@router.post(
+    "/imports/music/{collection_type}/json",
+    response_model=JobView,
+    status_code=202,
+    tags=["Imports"],
+    dependencies=[Depends(writable)],
+)
+async def music_import_json(request: Request, collection_type: str, data: MusicJSONImport):
+    """Import the same physical exports as the multipart endpoint, atomically.
+
+    The base64 envelope avoids URL-escaping XML, CSV dialects and Unicode data.
+    The complete snapshot is validated by the existing music importer before
+    publication; empty/oversized/invalid uploads cannot replace a collection.
+    """
+    if collection_type not in MUSIC_COLLECTION_TYPES:
+        raise HTTPException(404, "Unknown music collection type.")
+    if len(data.content_base64) > (50 * 1024 * 1024 * 4 // 3 + 8):
+        raise HTTPException(413, "The export exceeds the 50 MiB import limit.")
+    try:
+        content = base64.b64decode(data.content_base64, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(422, "Invalid base64 collection payload.") from exc
+    if not content:
+        raise HTTPException(422, "Upload a non-empty file.")
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(413, "The export exceeds the 50 MiB import limit.")
+    store, sync = request.app.state.store, request.app.state.sync
+    source = await asyncio.to_thread(store.source, data.source_id)
+    if not source:
+        raise HTTPException(404, "Unknown source.")
+    if source["type"] != collection_type:
+        raise HTTPException(422, "The export type must match the selected music source.")
+    try:
+        return await sync.submit_music(data.source_id, content)
+    except BusyError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 @router.post("/players/{player_id}/music/play", tags=["Players"], dependencies=[Depends(writable)])
 async def music_play_on_kodi(request: Request, player_id: str, data: MusicPlayInput):
