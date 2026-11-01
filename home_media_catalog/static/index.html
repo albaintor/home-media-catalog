@@ -179,7 +179,15 @@
   <div id="music-player" class="music-player" role="region" aria-label="Lecteur audio" popover="manual" hidden>
     <div class="music-now"><strong id="music-now-title"></strong><span id="music-now-artist"></span></div>
     <button id="music-prev" type="button" class="icon-button" aria-label="Titre précédent">⏮</button>
-    <audio id="music-audio" controls preload="auto"></audio>
+    <audio id="music-audio" preload="auto"></audio>
+    <div class="music-transport">
+      <button id="music-play-pause" type="button" class="music-transport-button" aria-label="Pause">⏸</button>
+      <span id="music-elapsed" class="music-time">0:00</span>
+      <input id="music-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Position de lecture" />
+      <span id="music-duration" class="music-time">0:00</span>
+      <button id="music-mute" type="button" class="music-transport-button" aria-label="Couper le son">🔊</button>
+      <input id="music-volume" type="range" min="0" max="100" step="1" value="100" aria-label="Volume" />
+    </div>
     <button id="music-next" type="button" class="icon-button" aria-label="Titre suivant">⏭</button>
     <button id="music-shuffle" type="button" class="icon-button" aria-label="Lecture aléatoire" aria-pressed="false">🔀</button>
     <button id="music-repeat" type="button" class="icon-button" aria-label="Ne pas répéter" aria-pressed="false">🔁</button>
