@@ -402,7 +402,9 @@ async def browser_music_stream(
 
 @router.api_route("/music/tracks/{track_id}/transcode.mp3", methods=["GET", "HEAD"])
 async def browser_music_transcode(
-    track_id: str, request: Request, _=Depends(authenticated),
+    track_id: str, request: Request,
+    start: float = Query(default=0, ge=0, le=24 * 3600),
+    _=Depends(authenticated),
 ):
     """Fallback for browsers without support for the source audio codec.
 
@@ -500,7 +502,7 @@ async def browser_music_transcode(
             process = subprocess.Popen(
                 [
                     "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                    "-i", bridge.url, "-map", "0:a:0", "-vn",
+                    "-ss", str(start), "-i", bridge.url, "-map", "0:a:0", "-vn",
                     "-c:a", "libmp3lame", "-q:a", "3",
                     "-f", "mp3", "pipe:1",
                 ],
