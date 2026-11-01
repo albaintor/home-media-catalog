@@ -209,8 +209,6 @@ async def kodi_local_file_size(
     path, edition = await _resolve_video(
         request, player, PlayInput(media_id=media_id, edition_id=edition_id)
     )
-    if network_only:
-        raise HTTPException(503, "Configured network access is unavailable for this song.")
     base = endpoint(player["config"]).removesuffix("/jsonrpc")
     vfs_url = f"{base}/vfs/{quote(path, safe='')}"
     config = player["config"]
@@ -459,6 +457,8 @@ async def stream_local_video(player_id: str, ticket: str, filename: str, request
                 "Configured %s network read failed (%s); trying Kodi VFS",
                 location["kind"], type(exc).__name__,
             )
+    if network_only:
+        raise HTTPException(503, "Configured network access is unavailable for this song.")
     base = endpoint(player["config"]).removesuffix("/jsonrpc")
     url = f"{base}/vfs/{quote(item['file'], safe='')}"
     config = player["config"]
