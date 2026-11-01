@@ -134,7 +134,6 @@ def main():
         page.wait_for_function(
             "document.getElementById('music-player').parentElement === document.body"
         )
-        audio_node = page.evaluate("document.getElementById('music-audio')")
         page.locator("#music-player-hide").click(timeout=2500)
         assert page.locator("#music-player").is_hidden()
         assert not page.locator("#music-player-restore").is_hidden()
