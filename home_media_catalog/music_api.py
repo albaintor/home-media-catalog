@@ -298,6 +298,41 @@ def _unwrapped_music_artwork(reference: str) -> str:
     return value
 
 
+def _music_network_cover(request: Request, reference: str) -> bytes | None:
+    """Read a catalogue-owned NAS image via the same share as iOS playback.
+
+    A Kodi thumbnail commonly references folder.jpg / cover.jpg on an SMB
+    share, rather than art embedded inside FLAC. Limit bytes in memory and
+    never create a server-side cached copy.
+    """
+    from .local_stream import _registered_media_location
+    from .playback_browser import _credentials
+    from .playback_media import network_source
+
+    matched = _registered_media_location(request, reference)
+    if not matched:
+        return None
+    location, relative = matched
+    password = _credentials(
+        request.app.state.store, request.app.state.playback_oauth,
+        location["id"],
+    )
+    source = network_source(
+        location, relative, password,
+        request.app.state.playback_nfs_mounts,
+    )
+    if source.length <= 0 or source.length > 8 * 1024 * 1024:
+        return None
+    parts = []
+    total = 0
+    for part in source.open(0, source.length - 1):
+        total += len(part)
+        if total > 8 * 1024 * 1024:
+            return None
+        parts.append(part)
+    return b"".join(parts)
+
+
 def _music_image_response(artwork, data: bytes) -> Response:
     if not data or len(data) > 8 * 1024 * 1024:
         raise ArtworkError("Music image exceeds the allowed size.")
@@ -340,6 +375,18 @@ async def music_artwork(
 
     players = await asyncio.to_thread(store.players)
     async with _MUSIC_ARTWORK_SEMAPHORE:
+        for candidate in decoded:
+            if not candidate.startswith(("smb://", "nfs://", "ftp://", "sftp://")):
+                continue
+            try:
+                data = await asyncio.to_thread(
+                    _music_network_cover, request, candidate
+                )
+                if data:
+                    return _music_image_response(artwork, data)
+            except (HTTPException, ArtworkError, OSError, ValueError, ImportError) as exc:
+                LOG.debug("Direct music cover read failed (%s)", type(exc).__name__)
+
         # Both raw and image://-wrapped Kodi music@ references can point
         # to artwork embedded in the track itself. Reuse the iOS-style
         # unwrap before probing the configured server SMB/NFS/FTP/SFTP source.
