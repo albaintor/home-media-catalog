@@ -411,96 +411,6 @@ async def music_artwork(
             except (HTTPException, ArtworkError, OSError, ValueError, ImportError) as exc:
                 LOG.debug("Direct music cover read failed (%s)", type(exc).__name__)
 
-        # Both raw and image://-wrapped Kodi music@ references can point
-        # to artwork embedded in the track itself. Reuse the iOS-style
-        # unwrap before probing the configured server SMB/NFS/FTP/SFTP source.
-        for candidate in decoded:
-            if not candidate.startswith("music@"):
-                continue
-            try:
-                data = await asyncio.to_thread(
-                    extract_embedded_cover, request, candidate
-                )
-                if data:
-                    return _music_image_response(artwork, data)
-            except Exception as exc:
-                LOG.debug("Music artwork embedded reference unavailable (%s)",
-                          type(exc).__name__)
-
-        # Albums may have no valid Kodi thumbnail but still contain a FLAC,
-        # MP4 or M4A cover. Try up to three tracks from this album.
-        if entity == "albums" and aspect == "thumb":
-            def saved_album_tracks():
-                with store.connect() as conn:
-                    return [
-                        row[0] for row in conn.execute(
-                            "SELECT DISTINCT file FROM music_tracks "
-                            "WHERE album_id=? AND playable=1 AND file IS NOT NULL "
-                            "AND file<>'' ORDER BY COALESCE(disc,1),"
-                            "COALESCE(track,0) LIMIT 3",
-                            (entity_id,),
-                        )
-                    ]
-
-            album_paths = await asyncio.to_thread(saved_album_tracks)
-            for path in album_paths:
-                try:
-                    data = await asyncio.to_thread(
-                        extract_embedded_cover, request, "music@" + path
-                    )
-                    if data:
-                        return _music_image_response(artwork, data)
-                except Exception as exc:
-                    LOG.debug("Music embedded track artwork unavailable (%s)",
-                              type(exc).__name__)
-
-            # Kodi albums frequently store their cover beside audio tracks
-            # (folder.jpg / cover.jpg), with no picture embedded in the FLAC.
-            # Resolve only directories of catalogue-owned tracks through an
-            # explicitly configured share, never a user-supplied path.
-            checked_folders = set()
-            for path in album_paths:
-                parsed = urlsplit(path)
-                if parsed.scheme not in {"smb", "nfs", "ftp", "sftp"}:
-                    continue
-                folder = path.rsplit("/", 1)[0]
-                if folder in checked_folders:
-                    continue
-                checked_folders.add(folder)
-                for filename in ("folder.jpg", "cover.jpg", "folder.png", "cover.png"):
-                    try:
-                        data = await asyncio.to_thread(
-                            _music_network_cover, request, folder + "/" + filename
-                        )
-                        if data:
-                            return _music_image_response(artwork, data)
-                    except (HTTPException, ArtworkError, OSError, ValueError) as exc:
-                        LOG.debug("Album folder cover unavailable (%s)",
-                                  type(exc).__name__)
-                if len(checked_folders) >= 2:
-                    break
-
-            # An exact MusicBrainz release-group cover is preferable to a
-            # guessed match based only on artist/title; never write it to disk.
-            def album_mbid():
-                with store.connect() as conn:
-                    row = conn.execute(
-                        "SELECT release_group_mbid FROM music_albums WHERE id=?",
-                        (entity_id,),
-                    ).fetchone()
-                return row[0] if row else None
-
-            release_group = await asyncio.to_thread(album_mbid)
-            if release_group:
-                cache_key = hashlib.sha256(
-                    ("musicbrainz:" + str(release_group)).encode()
-                ).hexdigest()
-                if time.monotonic() >= _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER.get(cache_key, 0):
-                    data = await exact_musicbrainz_cover(release_group)
-                    if data:
-                        return _music_image_response(artwork, data)
-                    _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER[cache_key] = time.monotonic() + 3600
-
         # Reproduce the canonical iOS music@ artwork URL, preserving @.
         # Try the original Kodi image wrapper first, then the decoded VFS
         # path if the instance rejects the first variant.
@@ -544,6 +454,97 @@ async def music_artwork(
                     _MUSIC_ARTWORK_UNREACHABLE[player_id] = (
                         time.monotonic() + 90
                     )
+
+        # Both raw and image://-wrapped Kodi music@ references can point
+        # to artwork embedded in the track itself. Reuse the iOS-style
+        # unwrap before probing the configured server SMB/NFS/FTP/SFTP source.
+        for candidate in decoded:
+            if not candidate.startswith("music@"):
+                continue
+            try:
+                data = await asyncio.to_thread(
+                    extract_embedded_cover, request, candidate
+                )
+                if data:
+                    return _music_image_response(artwork, data)
+            except Exception as exc:
+                LOG.debug("Music artwork embedded reference unavailable (%s)",
+                          type(exc).__name__)
+
+        # Albums may have no valid Kodi thumbnail but still contain a FLAC,
+        # MP4 or M4A cover. Try up to three tracks from this album.
+        if entity == "albums" and aspect == "thumb":
+            def saved_album_tracks():
+                with store.connect() as conn:
+                    return [
+                        row[0] for row in conn.execute(
+                            "SELECT DISTINCT file FROM music_tracks "
+                            "WHERE album_id=? AND playable=1 AND file IS NOT NULL "
+                            "AND file<>'' ORDER BY COALESCE(disc,1),"
+                            "COALESCE(track,0) LIMIT 3",
+                            (entity_id,),
+                        )
+                    ]
+
+            album_paths = await asyncio.to_thread(saved_album_tracks)
+            # Try the cheap folder.jpg / cover.jpg lookups before decoding
+            # embedded artwork with FFmpeg. Many Kodi albums contain only
+            # a sidecar image, and scanning three full audio streams can
+            # otherwise delay every grid cover by tens of seconds.
+            checked_folders = set()
+            for path in album_paths:
+                parsed = urlsplit(path)
+                if parsed.scheme not in {"smb", "nfs", "ftp", "sftp"}:
+                    continue
+                folder = path.rsplit("/", 1)[0]
+                if folder in checked_folders:
+                    continue
+                checked_folders.add(folder)
+                for filename in ("folder.jpg", "cover.jpg", "folder.png", "cover.png"):
+                    try:
+                        data = await asyncio.to_thread(
+                            _music_network_cover, request, folder + "/" + filename
+                        )
+                        if data:
+                            return _music_image_response(artwork, data)
+                    except (HTTPException, ArtworkError, OSError, ValueError) as exc:
+                        LOG.debug("Album folder cover unavailable (%s)",
+                                  type(exc).__name__)
+                if len(checked_folders) >= 2:
+                    break
+
+            for path in album_paths:
+                try:
+                    data = await asyncio.to_thread(
+                        extract_embedded_cover, request, "music@" + path
+                    )
+                    if data:
+                        return _music_image_response(artwork, data)
+                except Exception as exc:
+                    LOG.debug("Music embedded track artwork unavailable (%s)",
+                              type(exc).__name__)
+
+            # An exact MusicBrainz release-group cover is preferable to a
+            # guessed match based only on artist/title; never write it to disk.
+            def album_mbid():
+                with store.connect() as conn:
+                    row = conn.execute(
+                        "SELECT release_group_mbid FROM music_albums WHERE id=?",
+                        (entity_id,),
+                    ).fetchone()
+                return row[0] if row else None
+
+            release_group = await asyncio.to_thread(album_mbid)
+            if release_group:
+                cache_key = hashlib.sha256(
+                    ("musicbrainz:" + str(release_group)).encode()
+                ).hexdigest()
+                if time.monotonic() >= _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER.get(cache_key, 0):
+                    data = await exact_musicbrainz_cover(release_group)
+                    if data:
+                        return _music_image_response(artwork, data)
+                    _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER[cache_key] = time.monotonic() + 3600
+
     raise HTTPException(404, "No accessible artwork.")
 
 
