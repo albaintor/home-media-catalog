@@ -8,7 +8,7 @@ const baseURL = new URL('.', window.location.href);
 const url = (path) => new URL(path.replace(/^\/+/, ''), baseURL).href;
 const FORMAT_LABELS = {Digital:'Fichiers', CD:'CD', SACD:'SACD', Vinyl:'Vinyle', Cassette:'Cassette', MiniDisc:'MiniDisc', 'DVD-Audio':'DVD-Audio', 'Blu-ray Audio':'Blu-ray Audio', 'Reel-to-reel':'Bande', Streaming:'Streaming', Other:'Autre'};
 const SOURCE_LABELS = {kodi:'Kodi', discogs:'Discogs (CSV)', clz_music:'CLZ Music (XML)', music_csv:'Liste CSV / JSON'};
-const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, artistAlbums:new Map(), artistObserver:null, debounce:null};
+const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, transcodeTried:false, artistAlbums:new Map(), artistObserver:null, debounce:null};
 
 async function api(path, options={}) {
   const headers = new Headers(options.headers || {});
@@ -173,8 +173,53 @@ async function showArtist(id) {
 // Unlike a POST ticket followed by audio.play(), this authenticated GET
 // can be attached synchronously during the user's click. Safari otherwise
 // rejects play() after an asynchronous network round trip.
-function streamURL(track) {
-  return url(`api/v1/players/music/tracks/${encodeURIComponent(track.id)}/stream`);
+function streamURL(track, transcode=false) {
+  const path = `api/v1/players/music/tracks/${encodeURIComponent(track.id)}/`;
+  return url(path + (transcode ? 'transcode.mp3' : 'stream'));
+}
+
+async function musicStreamError(track, transcode) {
+  // The HTMLMediaElement API hides the HTTP error body. An authenticated
+  // one-byte probe provides actionable feedback (401/403, 404, 502, etc.).
+  try {
+    const response = await fetch(streamURL(track, transcode), {
+      method: 'GET', headers: {'Range':'bytes=0-0'}, credentials:'same-origin'
+    });
+    if (!response.ok) {
+      let reason = '';
+      try { reason = (await response.json()).error?.message || ''; } catch {}
+      return `Flux audio HTTP ${response.status}${reason ? ': '+reason : ''}`;
+    }
+    return transcode
+      ? 'Transcodage MP3 impossible. Vérifiez la source réseau et FFmpeg.'
+      : 'Format non décodable par le navigateur.';
+  } catch (error) { return 'Flux audio inaccessible : ' + error.message; }
+}
+
+function showMusicPlayer() {
+  const player = $('music-player');
+  player.hidden = false;
+  // Modal dialogs make all non-descendant elements inert. A manual popover
+  // puts the single persistent player in the top layer above both dialogs.
+  if (typeof player.showPopover === 'function' && !player.matches(':popover-open')) {
+    try { player.showPopover(); } catch (error) {
+      console.warn('Music player top-layer presentation unavailable:', error);
+    }
+  }
+}
+
+function tryMP3Fallback() {
+  const track = state.queue[state.queueIndex];
+  if (!track || state.transcodeTried) return false;
+  state.transcodeTried = true;
+  const audio = $('music-audio'), token = state.playbackToken;
+  audio.src = streamURL(track, true);
+  void audio.play().catch(async error => {
+    if (token === state.playbackToken) {
+      toast((await musicStreamError(track, true)) + ' (' + error.message + ')');
+    }
+  });
+  return true;
 }
 
 function playableTracks(tracks) {
@@ -241,17 +286,21 @@ async function playCurrent() {
   if (!track) return;
   const token = ++state.playbackToken;
   const audio = $('music-audio');
-  $('music-player').hidden = false;
+  showMusicPlayer();
   $('music-now-title').textContent = track.title;
   $('music-now-artist').textContent = [track.artist, track.album].filter(Boolean).join(' · ');
   updateQueueUI();
-  if ('mediaSession' in navigator) {
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: track.title, artist: track.artist, album: track.album,
-      artwork: track.album_id ? [{src: url(`api/v1/music/albums/${encodeURIComponent(track.album_id)}/artwork/thumb`), sizes:'512x512'}] : []
-    });
-    navigator.mediaSession.playbackState = 'paused';
-  }
+  // Metadata support must never prevent the audio element from playing.
+  try {
+    if ('mediaSession' in navigator && 'MediaMetadata' in window) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: track.title, artist: track.artist, album: track.album,
+        artwork: track.album_id ? [{src: url(`api/v1/music/albums/${encodeURIComponent(track.album_id)}/artwork/thumb`), sizes:'512x512'}] : []
+      });
+      navigator.mediaSession.playbackState = 'paused';
+    }
+  } catch (error) { console.warn('Music Media Session metadata:', error); }
+  state.transcodeTried = false;
   try {
     audio.pause();
     audio.removeAttribute('src');
@@ -259,7 +308,11 @@ async function playCurrent() {
     if (token !== state.playbackToken) return;
     audio.src = streamURL(track);
     await audio.play();
-  } catch (error) { if (token === state.playbackToken) toast(error.message); }
+  } catch (error) {
+    if (token === state.playbackToken && !state.transcodeTried && !tryMP3Fallback()) {
+      toast(error.message);
+    }
+  }
 }
 
 function step(delta) {
@@ -372,12 +425,12 @@ export function startMusic() {
   const audio = $('music-audio');
   audio.addEventListener('ended', completed);
   audio.addEventListener('error', () => {
-    if (state.queue[state.queueIndex] && audio.getAttribute('src')) {
-      const errorCode = audio.error?.code;
-      toast(errorCode === 4
-        ? 'Format audio non pris en charge ou flux réseau inaccessible.'
-        : 'Impossible de lire ce titre. Vérifiez la connexion réseau ou Kodi.');
-    }
+    if (!state.queue[state.queueIndex] || !audio.getAttribute('src')) return;
+    if (!state.transcodeTried && tryMP3Fallback()) return;
+    const track = state.queue[state.queueIndex], token = state.playbackToken;
+    void musicStreamError(track, true).then(message => {
+      if (token === state.playbackToken) toast(message);
+    });
   });
   audio.addEventListener('play', () => { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; });
   audio.addEventListener('pause', () => { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; });
