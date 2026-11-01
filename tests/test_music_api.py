@@ -220,6 +220,7 @@ def _browser_audio_fixture(client, admin, *, with_player=True, with_share=False)
 def test_browser_music_transcode_uses_private_kodi_configuration(client, admin, monkeypatch):
     """Public player views deliberately lack config; transcoding must load it privately."""
     from fastapi import HTTPException
+
     from home_media_catalog import local_stream
 
     track_id = _browser_audio_fixture(client, admin)
@@ -248,7 +249,9 @@ def test_browser_music_transcode_uses_private_kodi_configuration(client, admin, 
 def test_browser_music_transcode_falls_back_from_share_to_kodi(client, admin, monkeypatch):
     """An unavailable SMB share must not prevent another eligible Kodi VFS source."""
     import io
+
     from fastapi import HTTPException
+
     from home_media_catalog import local_stream
 
     track_id = _browser_audio_fixture(client, admin, with_share=True)
