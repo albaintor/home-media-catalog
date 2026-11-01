@@ -8,7 +8,7 @@ const baseURL = new URL('.', window.location.href);
 const url = (path) => new URL(path.replace(/^\/+/, ''), baseURL).href;
 const FORMAT_LABELS = {Digital:'Fichiers', CD:'CD', SACD:'SACD', Vinyl:'Vinyle', Cassette:'Cassette', MiniDisc:'MiniDisc', 'DVD-Audio':'DVD-Audio', 'Blu-ray Audio':'Blu-ray Audio', 'Reel-to-reel':'Bande', Streaming:'Streaming', Other:'Autre'};
 const SOURCE_LABELS = {kodi:'Kodi', discogs:'Discogs (CSV)', clz_music:'CLZ Music (XML)', music_csv:'Liste CSV / JSON'};
-const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, transcodeTried:false, artistAlbums:new Map(), artistObserver:null, debounce:null};
+const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, transcodeTried:false, transcodeStart:0, streamTranscoded:false, userScrubbing:false, artistAlbums:new Map(), artistObserver:null, debounce:null};
 
 async function api(path, options={}) {
   const headers = new Headers(options.headers || {});
@@ -173,9 +173,10 @@ async function showArtist(id) {
 // Unlike a POST ticket followed by audio.play(), this authenticated GET
 // can be attached synchronously during the user's click. Safari otherwise
 // rejects play() after an asynchronous network round trip.
-function streamURL(track, transcode=false) {
+function streamURL(track, transcode=false, start=0) {
   const path = `api/v1/players/music/tracks/${encodeURIComponent(track.id)}/`;
-  return url(path + (transcode ? 'transcode.mp3' : 'stream'));
+  const endpoint = url(path + (transcode ? 'transcode.mp3' : 'stream'));
+  return transcode && start > 0 ? endpoint + '?start=' + encodeURIComponent(start.toFixed(2)) : endpoint;
 }
 
 async function musicStreamError(track, transcode) {
@@ -214,6 +215,8 @@ function tryMP3Fallback() {
   const track = state.queue[state.queueIndex];
   if (!track || state.transcodeTried) return false;
   state.transcodeTried = true;
+  state.streamTranscoded = true;
+  state.transcodeStart = 0;
   const audio = $('music-audio'), token = state.playbackToken;
   audio.src = streamURL(track, true);
   void audio.play().catch(async error => {
@@ -221,7 +224,54 @@ function tryMP3Fallback() {
       toast((await musicStreamError(track, true)) + ' (' + error.message + ')');
     }
   });
+  updateMusicTransport();
   return true;
+}
+
+function musicDuration() {
+  const trackDuration = Number(state.queue[state.queueIndex]?.duration_seconds);
+  const audioDuration = $('music-audio').duration;
+  return trackDuration > 0 ? trackDuration : (Number.isFinite(audioDuration) && audioDuration > 0 ? audioDuration : 0);
+}
+
+function musicPosition() {
+  const current = $('music-audio').currentTime;
+  return Math.max(0, (state.streamTranscoded ? state.transcodeStart : 0) +
+    (Number.isFinite(current) ? current : 0));
+}
+
+function updateMusicTransport() {
+  const audio = $('music-audio');
+  const length = musicDuration(), elapsed = musicPosition();
+  $('music-elapsed').textContent = duration(elapsed) || '0:00';
+  $('music-duration').textContent = length ? duration(length) : '--:--';
+  const seek = $('music-seek');
+  seek.disabled = !length;
+  if (!state.userScrubbing) seek.value = length ? String(Math.round(Math.min(1, elapsed / length) * 1000)) : '0';
+  const button = $('music-play-pause');
+  button.textContent = audio.paused ? '▶' : '⏸';
+  button.setAttribute('aria-label', audio.paused ? 'Reprendre' : 'Pause');
+  $('music-volume').value = String(Math.round(audio.volume * 100));
+  $('music-mute').textContent = audio.muted || audio.volume === 0 ? '🔇' : '🔊';
+  $('music-mute').setAttribute('aria-label', audio.muted ? 'Rétablir le son' : 'Couper le son');
+  updateMediaPosition();
+}
+
+function seekMusicTo(seconds) {
+  const audio = $('music-audio'), total = musicDuration();
+  const destination = Math.max(0, total ? Math.min(seconds, Math.max(0, total - 0.1)) : seconds);
+  if (state.streamTranscoded) {
+    // A live MP3 transcoder has no HTTP ranges or stable file duration.
+    // Restart FFmpeg at the requested source timestamp.
+    void playCurrent(destination, true);
+  } else {
+    try {
+      audio.currentTime = destination;
+      updateMusicTransport();
+    } catch (error) {
+      toast('Déplacement impossible : ' + error.message);
+    }
+  }
 }
 
 function playableTracks(tracks) {
@@ -250,12 +300,12 @@ function updateQueueUI() {
 function updateMediaPosition() {
   const audio = $('music-audio');
   if (!audio || !('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
-  const durationValue = Number.isFinite(audio.duration) ? audio.duration : state.queue[state.queueIndex]?.duration_seconds;
+  const durationValue = musicDuration();
   if (!(durationValue > 0)) return;
   try {
     navigator.mediaSession.setPositionState({
       duration: durationValue,
-      position: Math.max(0, Math.min(durationValue, audio.currentTime || 0)),
+      position: Math.max(0, Math.min(durationValue, musicPosition())),
       playbackRate: audio.playbackRate || 1
     });
   } catch { /* browser may not support position updates */ }
@@ -283,7 +333,7 @@ async function playQueue(tracks, index) {
   await playCurrent();
 }
 
-async function playCurrent() {
+async function playCurrent(startAt=0, preferTranscode=false) {
   const track = state.queue[state.queueIndex];
   if (!track) return;
   const token = ++state.playbackToken;
@@ -302,18 +352,21 @@ async function playCurrent() {
       navigator.mediaSession.playbackState = 'paused';
     }
   } catch (error) { console.warn('Music Media Session metadata:', error); }
-  state.transcodeTried = false;
+  state.transcodeTried = preferTranscode;
+  state.streamTranscoded = preferTranscode;
+  state.transcodeStart = preferTranscode ? startAt : 0;
   try {
     audio.pause();
     audio.removeAttribute('src');
     audio.load();
     if (token !== state.playbackToken) return;
-    audio.src = streamURL(track);
+    audio.src = streamURL(track, preferTranscode, startAt);
     await audio.play();
+    updateMusicTransport();
   } catch (error) {
-    if (token === state.playbackToken && !state.transcodeTried && !tryMP3Fallback()) {
-      toast(error.message);
-    }
+    if (token !== state.playbackToken) return;
+    if (!state.transcodeTried && tryMP3Fallback()) return;
+    toast((await musicStreamError(track, preferTranscode)) + ' (' + error.message + ')');
   }
 }
 
@@ -434,10 +487,40 @@ export function startMusic() {
       if (token === state.playbackToken) toast(message);
     });
   });
-  audio.addEventListener('play', () => { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; });
-  audio.addEventListener('pause', () => { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; });
-  audio.addEventListener('seeked', updateMediaPosition);
-  audio.addEventListener('loadedmetadata', updateMediaPosition);
+  audio.addEventListener('play', () => {
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    updateMusicTransport();
+  });
+  audio.addEventListener('pause', () => {
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    updateMusicTransport();
+  });
+  for (const name of ['timeupdate', 'durationchange', 'loadedmetadata', 'seeked', 'volumechange', 'ended']) {
+    audio.addEventListener(name, updateMusicTransport);
+  }
+  $('music-play-pause').addEventListener('click', () => {
+    if (audio.paused) void audio.play().catch(error => toast(error.message));
+    else audio.pause();
+    updateMusicTransport();
+  });
+  $('music-seek').addEventListener('input', event => {
+    state.userScrubbing = true;
+    $('music-elapsed').textContent = duration(Number(event.target.value) / 1000 * musicDuration()) || '0:00';
+  });
+  $('music-seek').addEventListener('change', event => {
+    state.userScrubbing = false;
+    seekMusicTo(Number(event.target.value) / 1000 * musicDuration());
+  });
+  $('music-volume').addEventListener('input', event => {
+    audio.muted = false;
+    audio.volume = Math.min(1, Math.max(0, Number(event.target.value) / 100));
+    updateMusicTransport();
+  });
+  $('music-mute').addEventListener('click', () => {
+    audio.muted = !audio.muted;
+    updateMusicTransport();
+  });
+  updateMusicTransport();
   $('music-prev').addEventListener('click', () => step(-1));
   $('music-next').addEventListener('click', () => step(1));
   $('music-shuffle')?.addEventListener('click', toggleShuffle);
