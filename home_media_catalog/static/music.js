@@ -183,7 +183,9 @@ async function musicStreamError(track, transcode) {
   // one-byte probe provides actionable feedback (401/403, 404, 502, etc.).
   try {
     const response = await fetch(streamURL(track, transcode), {
-      method: 'GET', headers: {'Range':'bytes=0-0'}, credentials:'same-origin'
+      method: transcode ? 'HEAD' : 'GET',
+      headers: transcode ? {} : {'Range':'bytes=0-0'},
+      credentials:'same-origin'
     });
     if (!response.ok) {
       let reason = '';
