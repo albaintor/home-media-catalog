@@ -322,7 +322,7 @@ def test_music_artwork_unwraps_and_never_persists(client, admin, monkeypatch):
         ),
     )
     images = []
-    jpeg = b"\\xff\\xd8\\xff\\xe0" + b"fake-bounded-test-image"
+    jpeg = b"\xff\xd8\xff\xe0" + b"fake-bounded-test-image"
 
     def network_cover(_request, reference):
         images.append(reference)
