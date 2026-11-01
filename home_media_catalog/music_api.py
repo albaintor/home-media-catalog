@@ -298,6 +298,30 @@ def _unwrapped_music_artwork(reference: str) -> str:
     return value
 
 
+def _kodi_music_image_variants(reference: str) -> list[str]:
+    """Mirror iOS LocalKodiJSONRPC.artwork's Kodi /image candidates.
+
+    Kodi's music@ marker contains a literal @ even though the nested VFS
+    URL is percent-encoded. Encoding the @ as %40 (as the old web handler
+    did) makes some Kodi builds return HTTP 404 for every album.
+    """
+    resolved = _unwrapped_music_artwork(reference)
+    if not resolved:
+        return []
+    if reference.startswith(("http://", "https://")):
+        return []
+    if reference.startswith("image://"):
+        variants = [reference, resolved]
+    elif resolved.startswith("music@"):
+        variants = [
+            "image://" + quote(resolved, safe="@") + "/",
+            resolved,
+        ]
+    else:
+        variants = [resolved]
+    return list(dict.fromkeys(variants))
+
+
 def _music_network_cover(request: Request, reference: str) -> bytes | None:
     """Read a catalogue-owned NAS image via the same share as iOS playback.
 
@@ -450,17 +474,11 @@ async def music_artwork(
                         return _music_image_response(artwork, data)
                     _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER[cache_key] = time.monotonic() + 3600
 
-        # Kodi's /image route is the last fallback. The original code
-        # generated an image:// wrapper around an already wrapped image://
-        # reference and then encoded it again, producing an invalid URL.
-        # Use exactly one canonical wrapper for each stored reference.
-        for candidate, unwrapped in zip(candidates, decoded, strict=True):
-            if not unwrapped:
-                continue
-            original = (
-                candidate if candidate.startswith("image://") else
-                "image://" + quote(unwrapped, safe="") + "/"
-            )
+        # Reproduce the canonical iOS music@ artwork URL, preserving @.
+        # Try the original Kodi image wrapper first, then the decoded VFS
+        # path if the instance rejects the first variant.
+        for candidate in candidates:
+            variants = _kodi_music_image_variants(candidate)
             for summary in players:
                 player_id = summary["id"]
                 if time.monotonic() < _MUSIC_ARTWORK_UNREACHABLE.get(player_id, 0):
@@ -479,17 +497,23 @@ async def music_artwork(
                         timeout=3.5, auth=auth, trust_env=False,
                         follow_redirects=False,
                     ) as client:
-                        response = await client.get(
-                            f"{base}/image/{quote(original, safe='')}"
-                        )
-                    if response.status_code != 200:
-                        if response.status_code in (401, 403, 502, 503):
-                            _MUSIC_ARTWORK_UNREACHABLE[player_id] = (
-                                time.monotonic() + 90
+                        for original in variants:
+                            response = await client.get(
+                                f"{base}/image/{quote(original, safe='')}"
                             )
-                        continue
-                    return _music_image_response(artwork, response.content)
-                except (httpx.HTTPError, ArtworkError, ValueError):
+                            if response.status_code == 200:
+                                try:
+                                    return _music_image_response(
+                                        artwork, response.content
+                                    )
+                                except ArtworkError:
+                                    continue
+                            if response.status_code in (401, 403, 502, 503):
+                                _MUSIC_ARTWORK_UNREACHABLE[player_id] = (
+                                    time.monotonic() + 90
+                                )
+                                break
+                except (httpx.HTTPError, ValueError):
                     _MUSIC_ARTWORK_UNREACHABLE[player_id] = (
                         time.monotonic() + 90
                     )
