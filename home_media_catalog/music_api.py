@@ -6,6 +6,7 @@ import asyncio
 import base64
 import binascii
 import hashlib
+import logging
 import time
 from typing import Literal
 from urllib.parse import quote
@@ -42,6 +43,7 @@ from .models import (
     MusicTrackPage,
 )
 from .music import MUSIC_COLLECTION_TYPES, MusicCatalogue
+from .music_embedded_artwork import extract_embedded_cover
 from .players import connection, endpoint
 from .sync import BusyError
 
@@ -49,6 +51,7 @@ router = APIRouter(prefix="/api/v1", tags=["Music"])
 
 # Broken Kodi HTTP endpoints must not stall every album tile. The in-memory
 # cooldown expires automatically and is scoped to the individual player.
+LOG = logging.getLogger(__name__)
 _MUSIC_ARTWORK_UNREACHABLE: dict[str, float] = {}
 _MUSIC_ARTWORK_SEMAPHORE = asyncio.Semaphore(4)
 
@@ -307,6 +310,26 @@ async def music_artwork(
     # this server fallback only attempts Kodi players whose HTTP port responds.
     players = await asyncio.to_thread(store.players)
     async with _MUSIC_ARTWORK_SEMAPHORE:
+        # First try the existing network connections and their stored
+        # credentials. Kodi music@ references are often embedded M4A/FLAC
+        # covers, not downloadable image files. This works even if Kodi's
+        # HTTP service is powered off, provided the NAS share is configured.
+        for candidate in candidates:
+            if not candidate.startswith("music@"):
+                continue
+            key = hashlib.sha256(("embedded:" + candidate).encode()).hexdigest()
+            if cached := await asyncio.to_thread(artwork._cached, key):
+                return Response(cached[0], media_type=cached[1])
+            try:
+                data = await asyncio.to_thread(extract_embedded_cover, request, candidate)
+            except Exception as exc:
+                LOG.debug("Embedded music artwork unavailable (%s)", type(exc).__name__)
+                data = None
+            if data:
+                await asyncio.to_thread(artwork._save, key, data, "image/jpeg")
+                return Response(data, media_type="image/jpeg")
+        # If no saved network connection matches, try the Kodi HTTP image
+        # service with a per-player cooldown. Do not flood offline Kodi boxes.
         for candidate in candidates:
             original = "image://" + quote(candidate, safe="") + "/"
             key = hashlib.sha256(original.encode()).hexdigest()
