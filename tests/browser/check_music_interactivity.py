@@ -77,7 +77,7 @@ def main():
 
         # The actual browser URL (not a modal button) navigates libraries.
         page.locator("#music-link").click()
-        page.wait_for_function("location.hash === '#music'")
+        page.wait_for_function("location.hash === '#music' && !document.getElementById('music-page').hidden")
         assert not page.locator("#music-page").is_hidden()
         assert page.locator("#video-page").is_hidden()
         assert page.locator("#music-link").get_attribute("aria-current") == "page"
@@ -138,7 +138,7 @@ def main():
         assert page.locator("#music-player").is_hidden()
         assert not page.locator("#music-player-restore").is_hidden()
         page.locator("#video-link").click(timeout=2500)
-        page.wait_for_function("location.hash === '#video'")
+        page.wait_for_function("location.hash === '#video' && document.getElementById('music-page').hidden")
         assert page.locator("#music-page").is_hidden()
         assert not page.locator("#video-page").is_hidden()
         page.locator("#music-player-restore").click(timeout=2500)
@@ -149,7 +149,7 @@ def main():
         # A previous page, hidden player, and new page must share one audio.
         assert page.evaluate("document.querySelectorAll('#music-audio').length") == 1
         page.go_back()
-        page.wait_for_function("location.hash === '#music'")
+        page.wait_for_function("location.hash === '#music' && !document.getElementById('music-page').hidden")
         assert not page.locator("#music-page").is_hidden()
         browser.close()
 
