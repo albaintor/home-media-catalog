@@ -176,3 +176,124 @@ def test_browser_music_stream_uses_matching_smb_share_without_kodi(client, admin
     assert response.status_code == 206, response.text
     assert response.content == b"audio bytes"
     assert seen == [("smb", "Artist/Song.flac", "bytes=0-10")]
+
+
+def _browser_audio_fixture(client, admin, *, with_player=True, with_share=False):
+    source_response = client.post(
+        "/api/v1/sources", headers=admin,
+        json={"name": "Audio Kodi", "type": "kodi", "config": {"music_enabled": True}},
+    )
+    assert source_response.status_code == 201, source_response.text
+    source_id = source_response.json()["id"]
+    MusicCatalogue(client.app.state.store).apply_snapshot(
+        source_id,
+        MusicSnapshot(
+            albums=[MusicAlbumRecord(
+                external_key="test-album", title="Test Album", artists=["Test Artist"]
+            )],
+            tracks=[MusicTrackRecord(
+                external_key="test-track", title="Test Track",
+                album_key="test-album", artists=["Test Artist"], track=1,
+                file="smb://nas/Music/Test Artist/01.flac", playable=True,
+            )],
+        ),
+    )
+    if with_player:
+        created = client.post(
+            "/api/v1/players", headers=admin,
+            json={
+                "name": "Offline Kodi", "source_id": source_id,
+                "host": "kodi.local", "port": 8080,
+                "username": "remote", "password": "test-secret",
+            },
+        )
+        assert created.status_code == 201, created.text
+    if with_share:
+        created = client.post(
+            "/api/v1/playback/locations", headers=admin,
+            json={"name": "Audio NAS", "kind": "smb", "target": "smb://nas/Music"},
+        )
+        assert created.status_code == 201, created.text
+    return client.get("/api/v1/music/tracks", headers=admin).json()["items"][0]["id"]
+
+
+def test_browser_music_transcode_uses_private_kodi_configuration(client, admin, monkeypatch):
+    """Public player views deliberately lack config; transcoding must load it privately."""
+    from fastapi import HTTPException
+    from home_media_catalog import local_stream
+
+    track_id = _browser_audio_fixture(client, admin)
+    assert "config" not in client.app.state.store.players()[0]
+    assert "config" in client.app.state.store.player(
+        client.app.state.store.players()[0]["id"]
+    )
+    monkeypatch.setattr(local_stream.shutil, "which", lambda command: "/usr/bin/ffmpeg")
+    seen = []
+
+    def fake_kodi_source(url, auth, key):
+        seen.append((url, auth, key))
+        raise HTTPException(502, "Kodi is deliberately unavailable in this test.")
+
+    monkeypatch.setattr(local_stream, "kodi_source", fake_kodi_source)
+    path = f"/api/v1/players/music/tracks/{track_id}/transcode.mp3"
+    response = client.get(path, headers=admin)
+    assert response.status_code == 502, response.text
+    assert "KeyError" not in response.text
+    assert len(seen) == 1
+    assert "/vfs/smb%3A%2F%2Fnas%2FMusic" in seen[0][0]
+    assert seen[0][1] == ("remote", "test-secret")
+    assert seen[0][2] == "music:" + track_id
+
+
+def test_browser_music_transcode_falls_back_from_share_to_kodi(client, admin, monkeypatch):
+    """An unavailable SMB share must not prevent another eligible Kodi VFS source."""
+    import io
+    from fastapi import HTTPException
+    from home_media_catalog import local_stream
+
+    track_id = _browser_audio_fixture(client, admin, with_share=True)
+    monkeypatch.setattr(local_stream.shutil, "which", lambda command: "/usr/bin/ffmpeg")
+    attempted = []
+
+    def failed_share(location, relative, password, mounts):
+        attempted.append(("smb", relative))
+        raise HTTPException(502, "Simulated offline share")
+
+    def usable_kodi(url, auth, key):
+        attempted.append(("kodi", key))
+        return object()
+
+    class StubBridge:
+        def __init__(self, source, name):
+            self.url = "http://127.0.0.1/mock-file"
+        def __enter__(self):
+            return self
+        def close(self):
+            pass
+
+    class StubProcess:
+        def __init__(self):
+            self.stdout = io.BufferedReader(io.BytesIO(b"encoded mp3"))
+        def poll(self):
+            return 0
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(local_stream, "network_source", failed_share)
+    monkeypatch.setattr(local_stream, "kodi_source", usable_kodi)
+    monkeypatch.setattr(local_stream, "LoopbackBridge", StubBridge)
+    monkeypatch.setattr(local_stream.subprocess, "Popen", lambda *args, **kwargs: StubProcess())
+
+    path = f"/api/v1/players/music/tracks/{track_id}/transcode.mp3"
+    header = client.head(path, headers=admin)
+    assert header.status_code == 200, header.text
+    response = client.get(path, headers=admin)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("audio/mpeg")
+    assert response.content == b"encoded mp3"
+    assert attempted == [
+        ("smb", "Test Artist/01.flac"),
+        ("kodi", "music:" + track_id),
+        ("smb", "Test Artist/01.flac"),
+        ("kodi", "music:" + track_id),
+    ]
