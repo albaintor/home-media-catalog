@@ -330,6 +330,43 @@ async def music_artwork(
             if data:
                 await asyncio.to_thread(artwork._save, key, data, "image/jpeg")
                 return Response(data, media_type="image/jpeg")
+        # Kodi often stores album covers inside the first FLAC/M4A track
+        # instead of a usable album thumbnail URL. Extract the cover through
+        # the same configured SMB/NFS/FTP/SFTP connection as playback. Never
+        # accept a browser-supplied file path: it comes from the catalogue.
+        if entity == "albums" and aspect == "thumb":
+            embedded_key = hashlib.sha256(
+                ("album-embedded:" + entity_id).encode()
+            ).hexdigest()
+            if cached := await asyncio.to_thread(artwork._cached, embedded_key):
+                return Response(cached[0], media_type=cached[1])
+
+            def saved_album_tracks():
+                with store.connect() as conn:
+                    return [
+                        row[0] for row in conn.execute(
+                            "SELECT DISTINCT file FROM music_tracks "
+                            "WHERE album_id=? AND playable=1 AND file IS NOT NULL "
+                            "AND file<>'' ORDER BY COALESCE(disc,1),"
+                            "COALESCE(track,0) LIMIT 3",
+                            (entity_id,),
+                        )
+                    ]
+
+            for path in await asyncio.to_thread(saved_album_tracks):
+                try:
+                    data = await asyncio.to_thread(
+                        extract_embedded_cover, request, "music@" + path
+                    )
+                except Exception as exc:
+                    LOG.debug("Embedded cover from album track failed (%s)", type(exc).__name__)
+                    data = None
+                if data:
+                    await asyncio.to_thread(
+                        artwork._save, embedded_key, data, "image/jpeg"
+                    )
+                    return Response(data, media_type="image/jpeg")
+
         # Exact MusicBrainz release-group fallback, not a fuzzy artist/title
         # search that could display the wrong cover. Cache the downloaded
         # bytes using the existing artwork store and rate-limit missing IDs.
