@@ -10,7 +10,6 @@ from typing import Literal
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, Field
 from fastapi import (
     APIRouter,
     Depends,
@@ -22,6 +21,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from pydantic import BaseModel, Field
 
 from .artwork import ArtworkError
 from .auth import authenticated, writable
