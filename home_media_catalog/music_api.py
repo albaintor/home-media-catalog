@@ -44,6 +44,7 @@ from .models import (
 )
 from .music import MUSIC_COLLECTION_TYPES, MusicCatalogue
 from .music_embedded_artwork import extract_embedded_cover
+from .music_public_artwork import exact_musicbrainz_cover
 from .players import connection, endpoint
 from .sync import BusyError
 
@@ -53,6 +54,7 @@ router = APIRouter(prefix="/api/v1", tags=["Music"])
 # cooldown expires automatically and is scoped to the individual player.
 LOG = logging.getLogger(__name__)
 _MUSIC_ARTWORK_UNREACHABLE: dict[str, float] = {}
+_MUSIC_PUBLIC_ARTWORK_RETRY_AFTER: dict[str, float] = {}
 _MUSIC_ARTWORK_SEMAPHORE = asyncio.Semaphore(4)
 
 
@@ -328,6 +330,35 @@ async def music_artwork(
             if data:
                 await asyncio.to_thread(artwork._save, key, data, "image/jpeg")
                 return Response(data, media_type="image/jpeg")
+        # Exact MusicBrainz release-group fallback, not a fuzzy artist/title
+        # search that could display the wrong cover. Cache the downloaded
+        # bytes using the existing artwork store and rate-limit missing IDs.
+        if entity == "albums" and aspect == "thumb":
+            def album_mbid():
+                with store.connect() as conn:
+                    row = conn.execute(
+                        "SELECT release_group_mbid FROM music_albums WHERE id=?",
+                        (entity_id,)
+                    ).fetchone()
+                return row[0] if row else None
+
+            release_group = await asyncio.to_thread(album_mbid)
+            if release_group:
+                cache_key = hashlib.sha256(
+                    ("musicbrainz:" + str(release_group)).encode()
+                ).hexdigest()
+                if cached := await asyncio.to_thread(artwork._cached, cache_key):
+                    return Response(cached[0], media_type=cached[1])
+                if time.monotonic() >= _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER.get(cache_key, 0):
+                    data = await exact_musicbrainz_cover(release_group)
+                    if data:
+                        media_type = artwork._image_type(data)
+                        await asyncio.to_thread(artwork._save, cache_key, data, media_type)
+                        return Response(data, media_type=media_type)
+                    _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER[cache_key] = (
+                        time.monotonic() + 3600
+                    )
+
         # If no saved network connection matches, try the Kodi HTTP image
         # service with a per-player cooldown. Do not flood offline Kodi boxes.
         for candidate in candidates:
