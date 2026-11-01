@@ -70,3 +70,17 @@
 .music-queue-panel li button:hover,.music-queue-panel li button[aria-current="true"]{background:#b2a5ef24}
 .music-queue-panel li small{color:var(--muted);max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .music-player[hidden]{display:none}
+
+/* Equal-height album/artist tiles: the cover and metadata align across rows. */
+.music-grid{align-items:stretch}
+.music-grid>.music-card{width:100%;height:100%;display:flex;flex-direction:column}
+.music-grid>.music-card>.music-cover{width:100%;flex:none;aspect-ratio:1}
+.music-grid>.music-card>.card-title{min-height:2.7em;width:100%}
+.music-grid>.music-card>.card-meta{min-height:2.9em;width:100%;align-content:flex-start}
+.music-grid>.music-card>.music-formats{margin-top:auto;padding-top:5px}
+.music-cover .music-mosaic-cells{display:grid;position:absolute;inset:0;overflow:hidden}
+.music-cover .music-mosaic-cells img{position:relative;inset:auto;display:block;min-width:0;min-height:0;width:100%;height:100%;object-fit:cover}
+.music-cover .music-mosaic-cells.single{display:block}
+.music-cover .music-mosaic-cells.single img{position:absolute;inset:0}
+.music-cover .music-mosaic-cells.double{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:1fr}
+.music-cover .music-mosaic-cells.double img{height:100%}
