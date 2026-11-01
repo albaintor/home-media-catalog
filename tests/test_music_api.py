@@ -349,6 +349,37 @@ def test_music_artwork_unwraps_and_never_persists(client, admin, monkeypatch):
 
 
 
+
+def test_album_cover_finds_folderjpg_next_to_saved_music_track(client, admin, monkeypatch):
+    """An album with no stored thumbnail can use folder.jpg beside its FLAC."""
+    from home_media_catalog import music_api
+
+    track_id = _browser_audio_fixture(client, admin, with_player=False, with_share=True)
+    album_id = client.get("/api/v1/music/albums", headers=admin).json()["items"][0]["id"]
+    calls = []
+
+    def fake_cover(_request, url):
+        calls.append(url)
+        if url.endswith("/folder.jpg"):
+            return b"\xff\xd8\xff\xe0" + b"test-jpeg"
+        return None
+
+    monkeypatch.setattr(music_api, "_music_network_cover", fake_cover)
+    monkeypatch.setattr(music_api, "extract_embedded_cover", lambda *_args: None)
+    monkeypatch.setattr(
+        client.app.state.artwork, "_save",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("music artwork must not be cached on the server")
+        ),
+    )
+    response = client.get(f"/api/v1/music/albums/{album_id}/artwork/thumb", headers=admin)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "image/jpeg"
+    assert calls == ["smb://nas/Music/Test Artist/folder.jpg"]
+    assert track_id
+
+
+
 def test_kodi_music_embedded_cover_uses_the_canonical_ios_image_url():
     from home_media_catalog.music_api import _kodi_music_image_variants
 
