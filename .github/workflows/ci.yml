@@ -25,6 +25,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -e '.[dev,browser]'
       - run: playwright install --with-deps chromium
+      - run: PYTHONPATH=. python tests/browser/check_music_interactivity.py
       - run: PYTHONPATH=. python tests/browser/check_catalogue.py
       - run: PYTHONPATH=. python tests/browser/check_collection_imports.py
   docker:
