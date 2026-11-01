@@ -419,34 +419,74 @@ async def browser_music_transcode(
     )
     if not track or not track["playable"] or not track.get("file"):
         raise HTTPException(404, "This catalogue song is not playable.")
+    # Prefer a saved network share. A Kodi instance is optional, and is only
+    # consulted when no share matches or the share cannot be read.
     matched = _registered_media_location(request, track["file"])
+    source = None
+    network_failure = None
     if matched:
         location, relative = matched
-        password = _credentials(
-            request.app.state.store, request.app.state.playback_oauth, location["id"],
-        )
-        source = await asyncio.to_thread(
-            network_source, location, relative, password,
-            request.app.state.playback_nfs_mounts,
-        )
-    else:
-        players = await asyncio.to_thread(request.app.state.store.players)
-        player = next(
-            (item for item in players if item["source_id"] == track["source_id"]),
-            None,
-        )
-        if player is None:
-            raise HTTPException(404, "No matching network share or Kodi instance.")
-        config = player["config"]
-        base = endpoint(config).removesuffix("/jsonrpc")
-        vfs_url = f"{base}/vfs/{quote(track['file'], safe='')}"
-        auth = (
-            (config["username"], config.get("password") or "")
-            if config.get("username") else None
-        )
-        source = await asyncio.to_thread(
-            kodi_source, vfs_url, auth, "music:" + track_id,
-        )
+        try:
+            password = _credentials(
+                request.app.state.store, request.app.state.playback_oauth,
+                location["id"],
+            )
+            source = await asyncio.to_thread(
+                network_source, location, relative, password,
+                request.app.state.playback_nfs_mounts,
+            )
+        except HTTPException as exc:
+            network_failure = exc
+            LOG.info("Music transcode: %s share unavailable (HTTP %d)",
+                     location["kind"], exc.status_code)
+        except (OSError, ValueError, ImportError) as exc:
+            network_failure = HTTPException(
+                502, "The configured network source could not be opened."
+            )
+            LOG.warning("Music transcode: %s share failed (%s)",
+                        location["kind"], type(exc).__name__)
+
+    if source is None:
+        store = request.app.state.store
+        candidates = await asyncio.to_thread(store.players)
+        matching_ids = [
+            item["id"] for item in candidates
+            if item.get("source_id") == track["source_id"]
+        ]
+        if not matching_ids and network_failure:
+            raise network_failure
+        if not matching_ids:
+            raise HTTPException(
+                404, "No matching configured network share or Kodi instance."
+            )
+
+        for player_id in matching_ids:
+            # store.players() intentionally flattens public player settings
+            # and strips passwords. Only store.player(id) contains the full
+            # private configuration used by endpoint() and VFS auth.
+            player = await asyncio.to_thread(store.player, player_id)
+            if not player or player.get("source_id") != track["source_id"]:
+                continue
+            config = player["config"]
+            try:
+                base = endpoint(config).removesuffix("/jsonrpc")
+                vfs_url = f"{base}/vfs/{quote(track['file'], safe='')}"
+                auth = (
+                    (config["username"], config.get("password") or "")
+                    if config.get("username") else None
+                )
+                source = await asyncio.to_thread(
+                    kodi_source, vfs_url, auth, "music:" + track_id,
+                )
+                break
+            except (HTTPException, ConnectorError, OSError, ValueError) as exc:
+                LOG.info("Music transcode: Kodi VFS unavailable for %s (%s)",
+                         player_id, type(exc).__name__)
+        if source is None:
+            raise HTTPException(
+                502, "Cannot read this audio file from the configured network "
+                     "share or any Kodi HTTP VFS instance."
+            )
 
     def start_encoder():
         bridge = LoopbackBridge(source, name="music.mp3")
