@@ -132,6 +132,7 @@ def test_music_export_and_stream_ticket(client, admin):
 def test_browser_music_stream_uses_matching_smb_share_without_kodi(client, admin, monkeypatch):
     """A browser audio GET must stream without a Kodi player or a POST ticket."""
     from fastapi.responses import StreamingResponse
+
     from home_media_catalog import local_stream
 
     source = client.post(
