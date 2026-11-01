@@ -9,7 +9,7 @@ import hashlib
 import logging
 import time
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 from fastapi import (
@@ -285,6 +285,29 @@ def music_remove_playlist_track(request: Request, playlist_id: str,
     return Response(status_code=204)
 
 
+def _unwrapped_music_artwork(reference: str) -> str:
+    """Decode Kodi's image:// wrapper, as the iOS artwork loader does."""
+    if not reference.startswith("image://"):
+        return reference
+    wrapped = reference[len("image://"):].strip("/")
+    wrapped = wrapped.split("|", 1)[0]
+    value = unquote(wrapped)
+    # An older Kodi scanner may have encoded the nested URL twice.
+    if value.startswith(("music%40", "video%40")):
+        value = unquote(value)
+    return value
+
+
+def _music_image_response(artwork, data: bytes) -> Response:
+    if not data or len(data) > 8 * 1024 * 1024:
+        raise ArtworkError("Music image exceeds the allowed size.")
+    return Response(
+        data,
+        media_type=artwork._image_type(data),
+        headers={"Cache-Control": "private, max-age=1800"},
+    )
+
+
 @router.get(
     "/music/{entity}/{entity_id}/artwork/{aspect}",
     dependencies=[Depends(authenticated)],
@@ -301,46 +324,41 @@ async def music_artwork(
     candidates = await asyncio.to_thread(
         _music(request).artwork, entity.removesuffix("s"), entity_id, aspect
     )
-    direct = [c for c in candidates if not c.startswith(("music@", "video@"))]
+    decoded = [_unwrapped_music_artwork(candidate) for candidate in candidates]
+    # Public artwork URLs/mapped server mounts are retrieved transiently.
+    # The video artwork endpoint keeps its usual persistent cache policy.
+    direct = [
+        item for item in decoded
+        if not item.startswith(("music@", "video@")) and
+        item.startswith(("http://", "https://", "smb://", "nfs://", "ftp://", "sftp://"))
+    ]
     try:
-        data, content_type = await artwork.get(direct)
-        return Response(data, media_type=content_type)
+        data, _ = await artwork.get(direct, persist=False)
+        return _music_image_response(artwork, data)
     except ArtworkError:
         pass
-    # Kodi-generated art may refer to album art embedded in FLAC/M4A on a
-    # network share. The iOS client prefers its configured SMB/NFS connector;
-    # this server fallback only attempts Kodi players whose HTTP port responds.
+
     players = await asyncio.to_thread(store.players)
     async with _MUSIC_ARTWORK_SEMAPHORE:
-        # First try the existing network connections and their stored
-        # credentials. Kodi music@ references are often embedded M4A/FLAC
-        # covers, not downloadable image files. This works even if Kodi's
-        # HTTP service is powered off, provided the NAS share is configured.
-        for candidate in candidates:
+        # Both raw and image://-wrapped Kodi music@ references can point
+        # to artwork embedded in the track itself. Reuse the iOS-style
+        # unwrap before probing the configured server SMB/NFS/FTP/SFTP source.
+        for candidate in decoded:
             if not candidate.startswith("music@"):
                 continue
-            key = hashlib.sha256(("embedded:" + candidate).encode()).hexdigest()
-            if cached := await asyncio.to_thread(artwork._cached, key):
-                return Response(cached[0], media_type=cached[1])
             try:
-                data = await asyncio.to_thread(extract_embedded_cover, request, candidate)
+                data = await asyncio.to_thread(
+                    extract_embedded_cover, request, candidate
+                )
+                if data:
+                    return _music_image_response(artwork, data)
             except Exception as exc:
-                LOG.debug("Embedded music artwork unavailable (%s)", type(exc).__name__)
-                data = None
-            if data:
-                await asyncio.to_thread(artwork._save, key, data, "image/jpeg")
-                return Response(data, media_type="image/jpeg")
-        # Kodi often stores album covers inside the first FLAC/M4A track
-        # instead of a usable album thumbnail URL. Extract the cover through
-        # the same configured SMB/NFS/FTP/SFTP connection as playback. Never
-        # accept a browser-supplied file path: it comes from the catalogue.
-        if entity == "albums" and aspect == "thumb":
-            embedded_key = hashlib.sha256(
-                ("album-embedded:" + entity_id).encode()
-            ).hexdigest()
-            if cached := await asyncio.to_thread(artwork._cached, embedded_key):
-                return Response(cached[0], media_type=cached[1])
+                LOG.debug("Music artwork embedded reference unavailable (%s)",
+                          type(exc).__name__)
 
+        # Albums may have no valid Kodi thumbnail but still contain a FLAC,
+        # MP4 or M4A cover. Try up to three tracks from this album.
+        if entity == "albums" and aspect == "thumb":
             def saved_album_tracks():
                 with store.connect() as conn:
                     return [
@@ -358,24 +376,19 @@ async def music_artwork(
                     data = await asyncio.to_thread(
                         extract_embedded_cover, request, "music@" + path
                     )
+                    if data:
+                        return _music_image_response(artwork, data)
                 except Exception as exc:
-                    LOG.debug("Embedded cover from album track failed (%s)", type(exc).__name__)
-                    data = None
-                if data:
-                    await asyncio.to_thread(
-                        artwork._save, embedded_key, data, "image/jpeg"
-                    )
-                    return Response(data, media_type="image/jpeg")
+                    LOG.debug("Music embedded track artwork unavailable (%s)",
+                              type(exc).__name__)
 
-        # Exact MusicBrainz release-group fallback, not a fuzzy artist/title
-        # search that could display the wrong cover. Cache the downloaded
-        # bytes using the existing artwork store and rate-limit missing IDs.
-        if entity == "albums" and aspect == "thumb":
+            # An exact MusicBrainz release-group cover is preferable to a
+            # guessed match based only on artist/title; never write it to disk.
             def album_mbid():
                 with store.connect() as conn:
                     row = conn.execute(
                         "SELECT release_group_mbid FROM music_albums WHERE id=?",
-                        (entity_id,)
+                        (entity_id,),
                     ).fetchone()
                 return row[0] if row else None
 
@@ -384,43 +397,40 @@ async def music_artwork(
                 cache_key = hashlib.sha256(
                     ("musicbrainz:" + str(release_group)).encode()
                 ).hexdigest()
-                if cached := await asyncio.to_thread(artwork._cached, cache_key):
-                    return Response(cached[0], media_type=cached[1])
                 if time.monotonic() >= _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER.get(cache_key, 0):
                     data = await exact_musicbrainz_cover(release_group)
                     if data:
-                        media_type = artwork._image_type(data)
-                        await asyncio.to_thread(artwork._save, cache_key, data, media_type)
-                        return Response(data, media_type=media_type)
-                    _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER[cache_key] = (
-                        time.monotonic() + 3600
-                    )
+                        return _music_image_response(artwork, data)
+                    _MUSIC_PUBLIC_ARTWORK_RETRY_AFTER[cache_key] = time.monotonic() + 3600
 
-        # If no saved network connection matches, try the Kodi HTTP image
-        # service with a per-player cooldown. Do not flood offline Kodi boxes.
-        for candidate in candidates:
-            original = "image://" + quote(candidate, safe="") + "/"
-            key = hashlib.sha256(original.encode()).hexdigest()
-            if cached := await asyncio.to_thread(artwork._cached, key):
-                return Response(cached[0], media_type=cached[1])
+        # Kodi's /image route is the last fallback. The original code
+        # generated an image:// wrapper around an already wrapped image://
+        # reference and then encoded it again, producing an invalid URL.
+        # Use exactly one canonical wrapper for each stored reference.
+        for candidate, unwrapped in zip(candidates, decoded):
+            if not unwrapped:
+                continue
+            original = (
+                candidate if candidate.startswith("image://") else
+                "image://" + quote(unwrapped, safe="") + "/"
+            )
             for summary in players:
                 player_id = summary["id"]
                 if time.monotonic() < _MUSIC_ARTWORK_UNREACHABLE.get(player_id, 0):
                     continue
                 player = await asyncio.to_thread(store.player, player_id)
-                if player is None:
+                if not player:
                     continue
                 config = player["config"]
-                base = endpoint(config).removesuffix("/jsonrpc")
-                auth = (
-                    (config["username"], config.get("password") or "")
-                    if config.get("username")
-                    else None
-                )
                 try:
+                    base = endpoint(config).removesuffix("/jsonrpc")
+                    auth = (
+                        (config["username"], config.get("password") or "")
+                        if config.get("username") else None
+                    )
                     async with httpx.AsyncClient(
-                        timeout=2.5, auth=auth, trust_env=False,
-                        follow_redirects=False
+                        timeout=3.5, auth=auth, trust_env=False,
+                        follow_redirects=False,
                     ) as client:
                         response = await client.get(
                             f"{base}/image/{quote(original, safe='')}"
@@ -431,13 +441,7 @@ async def music_artwork(
                                 time.monotonic() + 90
                             )
                         continue
-                    if len(response.content) > 8 * 1024 * 1024:
-                        continue
-                    content_type = artwork._image_type(response.content)
-                    await asyncio.to_thread(
-                        artwork._save, key, response.content, content_type
-                    )
-                    return Response(response.content, media_type=content_type)
+                    return _music_image_response(artwork, response.content)
                 except (httpx.HTTPError, ArtworkError, ValueError):
                     _MUSIC_ARTWORK_UNREACHABLE[player_id] = (
                         time.monotonic() + 90
