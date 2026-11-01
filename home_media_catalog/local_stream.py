@@ -350,6 +350,51 @@ async def create_music_stream(
     }
 
 
+@router.get("/music/tracks/{track_id}/stream")
+async def browser_music_stream(
+    track_id: str, request: Request, _=Depends(authenticated)
+):
+    """Direct browser URL: no asynchronous ticket POST before audio.play().
+
+    The GET is cookie-authenticated. The track file always comes from the
+    saved catalogue; a configured SMB/NFS/FTP/SFTP share takes priority and
+    Kodi VFS remains the fallback for a source-matched instance.
+    """
+    from .music import MusicCatalogue
+
+    track = await asyncio.to_thread(
+        MusicCatalogue(request.app.state.store).track, track_id
+    )
+    if not track or not track["playable"] or not track.get("file"):
+        raise HTTPException(404, "This catalogue song is not playable.")
+    matched = _registered_media_location(request, track["file"])
+    players = await asyncio.to_thread(request.app.state.store.players)
+    candidates = [
+        player for player in players
+        if player.get("source_id") == track["source_id"]
+    ]
+    if not matched and not candidates:
+        raise HTTPException(404, "No matching network share or Kodi instance.")
+    player_id = candidates[0]["id"] if candidates else "network"
+    suffix = urlsplit(track["file"]).path.rsplit("/", 1)[-1].rsplit(".", 1)
+    extension = suffix[-1].lower() if len(suffix) == 2 else "mp3"
+    if extension not in AUDIO_STREAM_EXTENSIONS:
+        extension = "mp3"
+    filename = f"audio.{extension}"
+    now = time.monotonic()
+    for old, value in list(_TICKETS.items()):
+        if value["expires"] <= now:
+            _TICKETS.pop(old, None)
+    token = secrets.token_urlsafe(40)
+    _TICKETS[token] = {
+        "player_id": player_id, "file": track["file"],
+        "filename": filename, "expires": now + _TICKET_TTL,
+    }
+    while len(_TICKETS) > _TICKET_LIMIT:
+        _TICKETS.popitem(last=False)
+    return await stream_local_video(player_id, token, filename, request)
+
+
 @router.api_route("/{player_id}/local-stream/{ticket}/{filename}", methods=["GET", "HEAD"])
 async def stream_local_video(player_id: str, ticket: str, filename: str, request: Request):
     """Proxy byte-ranged Kodi /vfs HTTP without holding the entire movie in RAM."""
