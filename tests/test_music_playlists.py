@@ -1,6 +1,8 @@
 """Music playlists are separate from video lists and the in-memory audio queue."""
 from home_media_catalog.connectors.music_base import (
-    MusicAlbumRecord, MusicSnapshot, MusicTrackRecord,
+    MusicAlbumRecord,
+    MusicSnapshot,
+    MusicTrackRecord,
 )
 from home_media_catalog.music import MusicCatalogue
 
