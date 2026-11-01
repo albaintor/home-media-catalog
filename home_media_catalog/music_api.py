@@ -9,7 +9,7 @@ import hashlib
 import logging
 import time
 from typing import Literal
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 from fastapi import (
@@ -442,7 +442,8 @@ async def music_artwork(
                         )
                     ]
 
-            for path in await asyncio.to_thread(saved_album_tracks):
+            album_paths = await asyncio.to_thread(saved_album_tracks)
+            for path in album_paths:
                 try:
                     data = await asyncio.to_thread(
                         extract_embedded_cover, request, "music@" + path
@@ -452,6 +453,32 @@ async def music_artwork(
                 except Exception as exc:
                     LOG.debug("Music embedded track artwork unavailable (%s)",
                               type(exc).__name__)
+
+            # Kodi albums frequently store their cover beside audio tracks
+            # (folder.jpg / cover.jpg), with no picture embedded in the FLAC.
+            # Resolve only directories of catalogue-owned tracks through an
+            # explicitly configured share, never a user-supplied path.
+            checked_folders = set()
+            for path in album_paths:
+                parsed = urlsplit(path)
+                if parsed.scheme not in {"smb", "nfs", "ftp", "sftp"}:
+                    continue
+                folder = path.rsplit("/", 1)[0]
+                if folder in checked_folders:
+                    continue
+                checked_folders.add(folder)
+                for filename in ("folder.jpg", "cover.jpg", "folder.png", "cover.png"):
+                    try:
+                        data = await asyncio.to_thread(
+                            _music_network_cover, request, folder + "/" + filename
+                        )
+                        if data:
+                            return _music_image_response(artwork, data)
+                    except (HTTPException, ArtworkError, OSError, ValueError) as exc:
+                        LOG.debug("Album folder cover unavailable (%s)",
+                                  type(exc).__name__)
+                if len(checked_folders) >= 2:
+                    break
 
             # An exact MusicBrainz release-group cover is preferable to a
             # guessed match based only on artist/title; never write it to disk.
