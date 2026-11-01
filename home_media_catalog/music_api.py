@@ -407,7 +407,7 @@ async def music_artwork(
         # generated an image:// wrapper around an already wrapped image://
         # reference and then encoded it again, producing an invalid URL.
         # Use exactly one canonical wrapper for each stored reference.
-        for candidate, unwrapped in zip(candidates, decoded):
+        for candidate, unwrapped in zip(candidates, decoded, strict=True):
             if not unwrapped:
                 continue
             original = (
