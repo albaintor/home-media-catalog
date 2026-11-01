@@ -15,20 +15,18 @@ def test_native_json_music_import(client, admin):
     assert client.post(endpoint, headers=admin, json={
         "source_id": source_id, "content_base64": "***not-base64***"
     }).status_code == 422
-    assert client.post(endpoint, headers=admin, json={
-        "source_id": source_id, "content_base64": base64.b64encode(csv).decode()
-    }).status_code == 202
-    job_id = client.post(endpoint, headers=admin, json={
+    accepted = client.post(endpoint, headers=admin, json={
         "source_id": source_id, "content_base64": base64.b64encode(csv).decode()
     })
-    # An import may be busy if the previous one is still running.
-    assert job_id.status_code in (202, 409)
-    jobs = client.get("/api/v1/jobs", headers=admin).json()
+    assert accepted.status_code == 202
+    job_id = accepted.json()["id"]
     for _ in range(100):
-        status = client.get("/api/v1/music/status", headers=admin).json()
-        if status["albums"] == 1:
+        job = client.get(f"/api/v1/jobs/{job_id}", headers=admin).json()
+        if job["status"] in ("completed", "failed"):
             break
         time.sleep(0.02)
+    assert job["status"] == "completed", job
+    status = client.get("/api/v1/music/status", headers=admin).json()
     assert status["albums"] == 1
     assert status["physical_albums"] == 1
     assert client.get("/api/v1/music/albums", headers=admin).json()["items"][0]["title"] == "Moon Safari"
