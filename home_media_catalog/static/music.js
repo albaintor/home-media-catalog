@@ -8,7 +8,7 @@ const baseURL = new URL('.', window.location.href);
 const url = (path) => new URL(path.replace(/^\/+/, ''), baseURL).href;
 const FORMAT_LABELS = {Digital:'Fichiers', CD:'CD', SACD:'SACD', Vinyl:'Vinyle', Cassette:'Cassette', MiniDisc:'MiniDisc', 'DVD-Audio':'DVD-Audio', 'Blu-ray Audio':'Blu-ray Audio', 'Reel-to-reel':'Bande', Streaming:'Streaming', Other:'Autre'};
 const SOURCE_LABELS = {kodi:'Kodi', discogs:'Discogs (CSV)', clz_music:'CLZ Music (XML)', music_csv:'Liste CSV / JSON'};
-const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, debounce:null};
+const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, artistAlbums:new Map(), artistObserver:null, debounce:null};
 
 async function api(path, options={}) {
   const headers = new Headers(options.headers || {});
@@ -85,6 +85,7 @@ async function loadMore() {
     const results = $('music-results');
     results.className = state.tab === 'tracks' ? 'music-track-list' : 'music-grid';
     results.insertAdjacentHTML('beforeend', html);
+    if (state.tab === 'artists') observeArtistCards(results);
     if (!state.items.length) results.innerHTML = `<p class="empty-state">${esc(tr(state.query ? 'Aucun résultat.' : 'Aucun élément. Ajoutez une source musicale dans l’onglet Sources.'))}</p>`;
     $('music-more').hidden = state.offset >= state.total;
   } catch (error) {
@@ -93,7 +94,39 @@ async function loadMore() {
 }
 
 const albumCard = (album) => `<button type="button" class="music-card" data-album="${esc(album.id)}">${artwork('albums', album.id, album.title)}<span class="card-title">${esc(album.title)}</span><span class="card-meta">${esc(album.artist)}${album.year ? ' · ' + album.year : ''}</span><span class="music-formats">${formatBadges(album.formats)}</span></button>`;
-const artistCard = (artist) => `<button type="button" class="music-card artist" data-artist="${esc(artist.id)}">${artwork('artists', artist.id, artist.name)}<span class="card-title">${esc(artist.name)}</span><span class="card-meta">${artist.album_count} ${esc(tr('albums'))}</span></button>`;
+const artistCard = (artist) => `<button type="button" class="music-card artist" data-artist="${esc(artist.id)}"><span class="music-cover music-artist-mosaic" data-mosaic-artist="${esc(artist.id)}"><span class="music-cover-placeholder">♫</span></span><span class="card-title">${esc(artist.name)}</span><span class="card-meta">${artist.album_count} ${esc(tr('albums'))}</span></button>`;
+
+function artistMosaic(albums) {
+  const selected = albums.slice(0, 4);
+  if (!selected.length) return '<span class="music-cover-placeholder">♫</span>';
+  const cells = selected.map(album => `<img alt="" loading="lazy" decoding="async" src="${url(`api/v1/music/albums/${encodeURIComponent(album.id)}/artwork/thumb`)}" onerror="this.style.visibility='hidden'">`);
+  while (cells.length < 4 && selected.length > 2) cells.push('<span class="music-mosaic-empty">♫</span>');
+  return `<span class="music-mosaic-cells ${selected.length === 1 ? 'single' : selected.length === 2 ? 'double' : ''}">${cells.join('')}</span>`;
+}
+
+function observeArtistCards(root) {
+  if (!state.artistObserver) {
+    state.artistObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        state.artistObserver.unobserve(entry.target);
+        const element = entry.target, id = element.dataset.mosaicArtist;
+        const cached = state.artistAlbums.get(id);
+        if (cached) { element.innerHTML = artistMosaic(cached); continue; }
+        api(`music/artists/${encodeURIComponent(id)}`).then(artist => {
+          const albums = artist.albums || [];
+          state.artistAlbums.set(id, albums);
+          if (element.isConnected && element.dataset.mosaicArtist === id) element.innerHTML = artistMosaic(albums);
+        }).catch(() => { /* retain placeholder when artist detail is unavailable */ });
+      }
+    }, {rootMargin:'200px'});
+  }
+  for (const element of root.querySelectorAll('[data-mosaic-artist]')) {
+    const cached = state.artistAlbums.get(element.dataset.mosaicArtist);
+    if (cached) element.innerHTML = artistMosaic(cached);
+    else state.artistObserver.observe(element);
+  }
+}
 
 function trackRow(track, index) {
   const number = track.position || (track.track ? String(track.track) : '');
@@ -128,7 +161,7 @@ async function showAlbum(id) {
 
 async function showArtist(id) {
   const artist = await api(`music/artists/${encodeURIComponent(id)}`);
-  $('music-detail').innerHTML = `<div class="music-detail-head">${artwork('artists', artist.id, artist.name)}<div>
+  $('music-detail').innerHTML = `<div class="music-detail-head"><span class="music-cover music-artist-mosaic">${artistMosaic(artist.albums || [])}</span><div>
     <p class="eyebrow">${esc(tr('ARTISTE'))}</p><h2>${esc(artist.name)}</h2><p class="muted">${esc(artist.genres.join(', '))}</p>
     ${artist.biography ? `<p class="synopsis">${esc(artist.biography)}</p>` : ''}</div></div>
     <div class="detail-section"><p class="section-label">${esc(tr('ALBUMS'))} · ${artist.albums.length}</p><div class="music-grid">${artist.albums.map(albumCard).join('')}</div></div>
@@ -144,33 +177,129 @@ async function streamURL(track) {
   return url(ticket.path.replace(/^\/+/, ''));
 }
 
+function playableTracks(tracks) {
+  return tracks.filter(t => t.playable && t.file);
+}
+
+function updateQueueUI() {
+  const next = $('music-next'), prev = $('music-prev');
+  if (next) next.disabled = !(state.queueIndex + 1 < state.queue.length || (state.repeatMode === 1 && state.queue.length));
+  if (prev) prev.disabled = state.queueIndex < 0;
+  const shuffle = $('music-shuffle'), repeat = $('music-repeat');
+  if (shuffle) shuffle.setAttribute('aria-pressed', String(state.shuffle));
+  if (repeat) {
+    repeat.setAttribute('aria-label', ['Ne pas répéter', 'Répéter la file', 'Répéter le titre'][state.repeatMode]);
+    repeat.textContent = state.repeatMode === 2 ? '🔂' : '🔁';
+    repeat.setAttribute('aria-pressed', String(state.repeatMode !== 0));
+  }
+  const list = $('music-queue-list');
+  if (list) list.innerHTML = state.queue.map((track, index) =>
+    `<li><button type="button" data-music-queue-index="${index}" ${index === state.queueIndex ? 'aria-current="true"' : ''}><span>${index === state.queueIndex ? '♫ ' : ''}${esc(track.title)}</span><small>${esc(track.artist)}</small></button></li>`).join('');
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.setPositionState && updateMediaPosition();
+  }
+}
+
+function updateMediaPosition() {
+  const audio = $('music-audio');
+  if (!audio || !('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  const durationValue = Number.isFinite(audio.duration) ? audio.duration : state.queue[state.queueIndex]?.duration_seconds;
+  if (!(durationValue > 0)) return;
+  try {
+    navigator.mediaSession.setPositionState({
+      duration: durationValue,
+      position: Math.max(0, Math.min(durationValue, audio.currentTime || 0)),
+      playbackRate: audio.playbackRate || 1
+    });
+  } catch { /* browser may not support position updates */ }
+}
+
 async function playQueue(tracks, index) {
-  state.queue = tracks.filter(t => t.playable);
-  state.queueIndex = Math.max(0, state.queue.findIndex(t => t.id === tracks[index]?.id));
+  const playable = playableTracks(tracks);
+  const selected = tracks[index];
+  if (!playable.length) return toast('Aucun morceau lisible.');
+  state.canonicalQueue = playable.slice();
+  if (state.shuffle) {
+    const current = playable.find(t => t.id === selected?.id) || playable[0];
+    state.queue = [current, ...playable.filter(t => t !== current).sort(() => Math.random() - 0.5)];
+    state.queueIndex = 0;
+  } else {
+    state.queue = playable.slice();
+    state.queueIndex = Math.max(0, playable.findIndex(t => t.id === selected?.id));
+  }
+  updateQueueUI();
   await playCurrent();
 }
 
 async function playCurrent() {
   const track = state.queue[state.queueIndex];
   if (!track) return;
+  const token = ++state.playbackToken;
   const audio = $('music-audio');
-  try {
-    audio.src = await streamURL(track);
-    await audio.play();
-  } catch (error) { toast(error.message); }
   $('music-player').hidden = false;
   $('music-now-title').textContent = track.title;
   $('music-now-artist').textContent = [track.artist, track.album].filter(Boolean).join(' · ');
+  updateQueueUI();
   if ('mediaSession' in navigator) {
-    navigator.mediaSession.metadata = new MediaMetadata({title: track.title, artist: track.artist, album: track.album,
-      artwork: track.album_id ? [{src: url(`api/v1/music/albums/${track.album_id}/artwork/thumb`)}] : []});
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track.title, artist: track.artist, album: track.album,
+      artwork: track.album_id ? [{src: url(`api/v1/music/albums/${encodeURIComponent(track.album_id)}/artwork/thumb`), sizes:'512x512'}] : []
+    });
+    navigator.mediaSession.playbackState = 'paused';
   }
+  try {
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    const source = await streamURL(track);
+    if (token !== state.playbackToken) return;
+    audio.src = source;
+    await audio.play();
+  } catch (error) { if (token === state.playbackToken) toast(error.message); }
 }
 
 function step(delta) {
+  if (!state.queue.length) return;
   const next = state.queueIndex + delta;
-  if (next < 0 || next >= state.queue.length) return;
-  state.queueIndex = next; playCurrent();
+  if (next < 0) {
+    $('music-audio').currentTime = 0;
+    return;
+  }
+  if (next >= state.queue.length) {
+    if (state.repeatMode !== 1) return;
+    state.queueIndex = 0;
+  } else state.queueIndex = next;
+  void playCurrent();
+}
+
+function completed() {
+  if (state.repeatMode === 2) {
+    const audio = $('music-audio');
+    audio.currentTime = 0;
+    void audio.play().catch(error => toast(error.message));
+  } else if (state.queueIndex + 1 < state.queue.length || state.repeatMode === 1) {
+    step(1);
+  } else if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+}
+
+function toggleShuffle() {
+  state.shuffle = !state.shuffle;
+  if (state.queue.length > 1 && state.queueIndex >= 0) {
+    if (state.shuffle) {
+      const previous = state.queue.slice(0, state.queueIndex + 1);
+      const remaining = state.queue.slice(state.queueIndex + 1);
+      for (let i = remaining.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
+      }
+      state.queue = [...previous, ...remaining];
+    } else {
+      const id = state.queue[state.queueIndex]?.id;
+      state.queue = state.canonicalQueue.slice();
+      state.queueIndex = Math.max(0, state.queue.findIndex(t => t.id === id));
+    }
+  }
+  updateQueueUI();
 }
 
 // ----------------------------------------------------------------- sources
@@ -237,12 +366,38 @@ export function startMusic() {
   $('music-format').addEventListener('change', event => { state.format = event.target.value; reload(); });
   $('music-more').addEventListener('click', loadMore);
   const audio = $('music-audio');
-  audio.addEventListener('ended', () => step(1));
+  audio.addEventListener('ended', completed);
+  audio.addEventListener('play', () => { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; });
+  audio.addEventListener('pause', () => { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; });
+  audio.addEventListener('seeked', updateMediaPosition);
+  audio.addEventListener('loadedmetadata', updateMediaPosition);
   $('music-prev').addEventListener('click', () => step(-1));
   $('music-next').addEventListener('click', () => step(1));
+  $('music-shuffle')?.addEventListener('click', toggleShuffle);
+  $('music-repeat')?.addEventListener('click', () => { state.repeatMode = (state.repeatMode + 1) % 3; updateQueueUI(); });
+  $('music-queue-button')?.addEventListener('click', () => {
+    const list = $('music-queue-panel');
+    list.hidden = !list.hidden;
+    $('music-queue-button').setAttribute('aria-expanded', String(!list.hidden));
+    updateQueueUI();
+  });
+  $('music-queue-list')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-music-queue-index]');
+    if (!button) return;
+    state.queueIndex = Number(button.dataset.musicQueueIndex);
+    void playCurrent();
+  });
   if ('mediaSession' in navigator) {
-    navigator.mediaSession.setActionHandler('previoustrack', () => step(-1));
-    navigator.mediaSession.setActionHandler('nexttrack', () => step(1));
+    const handlers = {
+      play: () => void audio.play(), pause: () => audio.pause(),
+      previoustrack: () => step(-1), nexttrack: () => step(1),
+      seekto: details => { if (Number.isFinite(details.seekTime)) audio.currentTime = details.seekTime; },
+      seekbackward: details => { audio.currentTime = Math.max(0, audio.currentTime - (details.seekOffset || 10)); },
+      seekforward: details => { audio.currentTime = Math.min(audio.duration || Infinity, audio.currentTime + (details.seekOffset || 10)); }
+    };
+    for (const [action, handler] of Object.entries(handlers)) {
+      try { navigator.mediaSession.setActionHandler(action, handler); } catch { /* unsupported action */ }
+    }
   }
   document.addEventListener('click', async event => {
     const target = event.target.closest('[data-album],[data-artist],[data-play-track],[data-play-album],[data-kodi-album],[data-music-sync],[data-music-delete]');
