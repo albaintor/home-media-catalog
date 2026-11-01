@@ -1226,6 +1226,8 @@ async function initialize() {
     const session=await api('auth/session'); state.csrf=session.csrf_token; state.role=session.role;
     stopOfflineTimer(); $('server-unavailable').hidden=true;
     $('login').hidden=true; $('app').hidden=false; $('connections-button').hidden=state.role!=='admin'; $('logout-button').hidden=session.access_method!=='session';
+    // Restore the last URL section (#video or #music) after authentication.
+    window.dispatchEvent(new Event('media-app-ready'));
     $('create-list-button').hidden=state.role!=='admin';
     setView(state.view,false); renderPersonalStatus(); await refresh(); await refreshHomeListThumbnails(); await pollActivity(); void refreshNetworkHome();
     // Only once on authenticated entry; the server enforces the 24h threshold.
