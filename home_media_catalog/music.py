@@ -117,6 +117,19 @@ CREATE INDEX IF NOT EXISTS music_tracks_played ON music_tracks(last_played,rid);
 CREATE VIRTUAL TABLE IF NOT EXISTS music_artists_fts USING fts5(text, tokenize='unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE IF NOT EXISTS music_albums_fts USING fts5(text, tokenize='unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE IF NOT EXISTS music_tracks_fts USING fts5(text, tokenize='unicode61 remove_diacritics 2');
+CREATE TABLE IF NOT EXISTS music_playlists (
+ id TEXT PRIMARY KEY,
+ name TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS music_playlist_items (
+ playlist_id TEXT NOT NULL REFERENCES music_playlists(id) ON DELETE CASCADE,
+ position INTEGER NOT NULL,
+ track_id TEXT NOT NULL,
+ PRIMARY KEY(playlist_id,position)
+);
+CREATE INDEX IF NOT EXISTS music_playlist_items_track ON music_playlist_items(track_id);
 """
 
 # Video and music sources share the ``sources`` table.
@@ -221,6 +234,158 @@ class MusicCatalogue:
             (str(value),),
         )
         return value
+
+    # ---------------------------------------------------------- music playlists
+    # These are distinct from video lists. Track IDs are resolved on reads so
+    # a source reimport cannot silently attach a playlist to a different song.
+    def playlists(self) -> list[dict[str, Any]]:
+        with self.store.connect() as conn:
+            records = conn.execute(
+                "SELECT p.id,p.name,p.created_at,p.updated_at,"
+                "COUNT(i.position) AS track_count FROM music_playlists p "
+                "LEFT JOIN music_playlist_items i ON i.playlist_id=p.id "
+                "GROUP BY p.id ORDER BY p.name COLLATE NOCASE,p.id"
+            ).fetchall()
+            return [dict(row) for row in records]
+
+    def playlist(self, playlist_id: str) -> dict[str, Any] | None:
+        with self.store.connect() as conn:
+            record = conn.execute(
+                "SELECT id,name,created_at,updated_at FROM music_playlists WHERE id=?",
+                (playlist_id,),
+            ).fetchone()
+            if record is None:
+                return None
+            rows = conn.execute(
+                "SELECT i.position,t.id,t.title,t.artist_name AS artist,"
+                "t.album_title AS album,t.album_id,t.source_id,t.disc,t.track,"
+                "t.duration_seconds,t.file,t.playable,t.format "
+                "FROM music_playlist_items i "
+                "LEFT JOIN music_tracks t ON t.id=i.track_id "
+                "WHERE i.playlist_id=? ORDER BY i.position", (playlist_id,)
+            ).fetchall()
+            return {**dict(record),
+                    "tracks": [dict(row) for row in rows if row["id"] is not None]}
+
+    def create_playlist(self, name: str) -> dict[str, Any]:
+        from uuid import uuid4
+        name = name.strip()
+        if not name or len(name) > 160:
+            raise ValueError("Playlist name must be between 1 and 160 characters.")
+        identifier = str(uuid4())
+        timestamp = now()
+        with self.store.connect() as conn:
+            conn.execute(
+                "INSERT INTO music_playlists(id,name,created_at,updated_at) VALUES(?,?,?,?)",
+                (identifier, name, timestamp, timestamp),
+            )
+            conn.commit()
+        return {"id": identifier, "name": name,
+                "created_at": timestamp, "updated_at": timestamp, "tracks": []}
+
+    def rename_playlist(self, playlist_id: str, name: str) -> bool:
+        name = name.strip()
+        if not name or len(name) > 160:
+            raise ValueError("Playlist name must be between 1 and 160 characters.")
+        with self.store.connect() as conn:
+            result = conn.execute(
+                "UPDATE music_playlists SET name=?,updated_at=? WHERE id=?",
+                (name, now(), playlist_id),
+            )
+            conn.commit()
+            return result.rowcount > 0
+
+    def delete_playlist(self, playlist_id: str) -> bool:
+        with self.store.connect() as conn:
+            conn.execute(
+                "DELETE FROM music_playlist_items WHERE playlist_id=?", (playlist_id,)
+            )
+            result = conn.execute(
+                "DELETE FROM music_playlists WHERE id=?", (playlist_id,)
+            )
+            conn.commit()
+            return result.rowcount > 0
+
+    def add_playlist_tracks(self, playlist_id: str, track_ids: list[str]) -> dict[str, Any] | None:
+        if len(track_ids) > 1000:
+            raise ValueError("Too many tracks in one operation.")
+        with self.store.connect() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM music_playlists WHERE id=?", (playlist_id,)
+            ).fetchone():
+                return None
+            if track_ids:
+                placeholders = ",".join("?" for _ in set(track_ids))
+                available = {
+                    row[0] for row in conn.execute(
+                        f"SELECT id FROM music_tracks WHERE id IN ({placeholders})",
+                        tuple(set(track_ids)),
+                    )
+                }
+                if len(available) != len(set(track_ids)):
+                    raise ValueError("Some tracks are not in the music catalogue.")
+                position = conn.execute(
+                    "SELECT COALESCE(MAX(position)+1,0) FROM music_playlist_items "
+                    "WHERE playlist_id=?", (playlist_id,)
+                ).fetchone()[0]
+                conn.executemany(
+                    "INSERT INTO music_playlist_items(playlist_id,position,track_id) "
+                    "VALUES(?,?,?)",
+                    ((playlist_id, position + i, identifier)
+                     for i, identifier in enumerate(track_ids))
+                )
+                conn.execute(
+                    "UPDATE music_playlists SET updated_at=? WHERE id=?",
+                    (now(), playlist_id),
+                )
+                conn.commit()
+        return self.playlist(playlist_id)
+
+    def remove_playlist_item(self, playlist_id: str, position: int) -> bool:
+        with self.store.connect() as conn:
+            result = conn.execute(
+                "DELETE FROM music_playlist_items WHERE playlist_id=? AND position=?",
+                (playlist_id, position),
+            )
+            if result.rowcount == 0:
+                return False
+            conn.execute(
+                "UPDATE music_playlists SET updated_at=? WHERE id=?",
+                (now(), playlist_id),
+            )
+            conn.commit()
+            return True
+
+    def replace_playlist_tracks(self, playlist_id: str, track_ids: list[str]) -> dict[str, Any] | None:
+        if len(track_ids) > 5000:
+            raise ValueError("Playlist is too large.")
+        with self.store.connect() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM music_playlists WHERE id=?", (playlist_id,)
+            ).fetchone():
+                return None
+            if track_ids:
+                present = {
+                    row[0] for row in conn.execute(
+                        "SELECT id FROM music_tracks WHERE id IN ("
+                        + ",".join("?" for _ in set(track_ids)) + ")",
+                        tuple(set(track_ids))
+                    )
+                }
+                if len(present) != len(set(track_ids)):
+                    raise ValueError("Some tracks are not in the music catalogue.")
+            conn.execute("DELETE FROM music_playlist_items WHERE playlist_id=?", (playlist_id,))
+            conn.executemany(
+                "INSERT INTO music_playlist_items(playlist_id,position,track_id) "
+                "VALUES(?,?,?)",
+                ((playlist_id, i, identifier) for i, identifier in enumerate(track_ids))
+            )
+            conn.execute(
+                "UPDATE music_playlists SET updated_at=? WHERE id=?",
+                (now(), playlist_id),
+            )
+            conn.commit()
+        return self.playlist(playlist_id)
 
     # ------------------------------------------------------------ publication
     def apply_snapshot(self, source_id: str, snapshot: MusicSnapshot) -> dict[str, Any]:
