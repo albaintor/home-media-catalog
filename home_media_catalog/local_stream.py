@@ -400,7 +400,7 @@ async def browser_music_stream(
     return await stream_local_video(player_id, token, filename, request)
 
 
-@router.get("/music/tracks/{track_id}/transcode.mp3")
+@router.api_route("/music/tracks/{track_id}/transcode.mp3", methods=["GET", "HEAD"])
 async def browser_music_transcode(
     track_id: str, request: Request, _=Depends(authenticated),
 ):
@@ -488,6 +488,11 @@ async def browser_music_transcode(
                      "share or any Kodi HTTP VFS instance."
             )
 
+    if request.method == "HEAD":
+        # Browser diagnostics must not start an additional FFmpeg process
+        # just to establish whether the audio source is accessible.
+        return Response(status_code=200, media_type="audio/mpeg")
+
     def start_encoder():
         bridge = LoopbackBridge(source, name="music.mp3")
         bridge.__enter__()
@@ -508,16 +513,34 @@ async def browser_music_transcode(
             raise
 
     bridge, process = await asyncio.to_thread(start_encoder)
+    try:
+        # Wait for the first encoded bytes before returning HTTP 200.
+        # Previously an FFmpeg decoder error produced a successful empty
+        # stream, leaving the browser with no actionable HTTP status.
+        first_chunk = await asyncio.wait_for(
+            asyncio.to_thread(process.stdout.read1, 64 * 1024),
+            timeout=15,
+        )
+        if not first_chunk:
+            raise HTTPException(502, "FFmpeg could not decode this audio source.")
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+        await asyncio.to_thread(process.wait)
+        await asyncio.to_thread(bridge.close)
+        raise
 
     async def chunks():
         try:
+            yield first_chunk
             while True:
-                chunk = await asyncio.to_thread(process.stdout.read, 64 * 1024)
+                chunk = await asyncio.to_thread(process.stdout.read1, 64 * 1024)
                 if not chunk:
                     break
                 yield chunk
         finally:
-            process.kill() if process.poll() is None else None
+            if process.poll() is None:
+                process.kill()
             await asyncio.to_thread(process.wait)
             await asyncio.to_thread(bridge.close)
 
