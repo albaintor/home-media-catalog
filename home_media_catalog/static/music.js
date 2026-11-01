@@ -8,7 +8,7 @@ const baseURL = new URL('.', window.location.href);
 const url = (path) => new URL(path.replace(/^\/+/, ''), baseURL).href;
 const FORMAT_LABELS = {Digital:'Fichiers', CD:'CD', SACD:'SACD', Vinyl:'Vinyle', Cassette:'Cassette', MiniDisc:'MiniDisc', 'DVD-Audio':'DVD-Audio', 'Blu-ray Audio':'Blu-ray Audio', 'Reel-to-reel':'Bande', Streaming:'Streaming', Other:'Autre'};
 const SOURCE_LABELS = {kodi:'Kodi', discogs:'Discogs (CSV)', clz_music:'CLZ Music (XML)', music_csv:'Liste CSV / JSON'};
-const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, transcodeTried:false, transcodeStart:0, streamTranscoded:false, userScrubbing:false, artistAlbums:new Map(), artistObserver:null, debounce:null};
+const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, transcodeTried:false, transcodeStart:0, streamTranscoded:false, userScrubbing:false, artistAlbums:new Map(), artistObserver:null, debounce:null, playerDismissed:false, libraryLoaded:false, libraryLoading:null};
 
 async function api(path, options={}) {
   const headers = new Headers(options.headers || {});
@@ -37,13 +37,32 @@ function artwork(kind, id, label) {
 }
 
 async function open() {
-  $('music-dialog').showModal();
-  try {
-    const session = await api('auth/session'); state.csrf = session.csrf_token; state.role = session.role;
-  } catch { /* the catalogue login handles expired sessions */ }
-  try { state.players = await api('players'); } catch { state.players = []; }
-  await loadStatus();
-  switchTab(state.tab);
+  if (state.libraryLoaded) return;
+  if (state.libraryLoading) return state.libraryLoading;
+  // The music library is a normal page. Its data is loaded only on first
+  // navigation, and the audio element is never unmounted when switching pages.
+  state.libraryLoading = (async () => {
+    try {
+      const session = await api('auth/session');
+      state.csrf = session.csrf_token;
+      state.role = session.role;
+    } catch { /* the main application handles an expired login */ }
+    try { state.players = await api('players'); } catch { state.players = []; }
+    await loadStatus();
+    switchTab(state.tab);
+    state.libraryLoaded = true;
+  })();
+  try { await state.libraryLoading; }
+  finally { state.libraryLoading = null; }
+}
+
+function syncLibraryRoute() {
+  const music = window.location.hash === '#music';
+  $('video-page').hidden = music;
+  $('music-page').hidden = !music;
+  $('video-link').setAttribute('aria-current', music ? 'false' : 'page');
+  $('music-link').setAttribute('aria-current', music ? 'page' : 'false');
+  if (music && !$('app').hidden) void open();
 }
 
 async function loadStatus() {
@@ -213,8 +232,27 @@ function relocateMusicPlayer() {
 
 function showMusicPlayer() {
   const player = $('music-player');
+  if (state.playerDismissed) {
+    $('music-player-restore').hidden = false;
+    return;
+  }
   player.hidden = false;
+  $('music-player-restore').hidden = true;
   relocateMusicPlayer();
+}
+
+function hideMusicPlayer() {
+  state.playerDismissed = true;
+  $('music-player').hidden = true;
+  $('music-player-restore').hidden = state.queueIndex < 0;
+  // Hiding the UI never pauses or releases the HTMLAudioElement.
+}
+
+function restoreMusicPlayer() {
+  if (state.queueIndex < 0) return;
+  state.playerDismissed = false;
+  showMusicPlayer();
+  updateMusicTransport();
 }
 
 function tryMP3Fallback() {
@@ -255,11 +293,14 @@ function updateMusicTransport() {
   seek.disabled = !length;
   if (!state.userScrubbing) seek.value = length ? String(Math.round(Math.min(1, elapsed / length) * 1000)) : '0';
   const button = $('music-play-pause');
-  button.textContent = audio.paused ? '▶' : '⏸';
+  $('music-icon-play').hidden = !audio.paused;
+  $('music-icon-pause').hidden = audio.paused;
   button.setAttribute('aria-label', audio.paused ? 'Reprendre' : 'Pause');
   $('music-volume').value = String(Math.round(audio.volume * 100));
-  $('music-mute').textContent = audio.muted || audio.volume === 0 ? '🔇' : '🔊';
-  $('music-mute').setAttribute('aria-label', audio.muted ? 'Rétablir le son' : 'Couper le son');
+  const muted = audio.muted || audio.volume === 0;
+  $('music-volume-wave').hidden = muted;
+  $('music-mute').setAttribute('aria-label', muted ? 'Rétablir le son' : 'Couper le son');
+  $('music-mute').title = muted ? 'Rétablir le son' : 'Couper le son';
   updateMediaPosition();
 }
 
@@ -289,10 +330,15 @@ function updateQueueUI() {
   if (next) next.disabled = !(state.queueIndex + 1 < state.queue.length || (state.repeatMode === 1 && state.queue.length));
   if (prev) prev.disabled = state.queueIndex < 0;
   const shuffle = $('music-shuffle'), repeat = $('music-repeat');
-  if (shuffle) shuffle.setAttribute('aria-pressed', String(state.shuffle));
+  if (shuffle) {
+    shuffle.setAttribute('aria-pressed', String(state.shuffle));
+    shuffle.title = state.shuffle ? 'Désactiver la lecture aléatoire' : 'Lecture aléatoire';
+  }
   if (repeat) {
-    repeat.setAttribute('aria-label', ['Ne pas répéter', 'Répéter la file', 'Répéter le titre'][state.repeatMode]);
-    repeat.textContent = state.repeatMode === 2 ? '🔂' : '🔁';
+    const label = ['Ne pas répéter', 'Répéter la file', 'Répéter le titre'][state.repeatMode];
+    repeat.setAttribute('aria-label', label);
+    repeat.title = label;
+    $('music-repeat-one').hidden = state.repeatMode !== 2;
     repeat.setAttribute('aria-pressed', String(state.repeatMode !== 0));
   }
   const list = $('music-queue-list');
@@ -347,6 +393,14 @@ async function playCurrent(startAt=0, preferTranscode=false) {
   showMusicPlayer();
   $('music-now-title').textContent = track.title;
   $('music-now-artist').textContent = [track.artist, track.album].filter(Boolean).join(' · ');
+  const cover = $('music-now-cover');
+  if (track.album_id) {
+    cover.hidden = false;
+    cover.src = url(`api/v1/music/albums/${encodeURIComponent(track.album_id)}/artwork/thumb`);
+  } else {
+    cover.hidden = true;
+    cover.removeAttribute('src');
+  }
   updateQueueUI();
   // Metadata support must never prevent the audio element from playing.
   try {
@@ -477,12 +531,16 @@ async function toggleAuto(sourceId, enabled) {
 
 // ----------------------------------------------------------------- events
 export function startMusic() {
-  if (!$('music-button')) return;
-  $('music-button').addEventListener('click', open);
-  // Both the music catalogue and album detail are modal; modal transitions
-  // change which subtree accepts pointer and keyboard events. Observe every
-  // dialog (including other app dialogs) and move this ONE player to the
-  // newest open modal without recreating its <audio> element.
+  if (!$('music-link')) return;
+  window.addEventListener('hashchange', syncLibraryRoute);
+  window.addEventListener('media-app-ready', syncLibraryRoute);
+  syncLibraryRoute();
+  $('music-player-hide').addEventListener('click', hideMusicPlayer);
+  $('music-player-restore').addEventListener('click', restoreMusicPlayer);
+  $('music-now-cover').addEventListener('error', event => { event.currentTarget.hidden = true; });
+  // Album detail and other app dialogs are modal; modal transitions
+  // change which subtree accepts pointer and keyboard events. Move the ONE
+  // persistent player into the active modal without resetting its audio.
   const musicDialogObserver = new MutationObserver(() => {
     if (!$('music-player').hidden) relocateMusicPlayer();
   });
@@ -573,7 +631,7 @@ export function startMusic() {
   }
   document.addEventListener('click', async event => {
     const target = event.target.closest('[data-album],[data-artist],[data-play-track],[data-play-album],[data-kodi-album],[data-music-sync],[data-music-delete]');
-    if (!target || !target.closest('#music-dialog,#music-detail-dialog')) return;
+    if (!target || !target.closest('#music-page,#music-detail-dialog')) return;
     try {
       if (target.dataset.album) await showAlbum(target.dataset.album);
       else if (target.dataset.artist) await showArtist(target.dataset.artist);
