@@ -87,7 +87,16 @@ def _registered_media_location(request: Request, kodi_path: str):
             str(location.get("host") or "").lower().rstrip("."),
             str(location.get("hostname") or "").lower().rstrip("."),
         }
-        if requested_host not in known_hosts:
+        # Kodi commonly stores the short Bonjour name ("jedi") while
+        # a saved connection uses its ".local" hostname ("jedi.local").
+        # Only treat these two representations as aliases; never match
+        # unrelated DNS suffixes or arbitrary partial hostnames.
+        local_aliases = {
+            host[:-6] if host.endswith(".local") else host + ".local"
+            for host in known_hosts
+            if host and (host.endswith(".local") or "." not in host)
+        }
+        if requested_host not in known_hosts | local_aliases:
             continue
         try:
             if int(location.get("port") or defaults[kind]) != requested_port:
