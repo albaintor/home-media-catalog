@@ -348,6 +348,19 @@ def test_music_artwork_unwraps_and_never_persists(client, admin, monkeypatch):
     )
 
 
+
+def test_kodi_music_embedded_cover_uses_the_canonical_ios_image_url():
+    from home_media_catalog.music_api import _kodi_music_image_variants
+
+    raw = "music@smb://nas/music/artist/album/01.flac"
+    versions = _kodi_music_image_variants(raw)
+    assert versions[0] == "image://music@smb%3A%2F%2Fnas%2Fmusic%2Fartist%2Falbum%2F01.flac/"
+    assert versions[1] == raw
+    assert "%40" not in versions[0]  # iOS preserves music@ in nested Kodi image URL
+    wrapped = "image://music@smb%3A%2F%2Fnas%2Fmusic%2Fartist%2Falbum%2F01.flac/"
+    assert _kodi_music_image_variants(wrapped)[0] == wrapped
+
+
 def test_web_music_controls_and_seek_offset_are_wired():
     from pathlib import Path
 
