@@ -195,6 +195,84 @@ def music_export(
     return _music(request).export(collection, after=after, limit=limit)
 
 
+class MusicPlaylistCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+
+
+class MusicPlaylistTracks(BaseModel):
+    track_ids: list[str] = Field(default_factory=list, max_length=5000)
+
+
+@router.get("/music/playlists", dependencies=[Depends(authenticated)])
+def music_playlists(request: Request):
+    return _music(request).playlists()
+
+
+@router.post("/music/playlists", status_code=201, dependencies=[Depends(writable)])
+def music_create_playlist(request: Request, data: MusicPlaylistCreate):
+    try:
+        return _music(request).create_playlist(data.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.get("/music/playlists/{playlist_id}", dependencies=[Depends(authenticated)])
+def music_playlist_detail(request: Request, playlist_id: str):
+    value = _music(request).playlist(playlist_id)
+    if value is None:
+        raise HTTPException(404, "Unknown music playlist.")
+    return value
+
+
+@router.patch("/music/playlists/{playlist_id}", dependencies=[Depends(writable)])
+def music_rename_playlist(request: Request, playlist_id: str, data: MusicPlaylistCreate):
+    try:
+        renamed = _music(request).rename_playlist(playlist_id, data.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not renamed:
+        raise HTTPException(404, "Unknown music playlist.")
+    return _music(request).playlist(playlist_id)
+
+
+@router.delete("/music/playlists/{playlist_id}", status_code=204, dependencies=[Depends(writable)])
+def music_delete_playlist(request: Request, playlist_id: str):
+    if not _music(request).delete_playlist(playlist_id):
+        raise HTTPException(404, "Unknown music playlist.")
+    return Response(status_code=204)
+
+
+@router.post("/music/playlists/{playlist_id}/tracks", dependencies=[Depends(writable)])
+def music_add_playlist_tracks(request: Request, playlist_id: str, data: MusicPlaylistTracks):
+    try:
+        value = _music(request).add_playlist_tracks(playlist_id, data.track_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if value is None:
+        raise HTTPException(404, "Unknown music playlist.")
+    return value
+
+
+@router.put("/music/playlists/{playlist_id}/tracks", dependencies=[Depends(writable)])
+def music_replace_playlist_tracks(request: Request, playlist_id: str, data: MusicPlaylistTracks):
+    try:
+        value = _music(request).replace_playlist_tracks(playlist_id, data.track_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if value is None:
+        raise HTTPException(404, "Unknown music playlist.")
+    return value
+
+
+@router.delete("/music/playlists/{playlist_id}/tracks/{position}",
+               status_code=204, dependencies=[Depends(writable)])
+def music_remove_playlist_track(request: Request, playlist_id: str,
+                                position: int):
+    if position < 0 or not _music(request).remove_playlist_item(playlist_id, position):
+        raise HTTPException(404, "Unknown music playlist entry.")
+    return Response(status_code=204)
+
+
 @router.get(
     "/music/{entity}/{entity_id}/artwork/{aspect}",
     dependencies=[Depends(authenticated)],
