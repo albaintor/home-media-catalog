@@ -1926,6 +1926,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "expires_at": float(token.get("expires_at") or 0),
         }
 
+    @app.put(
+        API + "/playback/cloud/{location_id}/device-credentials",
+        dependencies=[Depends(writable)],
+        tags=["Playback"],
+    )
+    def upload_playback_cloud_device_credentials(
+        location_id: str, payload: dict, response: Response
+    ):
+        """Import an iPhone's public-client grant into encrypted server storage.
+
+        The paired app sends these secrets only over HTTPS. Never return or log
+        a token. Repeated syncs must not replace a newer server refresh grant.
+        """
+        from uuid import UUID
+        import math
+
+        location = store.playback_location(location_id)
+        if not location or location["kind"] != "onedrive":
+            raise HTTPException(404, "Unknown OneDrive location.")
+        client_id = payload.get("client_id")
+        access = payload.get("access_token")
+        refresh = payload.get("refresh_token")
+        expires = payload.get("expires_at")
+        try:
+            if not isinstance(client_id, str):
+                raise ValueError("client ID")
+            UUID(client_id)
+            if (not isinstance(access, str) or not access or len(access) > 16384
+                    or not isinstance(refresh, str) or not refresh
+                    or len(refresh) > 16384):
+                raise ValueError("invalid OAuth grant")
+            expiry = float(expires)
+            if (not math.isfinite(expiry) or expiry < time.time() - 86400
+                    or expiry > time.time() + 90 * 86400):
+                raise ValueError("invalid expiry")
+        except (ValueError, TypeError, OverflowError):
+            raise HTTPException(422, "Invalid OneDrive public-client grant.") from None
+
+        saved = store.playback_cloud_credentials(location_id)
+        if saved and saved["provider"] == "onedrive":
+            try:
+                current = json.loads(cloud_auth.decrypt_secret(saved["token_cipher"]))
+                if float(current.get("expires_at") or 0) >= expiry:
+                    response.headers["Cache-Control"] = "no-store"
+                    return {"id": location_id, "imported": False}
+            except (ValueError, TypeError, KeyError):
+                pass
+        token = {
+            "access_token": access,
+            "refresh_token": refresh,
+            "expires_at": expiry,
+            "_hkl_client_id": client_id,
+        }
+        encrypted = cloud_auth.encrypt_password(
+            json.dumps(token, separators=(",", ":"))
+        )
+        store.set_playback_cloud_token(location_id, "onedrive", encrypted)
+        response.headers["Cache-Control"] = "no-store"
+        return {"id": location_id, "imported": True}
+
     @app.post(
         API + "/playback/cloud/{location_id}/device/start",
         dependencies=[Depends(writable)],
