@@ -3,12 +3,14 @@
 import asyncio
 import json
 import logging
+import math
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
+from uuid import UUID
 
 import httpx
 from fastapi import (
@@ -1939,9 +1941,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         The paired app sends these secrets only over HTTPS. Never return or log
         a token. Repeated syncs must not replace a newer server refresh grant.
         """
-        from uuid import UUID
-        import math
-
         location = store.playback_location(location_id)
         if not location or location["kind"] != "onedrive":
             raise HTTPException(404, "Unknown OneDrive location.")
@@ -1953,13 +1952,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not isinstance(client_id, str):
                 raise ValueError("client ID")
             UUID(client_id)
-            if (not isinstance(access, str) or not access or len(access) > 16384
-                    or not isinstance(refresh, str) or not refresh
-                    or len(refresh) > 16384):
+            if (
+                not isinstance(access, str)
+                or not access
+                or len(access) > 16384
+                or not isinstance(refresh, str)
+                or not refresh
+                or len(refresh) > 16384
+            ):
                 raise ValueError("invalid OAuth grant")
             expiry = float(expires)
-            if (not math.isfinite(expiry) or expiry < time.time() - 86400
-                    or expiry > time.time() + 90 * 86400):
+            if (
+                not math.isfinite(expiry)
+                or expiry < time.time() - 86400
+                or expiry > time.time() + 90 * 86400
+            ):
                 raise ValueError("invalid expiry")
         except (ValueError, TypeError, OverflowError):
             raise HTTPException(422, "Invalid OneDrive public-client grant.") from None
