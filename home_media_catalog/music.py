@@ -257,15 +257,15 @@ class MusicCatalogue:
             if record is None:
                 return None
             rows = conn.execute(
-                "SELECT i.position,t.id,t.title,t.artist_name AS artist,"
-                "t.album_title AS album,t.album_id,t.source_id,t.disc,t.track,"
-                "t.duration_seconds,t.file,t.playable,t.format "
-                "FROM music_playlist_items i "
-                "LEFT JOIN music_tracks t ON t.id=i.track_id "
+                "SELECT t.* FROM music_playlist_items i "
+                "JOIN music_tracks t ON t.id=i.track_id "
                 "WHERE i.playlist_id=? ORDER BY i.position", (playlist_id,)
             ).fetchall()
+            # Use the same track serializer as /music/tracks and /music/albums.
+            # In particular, SQLite stores playable as 0/1, while Swift's
+            # JSONDecoder requires the JSON booleans false/true.
             return {**dict(record),
-                    "tracks": [dict(row) for row in rows if row["id"] is not None]}
+                    "tracks": [self._track_view(row) for row in rows]}
 
     def create_playlist(self, name: str) -> dict[str, Any]:
         from uuid import uuid4
