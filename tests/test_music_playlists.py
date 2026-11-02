@@ -41,6 +41,19 @@ def test_music_playlist_crud_and_track_order(client, admin):
     )
     assert added.status_code == 200, added.text
     assert [t["id"] for t in added.json()["tracks"]] == [ids[2], ids[0], ids[2]]
+    # Playlist detail must use the normal music track serialization. SQLite
+    # playable=1 is NOT a JSON boolean and breaks Swift's strict decoder.
+    catalogue_tracks = {
+        item["id"]: item
+        for item in client.get(
+            "/api/v1/music/tracks", headers=admin
+        ).json()["items"]
+    }
+    for track in added.json()["tracks"]:
+        assert track == catalogue_tracks[track["id"]]
+        assert track["playable"] is True
+        assert track["source_id"] == source["id"]
+        assert track["file"].startswith("smb://")
     assert client.post(
         f"/api/v1/music/playlists/{playlist_id}/tracks", headers=admin,
         json={"track_ids": ["not-a-real-track"]},
