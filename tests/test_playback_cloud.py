@@ -589,3 +589,66 @@ def test_one_drive_public_grant_is_available_to_paired_admin(client, admin):
     assert "public-refresh" not in client.get(
         "/api/v1/playback/locations", headers=admin
     ).text
+
+
+def test_import_public_onedrive_grant_from_iphone(client, admin):
+    """The server stores iOS credentials encrypted and shares them back with admin only."""
+    import json
+    import time
+
+    place = client.post(
+        "/api/v1/playback/locations", headers=admin,
+        json={"name": "Mobile OneDrive", "kind": "onedrive", "target": ""},
+    )
+    assert place.status_code == 201, place.text
+    loc_id = place.json()["id"]
+    route = f"/api/v1/playback/cloud/{loc_id}/device-credentials"
+    future = time.time() + 3600
+    grant = {
+        "client_id": "145e06bb-b35b-4d96-8cf8-4077cd5e5528",
+        "access_token": "ios-access-secret",
+        "refresh_token": "ios-refresh-secret",
+        "expires_at": future,
+    }
+    viewer = {"Authorization": f"Bearer {READ}"}
+    assert client.put(route, json=grant).status_code == 401
+    assert client.put(route, headers=viewer, json=grant).status_code == 403
+    assert client.put(route, headers=admin, json={
+        **grant, "client_id": "not-a-uuid"
+    }).status_code == 422
+    assert client.put(route, headers=admin, json={
+        **grant, "refresh_token": ""
+    }).status_code == 422
+
+    uploaded = client.put(route, headers=admin, json=grant)
+    assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json() == {"id": loc_id, "imported": True}
+    assert uploaded.headers["cache-control"] == "no-store"
+    stored = client.app.state.store.playback_cloud_credentials(loc_id)
+    assert stored and stored["provider"] == "onedrive"
+    assert "ios-refresh-secret" not in stored["token_cipher"]
+    assert "ios-access-secret" not in stored["token_cipher"]
+
+    read = client.get(route, headers=admin)
+    assert read.status_code == 200
+    assert read.json()["refresh_token"] == "ios-refresh-secret"
+    assert read.json()["client_id"] == grant["client_id"]
+    assert "ios-refresh-secret" not in client.get(
+        "/api/v1/playback/locations", headers=admin
+    ).text
+
+    # An older iPhone grant cannot undo a newer server refresh.
+    outdated = {**grant, "refresh_token": "stale", "expires_at": future - 100}
+    replay = client.put(route, headers=admin, json=outdated)
+    assert replay.status_code == 200
+    assert replay.json()["imported"] is False
+    assert client.get(route, headers=admin).json()["refresh_token"] == "ios-refresh-secret"
+
+    other = client.post(
+        "/api/v1/playback/locations", headers=admin,
+        json={"name": "Other", "kind": "smb", "target": "smb://example/share"},
+    ).json()
+    assert client.put(
+        f"/api/v1/playback/cloud/{other['id']}/device-credentials",
+        headers=admin, json=grant,
+    ).status_code == 404
