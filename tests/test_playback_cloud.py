@@ -593,7 +593,6 @@ def test_one_drive_public_grant_is_available_to_paired_admin(client, admin):
 
 def test_import_public_onedrive_grant_from_iphone(client, admin):
     """The server stores iOS credentials encrypted and shares them back with admin only."""
-    import json
     import time
 
     place = client.post(
