@@ -17,6 +17,7 @@ Home Media Catalog combines a responsive, self-hosted **web application** with a
 - **Access** your collection on iOS/iPadOS alone, or via a shared server and web interface.
 - **Search with AI (optional, server required)** using OpenAI, Anthropic Claude or Google Gemini. OpenAI retains its optional semantic/vector search; Claude and Gemini use the selected language model with local full-text/metadata retrieval and relevance checking. No parallel multi-model inference is required.
 - **Choose standalone or server mode:** in standalone mode the iOS app imports and synchronizes Kodi directly, without Docker. In server mode it synchronizes catalogue metadata with the server while Kodi remote commands are sent directly from the iPhone.
+- **Music** : synchronize your Kodi music library and navigate and play your albums, artists, playlists
 
 Collection-only catalogs do not require Kodi.
 
@@ -38,7 +39,7 @@ Collection-only catalogs do not require Kodi.
 
 
 
-### Automatic HTTPS pairing (no certificate management)
+### Automatic secured pairing
 
 The server automatically creates a persistent self-signed TLS identity. The existing web UI
 continues to run over HTTP on `PORT=8099`, and the native API adds
