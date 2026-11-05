@@ -705,3 +705,22 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .remote-touchpad-tabs button[aria-pressed="true"]{outline:2px solid currentColor}
 .remote-touchpad{touch-action:none;user-select:none;min-height:210px;border:1px solid var(--border,rgba(120,120,120,.45));border-radius:1rem;display:grid;place-items:center;text-align:center;padding:1rem;background:var(--surface,rgba(120,120,120,.1));cursor:crosshair}
 .remote-touchpad[hidden],.remote-dpad[hidden]{display:none!important}
+
+/* Recently played media: compact rows with a visible resume fraction. */
+.recents-home{margin:1.25rem 0;padding:1.1rem 1.2rem;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:16px}
+.recents-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:1.25rem;margin-top:.8rem}
+.recents-heading{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.45rem}
+.recents-heading h3{font-size:1rem;margin:0}
+.recents-rows{display:grid;gap:.45rem}
+.recent-row{display:flex;align-items:center;gap:.8rem;width:100%;padding:.5rem;background:transparent;color:inherit;text-align:left;border:1px solid rgba(128,128,128,.18);border-radius:10px;cursor:pointer}
+.recent-row:hover,.recent-row:focus-visible{background:rgba(128,128,128,.12);border-color:rgba(128,128,128,.42)}
+.recent-row:disabled{opacity:.65;cursor:progress}
+.recent-artwork{display:flex;align-items:center;justify-content:center;width:56px;height:68px;flex:0 0 56px;overflow:hidden;border-radius:6px;background:rgba(128,128,128,.14)}
+.recent-artwork img{display:block;width:100%;height:100%;object-fit:cover}
+.recent-fallback{font-size:1.35rem;opacity:.6}
+.recent-information{display:flex;flex-direction:column;gap:.18rem;min-width:0;flex:1}
+.recent-information strong,.recent-information small{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.recent-information strong{font-size:.88rem}
+.recent-information small{font-size:.74rem;opacity:.74}
+.recent-information progress{width:100%;height:5px;margin-top:.2rem;accent-color:var(--accent,#4285ff)}
+.recent-play-icon{font-size:.8rem;opacity:.72;margin-right:.3rem}
