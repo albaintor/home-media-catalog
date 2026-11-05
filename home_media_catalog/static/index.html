@@ -70,6 +70,22 @@
         <button class="secondary" type="button" id="network-explorer-button">Ouvrir l’explorateur</button>
       </section>
       <section class="catalogue-list-actions" aria-labelledby="custom-lists-title"><div class="list-home-heading"><h2 id="custom-lists-title">Listes personnalisées</h2><p>Films à voir, séries à suivre… organisez vos sélections.</p></div><div id="home-list-thumbnails" class="home-list-thumbnails" aria-label="Vos listes"></div><div class="list-entry-buttons"><button class="secondary" data-action="lists">Ouvrir mes listes</button><button id="create-list-button" class="primary" hidden>+ Créer une liste</button></div></section>
+      <section id="recents-home" class="recents-home" aria-labelledby="recents-home-title">
+        <div class="list-home-heading">
+          <h2 id="recents-home-title">Recents</h2>
+          <p>Resume a recently played video or continue listening in Music.</p>
+        </div>
+        <div class="recents-groups">
+          <section aria-labelledby="recents-video-title">
+            <div class="recents-heading"><h3 id="recents-video-title">Recent Videos</h3><button type="button" data-clear-recent="video" class="text-button">Clear</button></div>
+            <div id="recents-videos" class="recents-rows" aria-live="polite"><p class="hint">Loading…</p></div>
+          </section>
+          <section aria-labelledby="recents-music-title">
+            <div class="recents-heading"><h3 id="recents-music-title">Recent Music</h3><button type="button" data-clear-recent="music" class="text-button">Clear</button></div>
+            <div id="recents-music" class="recents-rows" aria-live="polite"><p class="hint">Loading…</p></div>
+          </section>
+        </div>
+      </section>
       <section class="remote-scan-dashboard" aria-label="Actualisation Kodi" hidden>
          <div id="remote-scan-progress" class="remote-scan-progress" role="status" aria-live="polite" hidden></div>
       </section>
