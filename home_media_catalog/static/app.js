@@ -1146,9 +1146,12 @@ async function replayRecentVideo(entry) {
     edition.source_type === 'kodi').flatMap(edition =>
     state.players.filter(player => player.source_id === edition.source_id)
       .map(player => ({edition, player})));
-  const selected = candidates.find(candidate => candidate.edition.id === entry.editionID)
-    || candidates[0];
-  if (!selected) throw new Error('No configured video playback source is available.');
+  const selected = entry.editionID
+    ? candidates.find(candidate => candidate.edition.id === entry.editionID)
+    : candidates[0];
+  if (!selected) throw new Error(entry.editionID
+    ? 'The recorded video edition is no longer available.'
+    : 'No configured video playback source is available.');
   const playerID = selected.player.id;
   const ticket = await api('players/' + encodeURIComponent(playerID) + '/local-play', {
     method:'POST', body:JSON.stringify({
