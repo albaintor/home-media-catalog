@@ -1,7 +1,7 @@
 import { startKodiRemote, stopKodiRemote, showKodiRemote } from './remote.js';
 import { startI18n, displayLocale, tr, localizedPrompt, localizedConfirm } from './i18n.js';
 import { MediaPlayer } from './player.js';
-import { startMusic } from './music.js';
+import { startMusic, replayRecentMusic } from './music.js';
 startI18n();
 startMusic();
 const $ = (id) => document.getElementById(id);
@@ -1044,6 +1044,135 @@ function fillSelect(id, values, label) {
   $(id).innerHTML=`<option value="">${label}</option>`+values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
   if (values.includes(selected)) $(id).value=selected;
 }
+// Playback recents are replicated by the existing local-first history API.
+// Clicking a row resolves the current file; stream URLs never live in history.
+let recentHistory = {entries: [], clearedAt: {}};
+function recentRows(category) {
+  return (recentHistory.entries || []).filter(entry => entry.category === category &&
+    Number(entry.updatedAt) > Number(recentHistory.clearedAt?.[category] || 0))
+    .sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt)).slice(0, 10);
+}
+function renderRecentHistory() {
+  for (const category of ['video', 'music']) {
+    const container = $(category === 'video' ? 'recents-videos' : 'recents-music');
+    if (!container) continue;
+    const rows = recentRows(category);
+    const clear = document.querySelector('[data-clear-recent="' + category + '"]');
+    if (clear) clear.disabled = !rows.length;
+    container.innerHTML = rows.length ? rows.map(entry => {
+      const fraction = Number(entry.total) > 0
+        ? Math.max(0, Math.min(1, Number(entry.position) / Number(entry.total))) : 0;
+      const artwork = typeof entry.artworkPath === 'string' &&
+        /^\/api\/v1\//.test(entry.artworkPath)
+        ? '<img loading="lazy" alt="" src="' + esc(url(entry.artworkPath)) + '">'
+        : '<span class="recent-fallback" aria-hidden="true">' +
+          (category === 'video' ? '▶' : '♫') + '</span>';
+      const timestamp = Number.isFinite(Number(entry.updatedAt))
+        ? new Date(Number(entry.updatedAt) * 1000).toLocaleString(displayLocale()) : '';
+      return '<button type="button" class="recent-row" data-replay-recent="' +
+        esc(entry.id) + '" aria-label="' + esc('Play ' + entry.title) + '">' +
+        '<span class="recent-artwork">' + artwork + '</span>' +
+        '<span class="recent-information"><strong>' + esc(entry.title) + '</strong>' +
+        '<small>' + esc(entry.subtitle || entry.kind || '') + '</small>' +
+        '<small>' + esc(timestamp) + '</small>' +
+        '<progress max="1" value="' + fraction + '" aria-label="Playback progress"></progress>' +
+        '</span><span class="recent-play-icon" aria-hidden="true">▶</span></button>';
+    }).join('') : '<p class="hint">No recent ' + (category === 'video' ? 'videos' : 'music') + '.</p>';
+  }
+}
+async function loadRecentHistory() {
+  if (!$('recents-home')) return;
+  try {
+    recentHistory = await api('playback/history');
+    renderRecentHistory();
+  } catch (error) {
+    for (const id of ['recents-videos','recents-music']) {
+      if ($(id)) $(id).innerHTML = '<p class="hint">' + esc(error.message) + '</p>';
+    }
+  }
+}
+async function replayRecentVideo(entry) {
+  let mediaID;
+  if (entry.id.startsWith('video|kodi|')) {
+    const page = await api('media?q=' + encodeURIComponent(entry.title) + '&limit=100');
+    const matches = (page.items || []).filter(media =>
+      media.kind !== 'tvshow' &&
+      media.title.localeCompare(entry.title, displayLocale(), {sensitivity:'base'}) === 0);
+    if (matches.length !== 1)
+      throw new Error('Cannot uniquely identify this Kodi item in the catalogue.');
+    mediaID = matches[0].id;
+  } else if (entry.id.startsWith('video|file|')) {
+    throw new Error('The original file cannot be identified on this server. Open it from its source.');
+  } else if (entry.id.startsWith('video|')) {
+    mediaID = entry.id.slice('video|'.length);
+  }
+  if (!mediaID) throw new Error('Video identity is missing.');
+  const item = await api('media/' + encodeURIComponent(mediaID));
+  const candidates = (item.editions || []).filter(edition =>
+    edition.source_type === 'kodi').flatMap(edition =>
+    state.players.filter(player => player.source_id === edition.source_id)
+      .map(player => ({edition, player})));
+  const selected = candidates.find(candidate => candidate.edition.id === entry.editionID)
+    || candidates[0];
+  if (!selected) throw new Error('No configured video playback source is available.');
+  const playerID = selected.player.id;
+  const ticket = await api('players/' + encodeURIComponent(playerID) + '/local-play', {
+    method:'POST', body:JSON.stringify({
+      media_id:mediaID, edition_id:selected.edition.id, resume:false
+    })
+  });
+  if (typeof ticket.path !== 'string' ||
+      !ticket.path.startsWith('/api/v1/players/' + playerID + '/local-stream/'))
+    throw new Error('The server returned an invalid playback URL.');
+  const stream = url(ticket.path);
+  if (new URL(stream).origin !== location.origin)
+    throw new Error('Invalid playback origin.');
+  const mediaBase = ticket.path.replace(/\/local-stream\/([^/]+)\/[^/]+$/, '/local-media/$1');
+  const position = Number(entry.position);
+  const total = Number(entry.total);
+  const start = total > 0 && position >= total - 1 ? 0 : Math.max(0, position || 0);
+  await openPlayer({
+    title:item.title,
+    subtitle:entry.subtitle || '',
+    artwork:item.artwork?.poster ? url(item.artwork.poster) : null,
+    extension:ticket.path.split('.').pop(),
+    resume:start,
+    directURL:stream,
+    probeURL:url(mediaBase + '/probe'),
+    subtitleURL:index => url(mediaBase + '/subtitles/' + index + '.vtt'),
+    streamURL:params => url(mediaBase + '/stream.mp4?' + new URLSearchParams(params))
+  });
+}
+document.addEventListener('click', async event => {
+  const button = event.target.closest('[data-replay-recent],[data-clear-recent]');
+  if (!button || !button.closest('#recents-home') || button.disabled) return;
+  if (button.dataset.clearRecent) {
+    const category = button.dataset.clearRecent;
+    if (!['video','music'].includes(category) ||
+        !localizedConfirm('Clear recent ' + category + ' history?')) return;
+    button.disabled = true;
+    try {
+      recentHistory = await api('playback/history/sync', {
+        method:'POST', body:JSON.stringify({
+          entries:[], clearedAt:{[category]:Date.now()/1000}
+        })
+      });
+      renderRecentHistory();
+    } catch (error) { toast(error.message); }
+    finally { button.disabled = false; }
+    return;
+  }
+  const entry = (recentHistory.entries || []).find(item =>
+    item.id === button.dataset.replayRecent);
+  if (!entry) return;
+  button.disabled = true;
+  try {
+    if (entry.category === 'music') await replayRecentMusic(entry);
+    else await replayRecentVideo(entry);
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; }
+});
+
 async function refresh() {
   const [facets,status,players]=await Promise.all([api('facets'),api('status'),api('players')]);
   state.facets=facets; state.players=players;
@@ -1061,6 +1190,7 @@ async function refresh() {
   const latest=status.sources.map(s=>s.last_sync).filter(Boolean).sort().at(-1);
   $('sync-status').textContent=latest?`Dernière mise à jour : ${date(latest)}`:'Aucune source importée';
   await loadMedia();
+  void loadRecentHistory();
 }
 // Keep the activity indicator in the main header, including automated jobs
 // started by the server scheduler and jobs launched by another client.
