@@ -3,6 +3,7 @@
 The server is a replication peer, not the owner of playback events. Clients
 can queue records and category clears offline, then merge on reconnect.
 """
+
 from __future__ import annotations
 
 import json
@@ -48,8 +49,9 @@ class HistoryState(BaseModel):
     @field_validator("clearedAt")
     @classmethod
     def validate_clears(cls, value: dict[str, float]) -> dict[str, float]:
-        if any(key not in _CATEGORIES or not math.isfinite(ts) or ts < 0
-               for key, ts in value.items()):
+        if any(
+            key not in _CATEGORIES or not math.isfinite(ts) or ts < 0 for key, ts in value.items()
+        ):
             raise ValueError("Invalid playback history clear marker")
         return value
 
@@ -75,13 +77,14 @@ def _initialize(conn: sqlite3.Connection) -> None:
 
 
 def _snapshot(conn: sqlite3.Connection) -> dict:
-    cleared = dict(conn.execute(
-        "SELECT category, cleared_at FROM recent_playback_clears"
-    ).fetchall())
+    cleared = dict(
+        conn.execute("SELECT category, cleared_at FROM recent_playback_clears").fetchall()
+    )
     entries = [
-        json.loads(row[0]) for row in conn.execute(
-            "SELECT payload FROM recent_playbacks "
-            "ORDER BY updated_at DESC LIMIT ?", (2 * _MAX_ENTRIES,)
+        json.loads(row[0])
+        for row in conn.execute(
+            "SELECT payload FROM recent_playbacks ORDER BY updated_at DESC LIMIT ?",
+            (2 * _MAX_ENTRIES,),
         )
     ]
     return {"entries": entries, "clearedAt": cleared}
@@ -101,13 +104,12 @@ def _merge(path: Path, incoming: HistoryState | None = None) -> dict:
                     "cleared_at = MAX(cleared_at, excluded.cleared_at)",
                     (category, when),
                 )
-            clear_times = dict(conn.execute(
-                "SELECT category, cleared_at FROM recent_playback_clears"
-            ).fetchall())
+            clear_times = dict(
+                conn.execute("SELECT category, cleared_at FROM recent_playback_clears").fetchall()
+            )
             for category, cutoff in clear_times.items():
                 conn.execute(
-                    "DELETE FROM recent_playbacks "
-                    "WHERE category = ? AND updated_at <= ?",
+                    "DELETE FROM recent_playbacks WHERE category = ? AND updated_at <= ?",
                     (category, cutoff),
                 )
             for entry in incoming.entries:
@@ -119,8 +121,7 @@ def _merge(path: Path, incoming: HistoryState | None = None) -> dict:
                     "category = excluded.category, "
                     "updated_at = excluded.updated_at, payload = excluded.payload "
                     "WHERE excluded.updated_at > recent_playbacks.updated_at",
-                    (entry.id, entry.category, entry.updatedAt,
-                     entry.model_dump_json()),
+                    (entry.id, entry.category, entry.updatedAt, entry.model_dump_json()),
                 )
             # Bound server storage without limiting the ten visible results.
             for category in _CATEGORIES:
