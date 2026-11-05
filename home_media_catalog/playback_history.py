@@ -30,6 +30,7 @@ class RecentEntry(BaseModel):
     subtitle: str = Field(default="", max_length=512)
     artworkPath: str | None = Field(default=None, max_length=2048)
     albumID: str | None = Field(default=None, max_length=256)
+    editionID: str | None = Field(default=None, max_length=256)
     position: float = Field(ge=0)
     total: float = Field(ge=0)
     updatedAt: float = Field(ge=0)
