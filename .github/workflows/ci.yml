@@ -14,8 +14,8 @@ jobs:
           python-version: '3.12'
       - run: pip install -e '.[dev]'
       - run: ruff check home_media_catalog tests
-      - run: ruff format --check home_media_catalog tests
       - run: pytest -q
+      - run: ruff format --check home_media_catalog tests
   browser:
     runs-on: ubuntu-latest
     steps:
