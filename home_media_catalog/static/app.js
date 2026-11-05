@@ -1062,9 +1062,16 @@ function renderRecentHistory() {
     container.innerHTML = rows.length ? rows.map(entry => {
       const fraction = Number(entry.total) > 0
         ? Math.max(0, Math.min(1, Number(entry.position) / Number(entry.total))) : 0;
-      const artwork = typeof entry.artworkPath === 'string' &&
-        /^\/api\/v1\//.test(entry.artworkPath)
-        ? '<img loading="lazy" alt="" src="' + esc(url(entry.artworkPath)) + '">'
+      const reference = typeof entry.artworkPath === 'string' &&
+        /^\/api\/v1\//.test(entry.artworkPath) ? entry.artworkPath :
+        (category === 'video' && entry.id.startsWith('video|') &&
+         !entry.id.startsWith('video|kodi|') && !entry.id.startsWith('video|file|'))
+          ? 'api/v1/media/' + encodeURIComponent(entry.id.slice(6)) + '/artwork/poster'
+          : category === 'music' && entry.albumID
+            ? 'api/v1/music/albums/' + encodeURIComponent(entry.albumID) + '/artwork/thumb' : null;
+      const artwork = reference
+        ? '<img loading="lazy" alt="" src="' + esc(url(reference)) +
+          '" onerror="this.style.display=\'none\'">'
         : '<span class="recent-fallback" aria-hidden="true">' +
           (category === 'video' ? '▶' : '♫') + '</span>';
       const timestamp = Number.isFinite(Number(entry.updatedAt))
