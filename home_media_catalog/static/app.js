@@ -91,8 +91,8 @@ function openPlayer(source) {
   lockPage();
   networkThumbnailPaused=true;
   for(const controller of networkThumbnailControllers)controller.abort();
-  return mediaPlayer.open({...source,onClose:(position)=>{
-    source.onClose?.(position);
+  return mediaPlayer.open({...source,onClose:(position,total)=>{
+    source.onClose?.(position,total);
     networkThumbnailPaused=false;
     runNetworkThumbnailQueue();
     setTimeout(releasePage);
@@ -1098,6 +1098,33 @@ async function loadRecentHistory() {
     }
   }
 }
+async function updateRecentProgress(entry, position, duration) {
+  if (!entry || !(Number(position) >= 1) || !Number.isFinite(Number(position))) return;
+  if (Number(recentHistory.clearedAt?.[entry.category] || 0) >= Number(entry.updatedAt)) return;
+  const total = Math.max(Number(duration) || 0, Number(entry.total) || 0);
+  if (!(total > 0)) return;
+  const updated = {
+    ...entry, position:Math.min(Math.max(0, Number(position)), total),
+    total, updatedAt:Date.now()/1000
+  };
+  // Render immediately. A failed sync never destroys the local active journal.
+  recentHistory.entries = (recentHistory.entries || []).filter(row => row.id !== entry.id);
+  recentHistory.entries.push(updated);
+  renderRecentHistory();
+  try {
+    recentHistory = await api('playback/history/sync', {
+      method:'POST', body:JSON.stringify({entries:[updated],clearedAt:{}})
+    });
+    renderRecentHistory();
+  } catch (error) {
+    console.info('Recent playback sync deferred', error);
+  }
+}
+window.addEventListener('recent-music-progress', event => {
+  const value = event.detail;
+  if (value?.entry) void updateRecentProgress(value.entry, value.position, value.total);
+});
+
 async function replayRecentVideo(entry) {
   let mediaID;
   if (entry.id.startsWith('video|kodi|')) {
@@ -1147,7 +1174,8 @@ async function replayRecentVideo(entry) {
     directURL:stream,
     probeURL:url(mediaBase + '/probe'),
     subtitleURL:index => url(mediaBase + '/subtitles/' + index + '.vtt'),
-    streamURL:params => url(mediaBase + '/stream.mp4?' + new URLSearchParams(params))
+    streamURL:params => url(mediaBase + '/stream.mp4?' + new URLSearchParams(params)),
+    onClose:(position,duration) => void updateRecentProgress(entry,position,duration)
   });
 }
 document.addEventListener('click', async event => {
