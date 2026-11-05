@@ -8,7 +8,7 @@ const baseURL = new URL('.', window.location.href);
 const url = (path) => new URL(path.replace(/^\/+/, ''), baseURL).href;
 const FORMAT_LABELS = {Digital:'Fichiers', CD:'CD', SACD:'SACD', Vinyl:'Vinyle', Cassette:'Cassette', MiniDisc:'MiniDisc', 'DVD-Audio':'DVD-Audio', 'Blu-ray Audio':'Blu-ray Audio', 'Reel-to-reel':'Bande', Streaming:'Streaming', Other:'Autre'};
 const SOURCE_LABELS = {kodi:'Kodi', discogs:'Discogs (CSV)', clz_music:'CLZ Music (XML)', music_csv:'Liste CSV / JSON'};
-const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, transcodeTried:false, transcodeStart:0, streamTranscoded:false, userScrubbing:false, artistAlbums:new Map(), artistObserver:null, debounce:null, playerDismissed:false, libraryLoaded:false, libraryLoading:null};
+const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, transcodeTried:false, transcodeStart:0, streamTranscoded:false, userScrubbing:false, artistAlbums:new Map(), artistObserver:null, debounce:null, playerDismissed:false, libraryLoaded:false, libraryLoading:null, pendingNativeSeek:null, requestedStart:0};
 
 async function api(path, options={}) {
   const headers = new Headers(options.headers || {});
@@ -260,9 +260,10 @@ function tryMP3Fallback() {
   if (!track || state.transcodeTried) return false;
   state.transcodeTried = true;
   state.streamTranscoded = true;
-  state.transcodeStart = 0;
+  state.transcodeStart = state.requestedStart || 0;
+  state.pendingNativeSeek = null;
   const audio = $('music-audio'), token = state.playbackToken;
-  audio.src = streamURL(track, true);
+  audio.src = streamURL(track, true, state.transcodeStart);
   void audio.play().catch(async error => {
     if (token === state.playbackToken) {
       toast((await musicStreamError(track, true)) + ' (' + error.message + ')');
@@ -363,7 +364,7 @@ function updateMediaPosition() {
   } catch { /* browser may not support position updates */ }
 }
 
-async function playQueue(tracks, index) {
+async function playQueue(tracks, index, resumeSeconds=0) {
   const playable = playableTracks(tracks);
   const selected = tracks[index];
   if (!playable.length) return toast('Aucun morceau lisible.');
@@ -382,7 +383,7 @@ async function playQueue(tracks, index) {
     state.queueIndex = Math.max(0, playable.findIndex(t => t.id === selected?.id));
   }
   updateQueueUI();
-  await playCurrent();
+  await playCurrent(resumeSeconds);
 }
 
 async function playCurrent(startAt=0, preferTranscode=false) {
@@ -390,6 +391,9 @@ async function playCurrent(startAt=0, preferTranscode=false) {
   if (!track) return;
   const token = ++state.playbackToken;
   const audio = $('music-audio');
+  state.requestedStart = Math.max(0, Number(startAt) || 0);
+  state.pendingNativeSeek = !preferTranscode && startAt > 0
+    ? {token, seconds:startAt} : null;
   showMusicPlayer();
   $('music-now-title').textContent = track.title;
   $('music-now-artist').textContent = [track.artist, track.album].filter(Boolean).join(' · ');
@@ -529,6 +533,64 @@ async function toggleAuto(sourceId, enabled) {
   toast(enabled ? 'La musique sera synchronisée avec la vidéothèque.' : 'Synchronisation musicale automatique désactivée.');
 }
 
+// Replay is invoked from Recents on the video page. The audio element
+// continues to belong exclusively to the Music module.
+export async function replayRecentMusic(entry) {
+  await open();
+  if (location.hash !== '#music') location.hash = '#music';
+  state.playerDismissed = false;
+  const completed = Number(entry.total) > 0 &&
+    Number(entry.position) >= Number(entry.total) - 1;
+  const bookmark = completed ? 0 : Math.max(0, Number(entry.position) || 0);
+  let tracks;
+  switch (entry.kind) {
+    case 'album': {
+      switchTab('albums');
+      const albumID = entry.id.slice('music|album|'.length);
+      const album = await api('music/albums/' + encodeURIComponent(albumID));
+      tracks = album.tracks || [];
+      if (!tracks.length) {
+        const page = await api('music/tracks?album_id=' + encodeURIComponent(albumID) + '&limit=500');
+        tracks = page.items || [];
+      }
+      tracks.sort((a,b) => (Number(a.disc||1) - Number(b.disc||1)) ||
+        (Number(a.track||0) - Number(b.track||0)));
+      break;
+    }
+    case 'playlist': {
+      const playlistID = entry.id.slice('music|playlist|'.length);
+      const playlist = await api('music/playlists/' + encodeURIComponent(playlistID));
+      tracks = playlist.tracks || [];
+      break;
+    }
+    default: {
+      switchTab('tracks');
+      if (entry.id.startsWith('music|song|')) {
+        const trackID = entry.id.slice('music|song|'.length);
+        tracks = [await api('music/tracks/' + encodeURIComponent(trackID))];
+      } else {
+        const page = await api('music/tracks?q=' + encodeURIComponent(entry.title) + '&limit=100');
+        const matching = (page.items || []).filter(t => t.title.toLowerCase() === entry.title.toLowerCase());
+        if (matching.length !== 1) throw new Error('Cannot uniquely identify this song in the music library.');
+        tracks = matching;
+      }
+    }
+  }
+  const playable = playableTracks(tracks || []);
+  if (!playable.length) throw new Error('No playable digital tracks found for this entry.');
+  let index = 0, inside = bookmark;
+  if (entry.kind === 'album' || entry.kind === 'playlist') {
+    for (; index < playable.length - 1; index++) {
+      const length = Number(playable[index].duration_seconds) || 0;
+      if (length <= 0 || inside < length) break;
+      inside -= length;
+    }
+  }
+  if (bookmark > 0 && playable.length > 1) state.shuffle = false;
+  await playQueue(playable, index, inside);
+  restoreMusicPlayer();
+}
+
 // ----------------------------------------------------------------- events
 export function startMusic() {
   if (!$('music-link')) return;
@@ -558,6 +620,15 @@ export function startMusic() {
   $('music-format').addEventListener('change', event => { state.format = event.target.value; reload(); });
   $('music-more').addEventListener('click', loadMore);
   const audio = $('music-audio');
+  audio.addEventListener('loadedmetadata', () => {
+    const pending = state.pendingNativeSeek;
+    if (!pending || pending.token !== state.playbackToken || state.streamTranscoded) return;
+    state.pendingNativeSeek = null;
+    try {
+      const end = musicDuration();
+      audio.currentTime = end > 1 ? Math.min(pending.seconds, end - 0.5) : pending.seconds;
+    } catch (error) { toast('Unable to resume audio: ' + error.message); }
+  });
   audio.addEventListener('ended', completed);
   audio.addEventListener('error', () => {
     if (!state.queue[state.queueIndex] || !audio.getAttribute('src')) return;
