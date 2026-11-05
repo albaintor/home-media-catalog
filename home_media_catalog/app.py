@@ -2733,6 +2733,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(music_router)
 
+    # Local-first video/music recent playback state, replicated after reconnect.
+    from .playback_history import router as playback_history_router
+
+    app.include_router(playback_history_router)
+
     # Remote-control API and authenticated Kodi notification relay.
     from .remote import router as remote_router
 
