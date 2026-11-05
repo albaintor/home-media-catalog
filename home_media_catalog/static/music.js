@@ -8,7 +8,7 @@ const baseURL = new URL('.', window.location.href);
 const url = (path) => new URL(path.replace(/^\/+/, ''), baseURL).href;
 const FORMAT_LABELS = {Digital:'Fichiers', CD:'CD', SACD:'SACD', Vinyl:'Vinyle', Cassette:'Cassette', MiniDisc:'MiniDisc', 'DVD-Audio':'DVD-Audio', 'Blu-ray Audio':'Blu-ray Audio', 'Reel-to-reel':'Bande', Streaming:'Streaming', Other:'Autre'};
 const SOURCE_LABELS = {kodi:'Kodi', discogs:'Discogs (CSV)', clz_music:'CLZ Music (XML)', music_csv:'Liste CSV / JSON'};
-const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, transcodeTried:false, transcodeStart:0, streamTranscoded:false, userScrubbing:false, artistAlbums:new Map(), artistObserver:null, debounce:null, playerDismissed:false, libraryLoaded:false, libraryLoading:null, pendingNativeSeek:null, requestedStart:0};
+const state = {csrf:null, role:'read', tab:'albums', query:'', format:'', offset:0, total:0, items:[], loading:false, seq:0, players:[], queue:[], queueIndex:-1, canonicalQueue:[], shuffle:false, repeatMode:0, playbackToken:0, transcodeTried:false, transcodeStart:0, streamTranscoded:false, userScrubbing:false, artistAlbums:new Map(), artistObserver:null, debounce:null, playerDismissed:false, libraryLoaded:false, libraryLoading:null, pendingNativeSeek:null, requestedStart:0, recentReplayEntry:null, lastRecentProgressAt:0};
 
 async function api(path, options={}) {
   const headers = new Headers(options.headers || {});
@@ -285,6 +285,24 @@ function musicPosition() {
     (Number.isFinite(current) ? current : 0));
 }
 
+function reportRecentMusicProgress(force=false) {
+  const entry = state.recentReplayEntry;
+  if (!entry) return;
+  const now = Date.now();
+  if (!force && now - state.lastRecentProgressAt < 12000) return;
+  const elapsed = musicPosition();
+  if (!Number.isFinite(elapsed) || elapsed < 1) return;
+  const collection = entry.kind === 'album' || entry.kind === 'playlist';
+  const previous = collection ? state.queue.slice(0, state.queueIndex)
+    .reduce((sum, track) => sum + Math.max(0, Number(track.duration_seconds) || 0), 0) : 0;
+  const duration = collection ? state.queue.reduce((sum, track) =>
+    sum + Math.max(0, Number(track.duration_seconds) || 0), 0) : musicDuration();
+  const total = Math.max(duration, Number(entry.total) || 0);
+  state.lastRecentProgressAt = now;
+  window.dispatchEvent(new CustomEvent('recent-music-progress', {
+    detail:{entry, position:previous + elapsed, total}
+  }));
+}
 function updateMusicTransport() {
   const audio = $('music-audio');
   const length = musicDuration(), elapsed = musicPosition();
@@ -303,6 +321,7 @@ function updateMusicTransport() {
   $('music-mute').setAttribute('aria-label', muted ? 'Rétablir le son' : 'Couper le son');
   $('music-mute').title = muted ? 'Rétablir le son' : 'Couper le son';
   updateMediaPosition();
+  reportRecentMusicProgress();
 }
 
 function seekMusicTo(seconds) {
@@ -365,6 +384,8 @@ function updateMediaPosition() {
 }
 
 async function playQueue(tracks, index, resumeSeconds=0) {
+  reportRecentMusicProgress(true);
+  state.recentReplayEntry = null;
   const playable = playableTracks(tracks);
   const selected = tracks[index];
   if (!playable.length) return toast('Aucun morceau lisible.');
@@ -439,6 +460,7 @@ async function playCurrent(startAt=0, preferTranscode=false) {
 
 function step(delta) {
   if (!state.queue.length) return;
+  reportRecentMusicProgress(true);
   const next = state.queueIndex + delta;
   if (next < 0) {
     $('music-audio').currentTime = 0;
@@ -452,6 +474,7 @@ function step(delta) {
 }
 
 function completed() {
+  reportRecentMusicProgress(true);
   if (state.repeatMode === 2) {
     const audio = $('music-audio');
     audio.currentTime = 0;
@@ -588,6 +611,8 @@ export async function replayRecentMusic(entry) {
   }
   if (bookmark > 0 && playable.length > 1) state.shuffle = false;
   await playQueue(playable, index, inside);
+  state.recentReplayEntry = entry;
+  state.lastRecentProgressAt = 0;
   restoreMusicPlayer();
 }
 
@@ -643,6 +668,7 @@ export function startMusic() {
     updateMusicTransport();
   });
   audio.addEventListener('pause', () => {
+    reportRecentMusicProgress(true);
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     updateMusicTransport();
   });
