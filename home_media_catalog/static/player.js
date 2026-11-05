@@ -315,6 +315,8 @@ export class MediaPlayer {
     this.updateTime();
   }
   teardown() {
+    // The media timeline is destroyed below; capture the bookmark first.
+    const finalPosition=this.currentTime(), finalDuration=this.duration();
     ++this.loadToken;
     cancelAnimationFrame(this.frame);
     clearTimeout(this.hideTimer); clearTimeout(this.seekTimer);
@@ -325,7 +327,7 @@ export class MediaPlayer {
     this.video.load();
     document.documentElement.classList.remove('media-player-open');
     if('mediaSession' in navigator)navigator.mediaSession.metadata=null;
-    this.source?.onClose?.(this.currentTime());
+    this.source?.onClose?.(finalPosition, finalDuration);
     this.source=null;
   }
 
