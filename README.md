@@ -157,9 +157,7 @@ for component details and unresolved compliance checks.
 
 ## Documentation
 
-- [Server installation, configuration, updates and troubleshooting](docs/installation.md)
-- [iOS / Xcode Cloud setup, SwiftPM recovery and signing](docs/ios-xcode-cloud.md)
-- [iOS StoreKit purchases, trial and Debug reset](docs/ios-storekit.md)
+- [Server installation, configuration, updates and troubleshooting](docs/installat
 - [Features and usage](docs/features.md) · [AI search and model setup](docs/ai-search.md)
 - [Home Assistant access](docs/home-assistant.md)
 - [REST API](docs/api.md) · [OpenAPI schema](docs/openapi-v1.json)
