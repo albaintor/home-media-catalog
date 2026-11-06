@@ -1833,11 +1833,11 @@ class Store:
         person_name: str | None = None,
         person_role: str | None = None,
         kind: str | None = None,
-        watch_status: str | None = None,
-        genre: str | None = None,
+        watch_status: str | list[str] | None = None,
+        genre: str | list[str] | None = None,
         format: str | list[str] | None = None,
         collection: str | None = None,
-        source_type: str | None = None,
+        source_type: str | list[str] | None = None,
         source_id: str | None = None,
         parent_id: str | None = None,
         season: int | None = None,
@@ -1958,37 +1958,51 @@ class Store:
             " AND e.watch_status!='watched' AND p.position_seconds>0"
             " AND p.position_seconds<p.total_seconds)))"
         )
-        for name, value in (
-            ("kind", kind),
-            ("watch_status", watch_status),
-            ("parent_id", parent_id),
-            ("season", season),
-            ("year", year),
-        ):
-            if value is None:
-                continue
-            if name == "watch_status" and value == "in_progress":
-                clauses.append(
+        # OR inside each multi-select facet; AND between distinct facets.
+        # Keep accepting scalar values for legacy callers and synchronizers.
+        for name, value in (("kind", kind), ("parent_id", parent_id),
+                            ("season", season), ("year", year)):
+            if value is not None:
+                clauses.append(f"w.{name}=?")
+                params.append(value)
+
+        statuses = [watch_status] if isinstance(watch_status, str) else (watch_status or [])
+        if len(statuses) > 4 or any(s not in {"watched", "unwatched", "in_progress", "unknown"} for s in statuses):
+            raise ValueError("Invalid watch statuses.")
+        conditions = []
+        for value in dict.fromkeys(statuses):
+            if value == "in_progress":
+                conditions.append(
                     "(w.watch_status='in_progress' OR "
                     "(w.watch_status!='watched' AND " + active_playback + "))"
                 )
-            elif name == "watch_status" and value == "unwatched":
-                clauses.append(
+            elif value == "unwatched":
+                conditions.append(
                     "(w.watch_status='unwatched' AND NOT " + active_playback + ")"
                 )
             else:
-                clauses.append(f"w.{name}=?")
+                conditions.append("w.watch_status=?")
                 params.append(value)
-        for name, value in (
+        if conditions:
+            clauses.append("(" + " OR ".join(conditions) + ")")
+
+        for name, selected in (
             ("genres", genre),
             ("collections", collection),
             ("source_types", source_type),
         ):
-            if value is not None:
+            values = [selected] if isinstance(selected, str) else (selected or [])
+            if (len(values) > 40 or any(not isinstance(v, str) or
+                    not 1 <= len(v.strip()) <= 200 for v in values)):
+                raise ValueError("Invalid metadata filters.")
+            values = list(dict.fromkeys(values))
+            if values:
+                placeholders = ",".join("?" for _ in values)
                 clauses.append(
-                    f"EXISTS(SELECT 1 FROM json_each(w.{name}) WHERE value=? COLLATE NOCASE)"
+                    f"EXISTS(SELECT 1 FROM json_each(w.{name}) "
+                    f"WHERE value COLLATE NOCASE IN ({placeholders}))"
                 )
-                params.append(value)
+                params.extend(values)
         if year_min is not None:
             clauses.append("w.year>=?")
             params.append(year_min)
