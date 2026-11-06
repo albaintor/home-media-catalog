@@ -61,12 +61,12 @@ function renderMultiFilters() {
     const options=multiOptions(name), valid=new Set(options.map(([value])=>value));
     state.multi[name]=[...new Set(state.multi[name])].filter(value=>valid.has(value));
     const selected=new Set(state.multi[name]);
-    $(name+'-choices').innerHTML=options.map(([value,label])=>
+    $(multiLegacyIds[name]+'-choices').innerHTML=options.map(([value,label])=>
       `<button type="button" class="multi-choice" data-multi-filter="${esc(name)}" data-multi-value="${esc(value)}" aria-pressed="${selected.has(value)}"><span aria-hidden="true">${selected.has(value)?'✓':'○'}</span>${esc(label)}</button>`
     ).join('')||'<span class="hint">Aucune option disponible.</span>';
     const n=selected.size;
     const summary=n===0?(name==='genre'?'Tous':'Toutes'):n===1?options.find(([value])=>selected.has(value))?.[1]||'1 sélection':`${n} sélectionnés`;
-    $(name+'-summary').textContent=summary;
+    $(multiLegacyIds[name]+'-summary').textContent=summary;
   }
 }
 function savePreferences() {
