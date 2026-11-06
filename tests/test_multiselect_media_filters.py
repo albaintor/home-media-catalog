@@ -52,3 +52,23 @@ def test_multiselect_filter_uses_or_within_facets_and_and_between_them(store):
 def test_multiselect_rejects_invalid_values(store, filters):
     with pytest.raises(ValueError):
         store.media(**filters)
+
+
+def test_http_media_api_accepts_repeated_multi_facet_parameters(client, admin):
+    response = client.get(
+        "/api/v1/media",
+        headers=admin,
+        params=[
+            ("watch_status", "watched"),
+            ("watch_status", "unwatched"),
+            ("genre", "Drama"),
+            ("genre", "Fantasy"),
+            ("source_type", "clz"),
+            ("source_type", "kodi"),
+        ],
+    )
+    assert response.status_code == 200, response.text
+    assert "items" in response.json()
+
+    invalid = client.get("/api/v1/media", headers=admin, params={"watch_status": "nonsense"})
+    assert invalid.status_code == 422
