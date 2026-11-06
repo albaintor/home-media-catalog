@@ -19,7 +19,7 @@ if(typeof preferences!=='object'||Array.isArray(preferences)) preferences={};
 const filterIds = ['search','kind','collection','sort'];
 const multiNames = ['source_type','genre','watch_status'];
 const multiLegacyIds = {source_type:'source-type',genre:'genre',watch_status:'watch-status'};
-const collectionName = title => String(title||'').replace(/\s*-\s*saga\s*$/i,'').trim() || String(title||'');
+const collectionName = title => String(title||'').replace(/\s*[-–—]\s*saga\s*$/i,'').trim() || String(title||'');
 let filtersRestored=false;
 const savedView = ['grid','list'].includes(preferences.view)?preferences.view:readStorage('kodi_library_view');
 const canonicalFormat = value => {
@@ -1000,7 +1000,7 @@ document.addEventListener('scroll',event=>{
 
 function attachImageFallbacks(root) { root.querySelectorAll('img').forEach(img=>{img.addEventListener('error',()=>img.classList.add('failed'),{once:true});}); }
 function currentParams(offset=0) {
-  const params=new URLSearchParams({limit:state.limit,offset,sort:$('sort').value,order:state.order});
+  const params=new URLSearchParams({limit:state.groupBy==='collection'?200:state.limit,offset,sort:$('sort').value,order:state.order});
   for (const [id,name] of [['search','q'],['kind','kind'],['collection','collection']]) if ($(id).value) params.set(name,$(id).value);
   for(const name of multiNames)for(const value of state.multi[name])params.append(name,value);
   for (const value of state.formats) params.append('format',value);
@@ -3299,8 +3299,7 @@ $('clear-search').addEventListener('click',()=>{
 ['kind','collection','sort'].forEach(id=>$(id).addEventListener('change',()=>{loadMedia();}));
 $('group-by').addEventListener('change',()=>{
   state.groupBy=$('group-by').value;state.openCollection=null;
-  if(state.groupBy==='collection')loadMedia();
-  else {savePreferences();renderCards(state.items);updateFilterState();observeMore();}
+  loadMedia();
 });
 $('collection-back').addEventListener('click',()=>{state.openCollection=null;renderCards(state.items);});
 document.addEventListener('click',event=>{
