@@ -91,6 +91,10 @@ class CloudOAuth:
         # is keyed by location, not provider, to distinguish multiple OneDrives.
         self._account_labels: dict[str, tuple[float, str | None]] = {}
 
+    def location_grant_lock(self, location_id: str) -> asyncio.Lock:
+        """Serialize server refreshes and imported device grants per location."""
+        return self._refresh_locks.setdefault(location_id, asyncio.Lock())
+
     def encrypt_password(self, value: str) -> str:
         return self.fernet.encrypt(value.encode("utf-8")).decode("ascii")
 
@@ -490,8 +494,7 @@ class CloudOAuth:
         # Concurrent thumbnails and byte-range reads may all discover an
         # expired token at once. Re-read under one lock before refreshing so a
         # rotating refresh token is never redeemed concurrently.
-        lock = self._refresh_locks.setdefault(location_id, asyncio.Lock())
-        async with lock:
+        async with self.location_grant_lock(location_id):
             saved = self.store.playback_cloud_credentials(location_id)
             if not saved or saved["provider"] != provider:
                 raise CloudOAuthError("Connectez ce compte cloud dans les réglages.")

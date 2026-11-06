@@ -643,6 +643,22 @@ def test_import_public_onedrive_grant_from_iphone(client, admin):
     assert replay.json()["imported"] is False
     assert client.get(route, headers=admin).json()["refresh_token"] == "ios-refresh-secret"
 
+    # Re-uploading an identical grant is a 200 no-op (no encryption/write).
+    again = client.put(route, headers=admin, json=grant)
+    assert again.status_code == 200
+    assert again.json() == {"id": loc_id, "imported": False}
+    assert client.app.state.store.playback_cloud_credentials(loc_id) == stored
+
+    # A genuinely fresher grant can still be mirrored.
+    refreshed = {
+        **grant, "access_token": "new-ios-access",
+        "refresh_token": "new-ios-refresh", "expires_at": future + 100,
+    }
+    updated = client.put(route, headers=admin, json=refreshed)
+    assert updated.status_code == 200
+    assert updated.json()["imported"] is True
+    assert client.get(route, headers=admin).json()["refresh_token"] == "new-ios-refresh"
+
     other = client.post(
         "/api/v1/playback/locations", headers=admin,
         json={"name": "Other", "kind": "smb", "target": "smb://example/share"},
@@ -651,3 +667,82 @@ def test_import_public_onedrive_grant_from_iphone(client, admin):
         f"/api/v1/playback/cloud/{other['id']}/device-credentials",
         headers=admin, json=grant,
     ).status_code == 404
+
+
+
+def test_import_onedrive_device_grant_rejects_unexpected_and_malformed_fields(client, admin):
+    """Confidential OAuth fields and invalid token shapes must never be imported."""
+    import time
+
+    place = client.post(
+        "/api/v1/playback/locations", headers=admin,
+        json={"name": "Strict OneDrive", "kind": "onedrive", "target": ""},
+    )
+    assert place.status_code == 201
+    route = f"/api/v1/playback/cloud/{place.json()['id']}/device-credentials"
+    now = time.time()
+    grant = {
+        "client_id": "145e06bb-b35b-4d96-8cf8-4077cd5e5528",
+        "access_token": "public-access",
+        "refresh_token": "public-refresh",
+        "expires_at": now + 3600,
+    }
+    invalid_grants = [
+        {**grant, "client_secret": "confidential-secret"},
+        {**grant, "client_assertion": "confidential-assertion"},
+        {**grant, "grant_type": "refresh_token"},
+        {**grant, "_hkl_client_id": grant["client_id"]},
+        {**grant, "surprise": "ignored-by-old-handler"},
+        {**grant, "client_id": "{" + grant["client_id"] + "}"},
+        {**grant, "access_token": ""},
+        {**grant, "access_token": " "},
+        {**grant, "access_token": "abc\nxyz"},
+        {**grant, "access_token": "x" * 16385},
+        {**grant, "refresh_token": ""},
+        {**grant, "refresh_token": "r" * 16385},
+        {**grant, "expires_at": True},
+        {**grant, "expires_at": str(now + 3600)},
+        {**grant, "expires_at": -1},
+        {**grant, "expires_at": now + 91 * 86400},
+        {key: value for key, value in grant.items() if key != "refresh_token"},
+    ]
+    for invalid in invalid_grants:
+        result = client.put(route, headers=admin, json=invalid)
+        assert result.status_code == 422, (invalid.keys(), result.text)
+        assert "confidential-secret" not in result.text
+        assert "confidential-assertion" not in result.text
+    assert client.app.state.store.playback_cloud_credentials(place.json()["id"]) is None
+
+
+def test_ios_public_grant_replaces_existing_confidential_web_grant(client, admin):
+    """An unshareable confidential token must not block a public iOS login."""
+    import json
+    import time
+
+    place = client.post(
+        "/api/v1/playback/locations", headers=admin,
+        json={"name": "Migrating OneDrive", "kind": "onedrive", "target": ""},
+    )
+    location_id = place.json()["id"]
+    oauth = client.app.state.playback_oauth
+    store = client.app.state.store
+    store.set_playback_cloud_token(
+        location_id, "onedrive", oauth.encrypt_password(json.dumps({
+            "access_token": "web-access", "refresh_token": "web-refresh",
+            "expires_at": time.time() + 7200,
+        })),
+    )
+    grant = {
+        "client_id": "145e06bb-b35b-4d96-8cf8-4077cd5e5528",
+        "access_token": "ios-access",
+        "refresh_token": "ios-refresh",
+        "expires_at": time.time() + 3600,
+    }
+    route = f"/api/v1/playback/cloud/{location_id}/device-credentials"
+    result = client.put(route, headers=admin, json=grant)
+    assert result.status_code == 200, result.text
+    assert result.json()["imported"] is True
+    read = client.get(route, headers=admin)
+    assert read.status_code == 200
+    assert read.json()["client_id"] == grant["client_id"]
+    assert read.json()["refresh_token"] == grant["refresh_token"]
