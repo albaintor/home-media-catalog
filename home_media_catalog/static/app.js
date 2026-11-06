@@ -16,7 +16,10 @@ function writeStorage(key,value) { try { localStorage.setItem(key,value); } catc
 let preferences;
 try { preferences=JSON.parse(readStorage(preferenceKey)) || {}; } catch { preferences={}; }
 if(typeof preferences!=='object'||Array.isArray(preferences)) preferences={};
-const filterIds = ['search','kind','source-type','genre','collection','watch-status','sort'];
+const filterIds = ['search','kind','collection','sort'];
+const multiNames = ['source_type','genre','watch_status'];
+const multiLegacyIds = {source_type:'source-type',genre:'genre',watch_status:'watch-status'};
+const collectionName = title => String(title||'').replace(/\s*-\s*saga\s*$/i,'').trim() || String(title||'');
 let filtersRestored=false;
 const savedView = ['grid','list'].includes(preferences.view)?preferences.view:readStorage('kodi_library_view');
 const canonicalFormat = value => {
@@ -44,9 +47,31 @@ function updateFormatSelections() {
 }
 
 const state = {csrf:null,role:'read',view:savedView==='list'?'list':'grid',order:preferences.order==='asc'?'asc':'desc',limit:60,recent:preferences.recent===true,formats:[],deepSearch:preferences.deepSearch===true,facets:null,players:[],tmdbAvailable:false,jobs:[],activityPollBusy:false,activityWasRunning:false,personalUpdateState:null,personalRemoteFailure:false,personalPollBusy:false,personalSaveCount:0,seq:0,controller:null,detail:null,detailSeq:0,personalSeq:0,personalPending:new Set(),quickPending:new Set(),enrichingIds:new Set(),personSearch:null,seasons:[],playbackDraft:null,playbackMediaId:null,listId:typeof preferences.listId==='string'?preferences.listId:null,listItems:[],listRevision:0,listSort:['position','title','year','date_added','rating','user_rating'].includes(preferences.listSort)?preferences.listSort:'position',listOrder:preferences.listOrder==='desc'?'desc':'asc',listTotal:0,listSeq:0,items:[],ids:new Set(),nextOffset:0,total:0,hasMore:false,loading:false,loadError:false};
+state.multi={source_type:[],genre:[],watch_status:[]};
+state.groupBy=preferences.groupBy==='collection'?'collection':'';
+state.openCollection=null;
+
+function multiOptions(name) {
+  if(name==='watch_status')return [['unwatched','Non vus'],['in_progress','En cours'],['watched','Vus'],['unknown','Non renseigné']];
+  if(name==='source_type')return [['kodi','Kodi'],['clz','CLZ'],['mymovies','MyMovies'],['filmotech','Filmotech']];
+  return (state.facets?.genres||[]).map(value=>[value,value]);
+}
+function renderMultiFilters() {
+  for(const name of multiNames) {
+    const options=multiOptions(name), valid=new Set(options.map(([value])=>value));
+    state.multi[name]=[...new Set(state.multi[name])].filter(value=>valid.has(value));
+    const selected=new Set(state.multi[name]);
+    $(name+'-choices').innerHTML=options.map(([value,label])=>
+      `<button type="button" class="multi-choice" data-multi-filter="${esc(name)}" data-multi-value="${esc(value)}" aria-pressed="${selected.has(value)}"><span aria-hidden="true">${selected.has(value)?'✓':'○'}</span>${esc(label)}</button>`
+    ).join('')||'<span class="hint">Aucune option disponible.</span>';
+    const n=selected.size;
+    const summary=n===0?(name==='genre'?'Tous':'Toutes'):n===1?options.find(([value])=>selected.has(value))?.[1]||'1 sélection':`${n} sélectionnés`;
+    $(name+'-summary').textContent=summary;
+  }
+}
 function savePreferences() {
   if(!filtersRestored)return;
-  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
+  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
 }
 function updateSearchClearButton() {
   $('clear-search').hidden=!$('search').value&&!state.personSearch;
@@ -57,6 +82,15 @@ function restoreFilters() {
     const value=id==='kind'&&preferences.filters?.kind==='episode'?'':preferences.filters?.[id];
     if(typeof value==='string'&&(id==='search'||[...$(id).options].some(option=>option.value===value)))$(id).value=value;
   }
+  for(const name of multiNames) {
+    const saved=preferences.multiFilters?.[name];
+    const legacy=preferences.filters?.[multiLegacyIds[name]];
+    state.multi[name]=Array.isArray(saved)
+      ? saved.filter(value=>typeof value==='string').slice(0,40)
+      : typeof legacy==='string'&&legacy?[legacy]:[];
+  }
+  $('group-by').value=state.groupBy;
+  renderMultiFilters();
   const previousFormat=preferences.filters?.format;
   const savedFormats=Array.isArray(preferences.formats)?preferences.formats:
     typeof previousFormat==='string'&&previousFormat?[previousFormat]:[];
@@ -967,7 +1001,8 @@ document.addEventListener('scroll',event=>{
 function attachImageFallbacks(root) { root.querySelectorAll('img').forEach(img=>{img.addEventListener('error',()=>img.classList.add('failed'),{once:true});}); }
 function currentParams(offset=0) {
   const params=new URLSearchParams({limit:state.limit,offset,sort:$('sort').value,order:state.order});
-  for (const [id,name] of [['search','q'],['kind','kind'],['source-type','source_type'],['genre','genre'],['collection','collection'],['watch-status','watch_status']]) if ($(id).value) params.set(name,$(id).value);
+  for (const [id,name] of [['search','q'],['kind','kind'],['collection','collection']]) if ($(id).value) params.set(name,$(id).value);
+  for(const name of multiNames)for(const value of state.multi[name])params.append(name,value);
   for (const value of state.formats) params.append('format',value);
   if(state.personSearch) {
     params.delete('q');
@@ -986,10 +1021,13 @@ function currentParams(offset=0) {
   return params;
 }
 function updateFilterState() {
-  let count=['search','kind','source-type','genre','collection','watch-status'].filter(id=>$(id).value).length + state.formats.length + Number(state.recent) + Number(state.deepSearch);
+  const count=['search','kind','collection'].filter(id=>$(id).value).length
+    + multiNames.reduce((total,name)=>total+state.multi[name].length,0)
+    + state.formats.length + Number(state.recent) + Number(state.deepSearch) + Number(!!state.groupBy);
   $('filter-count').textContent=count || '';
   $('reset-filters').hidden=!count;
-  document.querySelectorAll('[data-quick]').forEach(b=>b.classList.toggle('active', b.dataset.quick==='recent'?state.recent:b.dataset.quick==='all'?!state.recent&&!$('watch-status').value:!state.recent&&b.dataset.quick===$('watch-status').value));
+  const quickStatus=state.multi.watch_status.length===1?state.multi.watch_status[0]:'';
+  document.querySelectorAll('[data-quick]').forEach(b=>b.classList.toggle('active', b.dataset.quick==='recent'?state.recent:b.dataset.quick==='all'?!state.recent&&!quickStatus:!state.recent&&b.dataset.quick===quickStatus));
 }
 function observeMore() {
   moreObserver?.disconnect();
@@ -1003,8 +1041,42 @@ function updateLoadingState() {
   $('load-more').textContent=state.loadError?'Réessayer':'Charger la suite';
   $('load-more-status').textContent=state.loading?'Chargement de la suite…':state.loadError?'Le chargement a échoué. Vous pouvez réessayer.':!state.hasMore&&state.items.length?'Tous les résultats sont affichés.':'';
 }
+function collectionGroups(items) {
+  const groups=new Map();
+  for(const media of items) {
+    const names=[...new Set((media.collections||[]).map(collectionName).filter(Boolean))];
+    for(const name of names.length?names:['']) {
+      if(!groups.has(name))groups.set(name,[]);
+      groups.get(name).push(media);
+    }
+  }
+  return [...groups].map(([id,items])=>({id,title:id||'Autres titres',items}))
+    .sort((a,b)=>!a.id?1:!b.id?-1:a.title.localeCompare(b.title,displayLocale()));
+}
+function collectionArtwork(items) {
+  const posters=items.map(item=>item.artwork?.poster).filter(Boolean).slice(0,4);
+  if(!posters.length)return '<span class="collection-artwork-placeholder" aria-hidden="true">▦</span>';
+  return `<span class="collection-artwork ${posters.length===1?'single':'mosaic'}" aria-hidden="true">${posters.map(path=>`<img src="${esc(url(path))}" alt="" loading="lazy">`).join('')}</span>`;
+}
 function renderCards(items, append=false) {
-  const root=$('results'); root.className=state.view==='grid'?'poster-grid':'list-results';
+  const root=$('results');
+  const grouped=state.groupBy==='collection';
+  const opened=grouped&&state.openCollection!==null;
+  $('collection-navigation').hidden=!opened;
+  if(grouped) {
+    const groups=collectionGroups(state.items);
+    if(!opened) {
+      root.className='collection-grid';
+      root.innerHTML=groups.map(group=>`<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.items.length} titres">${collectionArtwork(group.items)}<strong>${esc(group.title)}</strong><span>${group.items.length} titres</span></button>`).join('');
+      attachImageFallbacks(root);
+      return;
+    }
+    const group=groups.find(group=>group.id===state.openCollection);
+    $('collection-current').textContent=group?.title||'';
+    items=group?.items||[];
+    append=false;
+  }
+  root.className=state.view==='grid'?'poster-grid':'list-results';
   const template=document.createElement('template'); template.innerHTML=items.map(card).join('');
   attachImageFallbacks(template.content);
   if(!append) root.replaceChildren();
@@ -1035,13 +1107,23 @@ async function loadMedia({append=false}={}) {
     if (!append&&!page.items.length) {
       const empty=!state.facets?.sources.length || state.facets.sources.every(s=>!s.item_count);
       $('results').innerHTML=`<div class="empty-state"><span class="empty-icon" aria-hidden="true">▦</span><h2>${empty?'Votre bibliothèque commence ici.':'Aucun titre ne correspond.'}</h2><p>${empty?'Connectez la base Kodi ou importez un export CLZ Movies.':'Modifiez les filtres ou essayez un autre mot.'}</p>${state.role==='admin'&&empty?'<button class="primary" data-action="connections">Ajouter une source →</button>':'<button class="secondary" data-action="reset">Effacer les filtres</button>'}</div>`;
-    } else renderCards(added,append);
+    } else renderCards(state.groupBy==='collection'?state.items:added,append);
   } catch (e) { if (e.name!=='AbortError'&&seq===state.seq) {state.loadError=true;error(e.message);} }
-  finally { if (seq===state.seq) {state.loading=false;$('results').setAttribute('aria-busy','false');updateLoadingState();observeMore();} }
+  finally {
+    if(seq===state.seq) {
+      state.loading=false;
+      $('results').setAttribute('aria-busy','false');
+      updateLoadingState();observeMore();
+      // Every group must include all matches, not only the first 60 results.
+      if(state.groupBy==='collection'&&state.hasMore&&!state.loadError) {
+        Promise.resolve().then(()=>{if(seq===state.seq)loadMedia({append:true});});
+      }
+    }
+  }
 }
 function fillSelect(id, values, label) {
   const selected=$(id).value;
-  $(id).innerHTML=`<option value="">${label}</option>`+values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  $(id).innerHTML=`<option value="">${label}</option>`+values.map(v=>`<option value="${esc(v)}">${esc(id==='collection'?collectionName(v):v)}</option>`).join('');
   if (values.includes(selected)) $(id).value=selected;
 }
 // Playback recents are replicated by the existing local-first history API.
@@ -1217,7 +1299,8 @@ async function refresh() {
   $('scan-all-kodi').hidden=state.role!=='admin'||!players.length;
   state.tmdbAvailable=status.tmdb_available===true;
   $('server-version').textContent='Serveur '+(status.version||'—')+(status.data_model_version?' · Modèle '+status.data_model_version:'');
-  fillSelect('genre',facets.genres,'Tous les genres'); fillSelect('collection',facets.collections,'Toutes les collections');
+  fillSelect('collection',facets.collections,'Toutes les collections');
+  renderMultiFilters();
   if(filtersRestored){
     const available=new Set(facets.formats.map(canonicalFormat));
     state.formats=state.formats.filter(v=>available.has(v));
@@ -1418,7 +1501,9 @@ function searchLocalPerson(name,tmdbId='',imdbId='') {
     imdbId:/^nm[0-9]+$/.test(imdbId)?imdbId:null
   };
   if($('detail-dialog').open)$('detail-dialog').close();
-  for(const id of ['kind','source-type','genre','collection','watch-status']) $(id).value='';
+  for(const id of ['kind','collection']) $(id).value='';
+  for(const name of multiNames)state.multi[name]=[];
+  renderMultiFilters();
   state.formats=[];
   state.recent=false;
   state.deepSearch=true;
@@ -1433,7 +1518,15 @@ function searchLocalPerson(name,tmdbId='',imdbId='') {
   $('search').focus({preventScroll:true});
   $('search').scrollIntoView({block:'center',behavior:'smooth'});
 }
-function reset() { state.personSearch=null; ['search','kind','source-type','genre','collection','watch-status'].forEach(id=>$(id).value=''); state.formats=[];state.deepSearch=false;$('deep-search').checked=false;updateFormatSelections(); state.recent=false; updateSearchClearButton(); loadMedia(); }
+function reset() {
+  state.personSearch=null;
+  ['search','kind','collection'].forEach(id=>$(id).value='');
+  for(const name of multiNames)state.multi[name]=[];
+  state.groupBy='';state.openCollection=null;$('group-by').value='';
+  renderMultiFilters();
+  state.formats=[];state.deepSearch=false;$('deep-search').checked=false;
+  updateFormatSelections();state.recent=false;updateSearchClearButton();loadMedia();
+}
 function setView(view, render=true) { state.view=view; writeStorage('kodi_library_view',view);savePreferences(); $('grid-view').setAttribute('aria-pressed',view==='grid'); $('list-view').setAttribute('aria-pressed',view==='list'); if (render&&state.items.length) {renderCards(state.items);observeMore();} }
 let pagePosition=null;
 function lockPage() {
@@ -2989,7 +3082,10 @@ document.addEventListener('click',async event=>{
     if(state.detail?.id===seriesId)loadSeasonEpisodes(season,0,true);
     return;
   }
-  if(button.dataset.genre) {$('genre').value=button.dataset.genre; $('detail-dialog').close();  loadMedia();}
+  if(button.dataset.genre) {
+    state.multi.genre=[button.dataset.genre];renderMultiFilters();
+    $('detail-dialog').close();loadMedia();return;
+  }
   if(button.hasAttribute('data-toggle-format')) {
     const value=canonicalFormat(button.dataset.toggleFormat);
     if(state.formats.includes(value))state.formats=state.formats.filter(v=>v!==value);
@@ -3039,7 +3135,13 @@ document.addEventListener('click',async event=>{
   if(button.dataset.closeWritebackHistory){
     const target=$('writeback-source-history');target.hidden=true;target.replaceChildren();return;
   }
-  if(button.dataset.quick) {state.recent=button.dataset.quick==='recent'; $('watch-status').value=['all','recent'].includes(button.dataset.quick)?'':button.dataset.quick;  if(state.recent){$('sort').value='date_added';state.order='desc';$('sort-order').textContent='↓ Décroissant';}loadMedia();}
+  if(button.dataset.quick) {
+    state.recent=button.dataset.quick==='recent';
+    state.multi.watch_status=['all','recent'].includes(button.dataset.quick)?[]:[button.dataset.quick];
+    renderMultiFilters();
+    if(state.recent){$('sort').value='date_added';state.order='desc';$('sort-order').textContent='↓ Décroissant';}
+    loadMedia();return;
+  }
   if(!button.dataset.testConnection&&!button.dataset.sync&&!button.dataset.removeSource&&!button.dataset.removePlayer&&!button.dataset.editSource&&!button.dataset.editPlayer&&!button.dataset.addPlayerSource&&!button.dataset.configureMymovies&&!button.dataset.scanKodi&&!button.dataset.writebackHistory&&!button.dataset.testPlayer&&!['play-button','play-browser','test-tmdb'].includes(button.id))return;
   const result=['play-button','play-browser'].includes(button.id)?$('play-status'):button.id==='test-tmdb'?$('tmdb-test-result'):button.dataset.testPlayer?$(`player-result-${button.dataset.testPlayer}`):null;
   if(result){result.className='hint play-status';result.textContent=button.id==='play-button'?'Envoi de la lecture à Kodi…':button.id==='play-browser'?'Chargement du flux vidéo via Kodi…':'Vérification de la connexion…';}
@@ -3193,7 +3295,30 @@ $('clear-search').addEventListener('click',()=>{
   loadMedia();
   $('search').focus({preventScroll:true});
 });
-['kind','source-type','genre','collection','watch-status','sort'].forEach(id=>$(id).addEventListener('change',()=>{loadMedia();}));
+['kind','collection','sort'].forEach(id=>$(id).addEventListener('change',()=>{loadMedia();}));
+$('group-by').addEventListener('change',()=>{
+  state.groupBy=$('group-by').value;state.openCollection=null;
+  if(state.groupBy==='collection')loadMedia();
+  else {savePreferences();renderCards(state.items);updateFilterState();observeMore();}
+});
+$('collection-back').addEventListener('click',()=>{state.openCollection=null;renderCards(state.items);});
+document.addEventListener('click',event=>{
+  const open=event.target.closest('#results [data-open-collection]');
+  if(open){
+    state.openCollection=open.dataset.openCollection;
+    renderCards(state.items);
+    $('results').scrollIntoView({block:'start'});
+    return;
+  }
+  const choice=event.target.closest('[data-multi-filter][data-multi-value]');
+  if(!choice)return;
+  const name=choice.dataset.multiFilter,value=choice.dataset.multiValue;
+  if(!multiNames.includes(name))return;
+  const selected=state.multi[name];
+  if(selected.includes(value))state.multi[name]=selected.filter(item=>item!==value);
+  else state.multi[name]=[...selected,value];
+  renderMultiFilters();loadMedia();
+});
 $('deep-search').addEventListener('change',()=>{state.deepSearch=$('deep-search').checked;loadMedia();});
 $('sort-order').addEventListener('click',()=>{state.order=state.order==='asc'?'desc':'asc';$('sort-order').textContent=state.order==='asc'?'↑ Croissant':'↓ Décroissant';loadMedia();});
 $('load-more').addEventListener('click',()=>loadMedia({append:state.items.length>0}));
