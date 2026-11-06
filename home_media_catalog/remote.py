@@ -450,6 +450,10 @@ async def remote_events(socket: WebSocket, player_id: str):
     retry_delay = 2.0
     last_state = None
     last_heartbeat = time.monotonic()
+    http_retry_delay = 5.0
+    next_http_retry = 0.0
+    http_offline = False
+    notifications_offline = False
     try:
         async with aiohttp.ClientSession(
             trust_env=False, timeout=aiohttp.ClientTimeout(total=None, sock_connect=5)
@@ -465,36 +469,53 @@ async def remote_events(socket: WebSocket, player_id: str):
                         )
                         notification_task = asyncio.create_task(upstream.receive())
                         retry_delay = 2.0
-                        LOG.info("Kodi notifications connected for player %s", player_id)
+                        if notifications_offline:
+                            LOG.info("Kodi notifications restored for player %s", player_id)
+                        else:
+                            LOG.info("Kodi notifications connected for player %s", player_id)
+                        notifications_offline = False
                     except (aiohttp.ClientError, TimeoutError, OSError, ValueError) as exc:
-                        LOG.warning(
-                            "Kodi notifications unavailable for player %s (%s); "
-                            "using HTTP state polling",
-                            player_id,
-                            type(exc).__name__,
-                        )
+                        if not notifications_offline:
+                            LOG.info(
+                                "Kodi notifications unavailable for player %s (%s); "
+                                "using HTTP state polling when available",
+                                player_id,
+                                type(exc).__name__,
+                            )
+                        notifications_offline = True
                         next_retry = time.monotonic() + retry_delay
                         retry_delay = min(30.0, retry_delay * 1.7)
 
                 # Independent playback snapshot, including initial connection
                 # and time changes when Kodi emits no position notifications.
-                try:
-                    state = await asyncio.wait_for(current_state(player), timeout=8)
-                    # A websocket transport error is NOT an offline player.
-                    state["websocket_connected"] = upstream is not None
-                    if state != last_state:
-                        await socket.send_json({"type": "state", "state": state})
-                        last_state = state
-                except (ConnectorError, httpx.HTTPError, TimeoutError, OSError) as exc:
-                    LOG.warning(
-                        "Kodi HTTP state unavailable for player %s: %s",
-                        player_id,
-                        type(exc).__name__,
-                    )
-                    offline = {"type": "offline", "message": "Kodi HTTP JSON-RPC unavailable."}
-                    if last_state != offline:
-                        await socket.send_json(offline)
-                        last_state = offline
+                if time.monotonic() >= next_http_retry:
+                    try:
+                        state = await asyncio.wait_for(current_state(player), timeout=8)
+                        # A websocket transport error is NOT an offline player.
+                        state["websocket_connected"] = upstream is not None
+                        if http_offline:
+                            LOG.info("Kodi HTTP state restored for player %s", player_id)
+                        http_offline = False
+                        http_retry_delay = 5.0
+                        next_http_retry = 0.0
+                        if state != last_state:
+                            await socket.send_json({"type": "state", "state": state})
+                            last_state = state
+                    except (ConnectorError, httpx.HTTPError, TimeoutError, OSError) as exc:
+                        if not http_offline:
+                            LOG.info(
+                                "Kodi HTTP state unavailable for player %s: %s; "
+                                "backing off until Kodi returns",
+                                player_id,
+                                type(exc).__name__,
+                            )
+                        http_offline = True
+                        next_http_retry = time.monotonic() + http_retry_delay
+                        http_retry_delay = min(60.0, http_retry_delay * 2)
+                        offline = {"type": "offline", "message": "Kodi HTTP JSON-RPC unavailable."}
+                        if last_state != offline:
+                            await socket.send_json(offline)
+                            last_state = offline
 
                 if time.monotonic() - last_heartbeat >= 15:
                     await socket.send_json({"type": "heartbeat"})
