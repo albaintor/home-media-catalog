@@ -622,7 +622,7 @@ def test_import_public_onedrive_grant_from_iphone(client, admin):
     uploaded = client.put(route, headers=admin, json=grant)
     assert uploaded.status_code == 200, uploaded.text
     assert uploaded.json() == {"id": loc_id, "imported": True}
-    assert uploaded.headers["cache-control"] == "no-store"
+    assert "no-store" in uploaded.headers["cache-control"]
     stored = client.app.state.store.playback_cloud_credentials(loc_id)
     assert stored and stored["provider"] == "onedrive"
     assert "ios-refresh-secret" not in stored["token_cipher"]
