@@ -1056,7 +1056,8 @@ function collectionGroups(items) {
 function collectionArtwork(items) {
   const posters=items.map(item=>item.artwork?.poster).filter(Boolean).slice(0,4);
   if(!posters.length)return '<span class="collection-artwork-placeholder" aria-hidden="true">▦</span>';
-  return `<span class="collection-artwork ${posters.length===1?'single':'mosaic'}" aria-hidden="true">${posters.map(path=>`<img src="${esc(url(path))}" alt="" loading="lazy">`).join('')}</span>`;
+  const images=posters.length===3?[...posters,posters[0]]:posters;
+  return `<span class="collection-artwork ${images.length===1?'single':images.length===2?'pair':'mosaic'}" aria-hidden="true">${images.map(path=>`<img src="${esc(url(path))}" alt="" loading="lazy">`).join('')}</span>`;
 }
 function renderCards(items, append=false) {
   const root=$('results');
@@ -1550,7 +1551,7 @@ function releasePage() {
 function showDialog(id) { if (!$(id).open) {lockPage();$(id).showModal();if(id==='connections-dialog')$(id).scrollTop=0;} }
 function editionMarkup(e) {
   const m=e.metadata;
-  const fields=[['Format',m.formats?.join(', ')],['Vidéo',m.video_streams?.map(v=>[v.width&&v.height?`${v.width} × ${v.height}`:'',v.codec,v.hdr_type,v.hdr_detail,v.stereo_mode].filter(Boolean).join(' · ')).join(' / ')],['Édition',m.edition||m.version],['Code-barres',m.barcode],['Disques',m.disc_count],['Quantité',m.quantity],['Coffret',m.boxset],['Collection',m.collections?.join(', ')],['Régions',m.regions?.join(', ')],['Audio',m.audio_tracks?.join(', ')],['Sous-titres',m.subtitles?.join(', ')],['Dernier visionnage',e.last_played?date(e.last_played):null],['Historique CLZ',m.seen_dates?.map(date).join(', ')],['Lectures',e.play_count],['Reprise',e.resume_seconds?`${Math.floor(e.resume_seconds/60)} min`:null],['Fichier',m.file],['Ajout',e.date_added?date(e.date_added):null],['Identifiants',Object.entries(e.identifiers).map(([k,v])=>`${k}: ${v}`).join(' · ')]];
+  const fields=[['Format',m.formats?.join(', ')],['Vidéo',m.video_streams?.map(v=>[v.width&&v.height?`${v.width} × ${v.height}`:'',v.codec,v.hdr_type,v.hdr_detail,v.stereo_mode].filter(Boolean).join(' · ')).join(' / ')],['Édition',m.edition||m.version],['Code-barres',m.barcode],['Disques',m.disc_count],['Quantité',m.quantity],['Coffret',m.boxset],['Collection',m.collections?.map(collectionName).join(', ')],['Régions',m.regions?.join(', ')],['Audio',m.audio_tracks?.join(', ')],['Sous-titres',m.subtitles?.join(', ')],['Dernier visionnage',e.last_played?date(e.last_played):null],['Historique CLZ',m.seen_dates?.map(date).join(', ')],['Lectures',e.play_count],['Reprise',e.resume_seconds?`${Math.floor(e.resume_seconds/60)} min`:null],['Fichier',m.file],['Ajout',e.date_added?date(e.date_added):null],['Identifiants',Object.entries(e.identifiers).map(([k,v])=>`${k}: ${v}`).join(' · ')]];
   const label=collectionTypes.includes(e.source_type)?(m.formats?.join(' / ')||'Édition physique'):(m.version||'Fichier Kodi');
   return `<details class="edition"><summary><b>${esc(label)}</b> <span class="muted">· ${sourceIcon(e.source_type)} ${esc(e.source_name)}</span></summary><div class="format-badges edition-formats">${formatBadges(m.formats||[])}</div><dl class="edition-grid">${fields.filter(([,v])=>v!==null&&v!==undefined&&v!=='').map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></details>`;
 }
