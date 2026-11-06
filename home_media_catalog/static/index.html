@@ -118,8 +118,8 @@
         </summary>
         <section id="filters" class="filters" aria-label="Filtres et tri">
         <label>Type<select id="kind"><option value="">Tous les médias</option><option value="movie">Films</option><option value="tvshow">Séries</option></select></label>
-        <label>Source<select id="source-type"><option value="">Toutes les sources</option><option value="kodi">Kodi</option><option value="clz">CLZ</option><option value="mymovies">MyMovies</option><option value="filmotech">Filmotech</option></select></label>
-        <label>Genre<select id="genre"><option value="">Tous les genres</option></select></label>
+        <details class="multi-filter" id="multi-source-type"><summary>Source <span id="source-type-summary">Toutes</span></summary><div class="multi-choices" id="source-type-choices" role="group" aria-label="Sources"></div></details>
+        <details class="multi-filter" id="multi-genre"><summary>Genre <span id="genre-summary">Tous</span></summary><div class="multi-choices" id="genre-choices" role="group" aria-label="Genres"></div></details>
         <div class="format-picker" role="group" aria-label="Formats cumulables">
           <div class="format-category"><span class="format-category-title">Vidéo</span><div id="video-formats" class="format-choices" role="group" aria-label="Formats vidéo"></div></div>
           <div class="format-category"><span class="format-category-title">Audio</span><div id="audio-formats" class="format-choices" role="group" aria-label="Formats audio"></div></div>
@@ -127,13 +127,15 @@
           <span id="format-selection-count" class="format-help" aria-live="polite">Sélectionnez plusieurs formats pour les cumuler (ET).</span>
         </div>
         <label>Collection<select id="collection"><option value="">Toutes les collections</option></select></label>
-        <label>État<select id="watch-status"><option value="">Tous les états</option><option value="unwatched">Non vus</option><option value="in_progress">En cours</option><option value="watched">Vus</option><option value="unknown">Non renseigné</option></select></label>
+        <details class="multi-filter" id="multi-watch-status"><summary>État <span id="watch-status-summary">Tous</span></summary><div class="multi-choices" id="watch-status-choices" role="group" aria-label="États de lecture"></div></details>
         <label class="deep-search-option"><input id="deep-search" type="checkbox"> Recherche avancée <small>Synopsis, acteurs, genres et autres métadonnées</small></label>
+        <label>Regrouper<select id="group-by"><option value="">Aucun</option><option value="collection">Collection</option></select></label>
         <label>Tri<select id="sort"><option value="date_added">Date d’ajout</option><option value="title">Titre</option><option value="year">Année</option><option value="rating">Note</option><option value="user_rating">Votre note</option><option value="last_played">Dernière lecture</option></select></label>
         <button id="sort-order" class="sort-order" aria-label="Inverser le sens du tri">↓ Décroissant</button>
         </section>
       </details>
       <div class="results-heading"><span id="result-count" aria-live="polite"></span><button id="reset-filters" class="text-button" hidden>Effacer les filtres</button></div>
+      <div id="collection-navigation" class="collection-navigation" hidden><button id="collection-back" type="button" class="secondary">← Toutes les collections</button><strong id="collection-current"></strong></div>
       <div id="error-banner" class="error-banner" role="alert" hidden></div>
       <section id="results" class="poster-grid" aria-label="Résultats du catalogue" aria-busy="false"></section>
       <div id="pagination" class="pagination catalogue-loading" hidden><span id="page-info" aria-live="polite"></span><p id="load-more-status" role="status"></p><button id="load-more" class="secondary" type="button" aria-controls="results">Charger la suite</button><div id="load-more-trigger" aria-hidden="true"></div></div>
