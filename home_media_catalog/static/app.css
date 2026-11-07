@@ -715,7 +715,7 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .network-home .home-collapsible > summary h2{margin:0}
 .network-home .home-collapsible .list-home-heading{min-width:0}
 .network-home .home-collapsible .list-home-heading p{margin:.55rem 0}
-.recents-home .recents-video-actions{justify-content:flex-end;margin:.45rem 0}
+.recents-home .home-collapsible > summary h2{margin:0}
 
 /* Recently played media: compact rows with a visible resume fraction. */
 .recents-home{margin:1.25rem 0;padding:1.1rem 1.2rem;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:16px}
