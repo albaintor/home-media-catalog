@@ -772,6 +772,9 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .internal-suggestions{display:grid;max-height:190px;overflow:auto;gap:3px}
 .internal-suggestion{border:1px solid var(--border);background:var(--surface);padding:9px 10px;border-radius:6px;text-align:left;font-size:12px;min-height:38px}
 .internal-suggestion:hover,.internal-suggestion:focus-visible{background:var(--raised);outline:2px solid var(--accent)}
+.internal-suggestion.is-selected{background:var(--raised);outline:2px solid var(--accent)}
+.internal-suggestion.is-selected::after{content:'✓';margin-left:auto;color:var(--accent);font-weight:700;font-size:16px}
+
 .internal-suggestion{display:flex;align-items:flex-start;gap:10px}
 .internal-suggestion img,.internal-suggestion .internal-poster-placeholder{
   width:48px;height:72px;flex:none;border-radius:4px;object-fit:cover;background:var(--raised)
