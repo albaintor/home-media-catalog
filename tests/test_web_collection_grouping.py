@@ -49,7 +49,8 @@ assert.equal(api.isSagaCollection('Blu-Ray'),false);
 let groups = api.collectionGroups(media);
 let oss = groups.find(g=>g.title==='OSS 117 la trilogie');
 assert.equal(oss.items.length,2);
-assert.equal(groups.find(g=>g.title==='Autres titres').items.length,1);
+assert.equal(groups.find(g=>g.title==='Film C').items[0].id,'c');
+assert.ok(!groups.some(g=>g.title==='Autres titres'));
 assert.equal(groups[0].title,'Une autre saga');
 state.sort='rating';
 groups = api.collectionGroups(media);
@@ -117,5 +118,51 @@ state.mergeEquivalentCollections=false;
 assert.equal(api.collectionGroups(distinctMovies).length,2);
 // A pair of single-film collections has no larger collection to supersede it.
 assert.equal(api.collectionGroups([{id:'one',collections:['Short','Alternate']}]).length,2);
+"""
+    subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_every_clz_film_is_visible_and_title_sort_uses_collection_labels():
+    """No film should disappear under a mass 'Other titles' bucket."""
+    source = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const src = fs.readFileSync(process.argv[1], 'utf8');
+const helpers = src.slice(src.indexOf('const nonSagaCollections'),
+    src.indexOf('let filtersRestored=false'));
+const funcs = src.slice(src.indexOf('function collectionMetric('),
+    src.indexOf('function collectionArtwork('));
+const state = {mergeEquivalentCollections:false, order:'asc', sort:'title'};
+const $ = () => ({value:state.sort});
+const {collectionGroups} = Function('state','$','displayLocale',
+    helpers+'\n'+funcs+'\nreturn {collectionGroups};')(state,$,()=> 'fr');
+const media = [
+  ...Array.from({length:420},(_,i)=>({
+    id:'clz-'+i,title:'Film CLZ '+String(i).padStart(3,'0'),
+    collections:['Blu-Ray'],source_types:['clz']
+  })),
+  {id:'a',title:'Film Z',collections:['A - Saga']},
+  {id:'b',title:'Film A',collections:['A - Saga']},
+  {id:'c',title:'Film X',collections:['Z - Saga']},
+  {id:'d',title:'Film B',collections:['Z - Saga']}
+];
+for (const merge of [false,true]) {
+  state.mergeEquivalentCollections=merge;
+  state.sort='title';state.order='asc';
+  const groups=collectionGroups(media);
+  assert.equal(groups.length,422);
+  assert.ok(!groups.some(group=>group.title==='Autres titres'));
+  assert.equal(groups[0].title,'A - Saga');
+  assert.equal(groups[groups.length-1].title,'Z - Saga');
+  assert.equal(groups.find(group=>group.title==='A - Saga').items.length,2);
+  assert.deepEqual(
+    groups.filter(group=>group.id.startsWith('standalone:'))
+      .map(group=>group.items[0].id).sort(),
+    media.slice(0,420).map(item=>item.id).sort()
+  );
+  state.order='desc';
+  assert.equal(collectionGroups(media)[0].title,'Z - Saga');
+}
 """
     subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
