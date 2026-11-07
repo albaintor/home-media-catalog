@@ -56,6 +56,7 @@ from .compatibility import mobile_compatibility
 from .connectors.base import ConnectorError
 from .connectors.kodi import KodiConnector
 from .enrichment import enrich_tmdb, probe_tmdb
+from .internal_catalog import find_tmdb, lookup_disc_barcode
 from .list_thumbnails import ListThumbnails
 from .models import (
     CatalogueStatus,
@@ -76,6 +77,7 @@ from .models import (
     ListView,
     MariaDBConnectionInput,
     MariaDBDatabasesResult,
+    InternalMediaInput,
     MediaDetail,
     MediaPage,
     PairingRedeem,
@@ -740,6 +742,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return output
 
     @app.get(
+        API + "/internal/search",
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+    )
+    async def search_internal_media(
+        q: str = Query("", max_length=120),
+    ):
+        if not settings.tmdb_api_token.strip():
+            raise HTTPException(503, "Configure TMDB_API_TOKEN for progressive metadata search.")
+        try:
+            return {"items": await find_tmdb(q, settings.tmdb_api_token)}
+        except ConnectorError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @app.get(
+        API + "/internal/barcode/{barcode}",
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+    )
+    async def search_internal_barcode(barcode: str):
+        try:
+            return await lookup_disc_barcode(barcode)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except ConnectorError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @app.post(
+        API + "/internal/items",
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+        status_code=201,
+    )
+    def create_internal_media(data: InternalMediaInput):
+        try:
+            saved = store.save_internal_media(data.model_dump())
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        start_ai_index()
+        return saved
+
+    @app.delete(
+        API + "/internal/items/{item_id}",
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+        status_code=204,
+    )
+    def remove_internal_media(item_id: UUID):
+        try:
+            store.delete_internal_media(str(item_id))
+        except KeyError as exc:
+            raise HTTPException(404, "Internal edition not found.") from exc
+        start_ai_index()
+
+    @app.get(
         API + "/media",
         response_model=MediaPage,
         tags=["Catalogue"],
@@ -756,7 +813,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         genre: list[str] | None = Query(None),
         format: list[str] | None = Query(None),
         collection: str | None = Query(None, max_length=200),
-        source_type: list[Literal["kodi", "clz", "mymovies", "filmotech"]] | None = Query(None),
+        source_type: list[Literal["kodi", "clz", "mymovies", "filmotech", "internal"]] | None = Query(None),
         source_id: str | None = None,
         parent_id: str | None = None,
         season: int | None = Query(None, ge=0, le=10000),
@@ -2449,6 +2506,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(writable)],
     )
     def delete_source(source_id: str):
+        if source_id == "internal":
+            raise HTTPException(409, "The built-in internal catalogue source cannot be removed.")
         if source_id in sync.active:
             raise HTTPException(409, "Wait for this source's current job before removing it.")
         if not store.source(source_id):
