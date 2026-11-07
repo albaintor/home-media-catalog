@@ -890,6 +890,36 @@ class Store:
                 self._rebuild(conn, work_id)
             self._prune(conn)
 
+    def find_barcode(self, barcode: str) -> dict[str, Any] | None:
+        """Reuse scanned UPC/EAN codes imported from CLZ/MyMovies/Filmotech."""
+        from .internal_catalog import barcode_variants
+
+        variants = barcode_variants(barcode)
+        slots = ",".join("?" for _ in variants)
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT w.title AS title, s.name AS source_name, r.source_id "
+                "FROM records r JOIN works w ON w.id=r.work_id "
+                "JOIN sources s ON s.id=r.source_id "
+                "WHERE json_extract(r.payload,'$.metadata.barcode') IN (" + slots + ") "
+                "OR json_extract(r.payload,'$.metadata.upc') IN (" + slots + ") "
+                "OR json_extract(r.payload,'$.metadata.ean') IN (" + slots + ") "
+                "LIMIT 5",
+                variants * 3,
+            ).fetchall()
+        if not rows:
+            return None
+        items = [
+            {"title": row["title"], "brand": row["source_name"], "category": "Catalog"}
+            for row in rows
+        ]
+        return {
+            "barcode": barcode, "found": True, "title": rows[0]["title"],
+            "source": "catalog", "items": items,
+            "providers_checked": ["catalog"], "providers_unavailable": [],
+            "status": "found",
+        }
+
     def save_internal_media(self, data: dict[str, Any]) -> dict[str, Any]:
         """Upsert one internal edition atomically without replacing external snapshots.
 
