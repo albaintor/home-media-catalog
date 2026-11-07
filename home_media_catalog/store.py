@@ -898,7 +898,8 @@ class Store:
         slots = ",".join("?" for _ in variants)
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT w.title AS title, s.name AS source_name, r.source_id "
+                "SELECT w.title AS title, w.poster AS poster, "
+                "s.name AS source_name, r.source_id "
                 "FROM records r JOIN works w ON w.id=r.work_id "
                 "JOIN sources s ON s.id=r.source_id "
                 "WHERE json_extract(r.payload,'$.metadata.barcode') IN (" + slots + ") "
@@ -916,6 +917,10 @@ class Store:
         return {
             "barcode": barcode, "found": True, "title": rows[0]["title"],
             "source": "catalog", "items": items,
+            "image_url": next((
+                url for url in json.loads(rows[0]["poster"] or "[]")
+                if isinstance(url, str) and url.startswith("https://") and len(url) <= 2048
+            ), None),
             "providers_checked": ["catalog"], "providers_unavailable": [],
             "status": "found",
         }
