@@ -1088,7 +1088,8 @@ function sharedCrossSourceMembers(left, right) {
   return false;
 }
 function mergeCollectionGroupsByMembers(groups) {
-  if(!state.mergeEquivalentCollections)return groups;
+  // Both paths must return an array (a Map is not sortable/filterable).
+  if(!state.mergeEquivalentCollections)return [...groups.values()];
   const ordered=[...groups.values()].filter(group=>group.id).sort((a,b)=>a.id.localeCompare(b.id));
   const unseen=new Set(ordered.map(group=>group.id));
   const merged=[];
