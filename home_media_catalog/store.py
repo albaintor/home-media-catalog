@@ -1526,6 +1526,14 @@ class Store:
         conn.execute(
             "DELETE FROM works_title_fts WHERE work_id IN (SELECT id FROM works w WHERE NOT EXISTS(SELECT 1 FROM records r WHERE r.work_id=w.id))"
         )
+        # A deleted work removes membership through FK cascades; bump revisions
+        # before the cascade so previously cached composite covers are invalidated.
+        conn.execute(
+            "UPDATE collections SET revision=revision+1 WHERE id IN ("
+            "SELECT DISTINCT ci.collection_id FROM collection_items ci "
+            "JOIN works w ON w.id=ci.work_id "
+            "WHERE NOT EXISTS(SELECT 1 FROM records r WHERE r.work_id=w.id))"
+        )
         conn.execute(
             "DELETE FROM works WHERE NOT EXISTS(SELECT 1 FROM records r WHERE r.work_id=works.id)"
         )
