@@ -8,13 +8,13 @@ Home Media Catalog combines a responsive, self-hosted **web application** with a
 ## Highlights
 
 - **Combine** Kodi and CLZ Movies, My Movies, or Filmotech (XML imports), with editions from different sources grouped into the same film or TV-series record when a reliable match exists.
-- **Maintain an internal catalogue:** manually add movies, TV series, DVDs, Blu-rays and 4K UHD Blu-rays without importing a file or requiring Kodi. Remove individual internal editions without deleting matching Kodi, CLZ or other-source records.
+- **Maintain an internal catalogue:** manually add movies, TV series, DVDs, Blu-rays and 4K UHD Blu-rays without importing a file or requiring Kodi.
 - **Identify discs by barcode or title:** scan an EAN/UPC/GTIN with the iPhone/iPad camera, or enter a barcode or search by title. Select from TMDB results with artwork previews; a barcode match can preselect a TMDB result for review. Public barcode databases cannot identify every commercial release.
 - **Browse by collections:** switch between poster grid, list and collection-grouped navigation, including collection artwork and browsing the titles inside each group.
 - **Explore** movies, TV shows and episodes with posters, cast, formats, advanced filters and optional TMDB metadata.
 - **Organize** your collection using custom lists, personal ratings and watched status.
 - **Play** selected titles on an existing Kodi player, with advanced playback controls and media information.
-- **Stream across your network:** browse SMB, NFS, FTP and SFTP sources on iPhone/iPad, directly in standalone mode or with your own server; also access local files and OneDrive.
+- **Stream across your network:** browse and play SMB, NFS, FTP, SFTP and OneDrive sources on iPhone/iPad.
 - **Enjoy advanced video playback:** AVC/H.264, HEVC/H.265 and VC-1 where supported, selectable audio/subtitle tracks, compatible multichannel Dolby Atmos audio, and smooth 48/60 fps MEMC motion interpolation.
 - **Play Blu-ray content:** access compatible ISO images and BDMV folder structures with disc-aware playback and track selection.
 - **Access** your collection on iOS/iPadOS alone, or via a shared server and web interface.
@@ -44,12 +44,11 @@ Collection-only catalogues and manually maintained internal entries do not requi
 
 ### Internal catalogue, disc barcodes and collections
 
-The **internal catalogue** is a first-class source alongside Kodi, CLZ Movies, My Movies and Filmotech. It is designed for films, TV series and physical editions you want to catalogue without an XML import or a playable file.
+The **internal catalogue** is a first-class source alongside Kodi, CLZ Movies, My Movies and Filmotech. It is designed for films, TV series and physical editions you want to catalogue.
 
 - **Web:** use **+ Add to catalog** in the video library. Search TMDB by film/series title or enter an EAN/UPC/GTIN barcode. The form shows cover thumbnails, selects a matching TMDB result after a successful barcode lookup, and lets you review or change the match before saving. Entering a barcode in the web interface does not require a camera.
 - **iPhone/iPad:** use the **+** action in the catalogue toolbar. Search by title, type a barcode, or **scan the barcode with the camera**. Results include available cover artwork, and a barcode search automatically preselects an available TMDB match for review. A configured TMDB token is needed for TMDB search in standalone mode.
 - **Multi-source editions:** a manually added edition is associated with an existing work when the TMDB/IMDb identifier or an unambiguous compatible title/year identifies the same title. The existing source editions remain independent; a new physical format is **not** a second copy of the film in the main grid.
-- **Remove safely:** choose **Remove from internal catalog** from a media context menu or from the bottom of its detail view, then select the internal edition. Only that edition is removed; imported Kodi/CLZ/My Movies/Filmotech editions remain.
 - **Browse by collection:** use the collection grouping mode to show grouped covers and open each collection. Imported collection labels are kept distinct from custom user-created lists, and navigation is available in both web and iOS views.
 
 Barcode lookup checks catalogue records and supported external indexes. Coverage differs by country, barcode type and disc release; no provider guarantees a match for every DVD or Blu-ray. TMDB identifies the **film or series**, whereas the barcode identifies a **commercial edition**. When the two cannot be associated confidently, select the correct title manually. In standalone mode, additions are stored on-device; a paired server provides shared catalogue synchronization.
