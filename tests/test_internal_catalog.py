@@ -7,6 +7,7 @@ import pytest
 from conftest import READ
 
 from home_media_catalog import internal_catalog
+from home_media_catalog.ai import AIConfiguration, AISettingsInput
 from home_media_catalog.connectors.base import Record
 from home_media_catalog.internal_catalog import valid_barcode
 
@@ -102,6 +103,26 @@ def test_internal_rest_api_authorization_and_idempotency(client, admin):
     removed = client.delete(endpoint + "/" + payload["id"], headers=admin)
     assert removed.status_code == 204
     assert client.get("/api/v1/media?source_type=internal", headers=admin).json()["total"] == 0
+
+
+def test_internal_create_and_delete_with_ai_indexing_enabled(client, admin, tmp_path, monkeypatch):
+    """AI's create_task must run on the ASGI loop, not the sync route worker."""
+    AIConfiguration(tmp_path).update(AISettingsInput(api_key="fake-unit-test-key"))
+
+    async def fake_embed(texts, model, key):
+        return [[1.0, 0.0] for _ in texts]
+
+    monkeypatch.setattr("home_media_catalog.ai_vectors.embed", fake_embed)
+    value = entry()
+    created = client.post("/api/v1/internal/items", headers=admin, json=value)
+    assert created.status_code == 201, created.text
+    removed = client.delete(
+        "/api/v1/internal/items/" + value["id"], headers=admin
+    )
+    assert removed.status_code == 204, removed.text
+    assert client.get(
+        "/api/v1/media?source_type=internal", headers=admin
+    ).json()["total"] == 0
 
 
 def test_existing_clz_barcode_is_used_before_external_provider(client, admin):
