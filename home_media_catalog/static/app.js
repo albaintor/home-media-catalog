@@ -1083,9 +1083,9 @@ function collectionGroups(items) {
       .map(name=>normalizedSagaName(name,available))
       .map(name=>state.mergeEquivalentCollections?collectionFold(name):name))];
     for(const key of names.length?names:['']) {
-      if(!groups.has(key))groups.set(key,{id:key,title:key,items:[]});
+      if(!groups.has(key))groups.set(key,{id:key,title:key,items:[],seen:new Set()});
       const group=groups.get(key);
-      if(!group.items.some(item=>item.id===media.id))group.items.push(media);
+      if(!group.seen.has(media.id)){group.seen.add(media.id);group.items.push(media);}
       if(state.mergeEquivalentCollections&&key&&group.title===key) {
         const original=(media.collections||[]).find(name=>collectionFold(normalizedSagaName(name,available))===key);
         if(original)group.title=normalizedSagaName(original,available);
