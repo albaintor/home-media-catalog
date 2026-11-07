@@ -69,6 +69,23 @@ class SourceConfig(StrictModel):
         return value
 
 
+
+class InternalMediaInput(StrictModel):
+    """One physical edition, identified by a client-generated idempotency UUID."""
+    id: str = Field(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+    kind: Literal["movie", "tvshow"] = "movie"
+    title: str = Field(min_length=1, max_length=300)
+    original_title: str | None = Field(default=None, max_length=300)
+    year: int | None = Field(default=None, ge=1870, le=2200)
+    plot: str | None = Field(default=None, max_length=5000)
+    rating: float | None = Field(default=None, ge=0, le=10)
+    tmdb_id: str | None = Field(default=None, pattern=r"^[0-9]{1,24}$")
+    imdb_id: str | None = Field(default=None, pattern=r"^tt[0-9]{5,12}$")
+    barcode: str | None = Field(default=None, pattern=r"^[0-9]{8}$|^[0-9]{12,14}$")
+    format: Literal["", "DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray"] = ""
+    poster_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
+
+
 class SourceInput(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     type: Literal["kodi", "clz", "mymovies", "filmotech", "music_csv", "discogs", "clz_music"]
@@ -115,7 +132,7 @@ class ConnectionResult(BaseModel):
 class SourceView(BaseModel):
     id: str
     name: str
-    type: Literal["kodi", "clz", "mymovies", "filmotech", "music_csv", "discogs", "clz_music"]
+    type: Literal["kodi", "clz", "mymovies", "filmotech", "internal", "music_csv", "discogs", "clz_music"]
     enabled: bool
     config: dict[str, Any]
     last_sync: str | None = None
@@ -132,7 +149,7 @@ class ArtworkLinks(BaseModel):
 class MediaSource(BaseModel):
     id: str
     name: str
-    type: Literal["kodi", "clz", "mymovies", "filmotech"]
+    type: Literal["kodi", "clz", "mymovies", "filmotech", "internal"]
     type_count: int = 1
 
 
