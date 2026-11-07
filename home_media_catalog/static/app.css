@@ -706,6 +706,17 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .remote-touchpad{touch-action:none;user-select:none;min-height:210px;border:1px solid var(--border,rgba(120,120,120,.45));border-radius:1rem;display:grid;place-items:center;text-align:center;padding:1rem;background:var(--surface,rgba(120,120,120,.1));cursor:crosshair}
 .remote-touchpad[hidden],.remote-dpad[hidden]{display:none!important}
 
+/* Home sections open on demand; native details remain closed on initial load. */
+.home-collapsible > summary{display:flex;align-items:center;gap:.7rem;width:fit-content;max-width:100%;cursor:pointer;list-style:none}
+.home-collapsible > summary::-webkit-details-marker{display:none}
+.home-collapsible > summary::before{content:"";width:.5rem;height:.5rem;flex-shrink:0;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .15s ease;opacity:.75}
+.home-collapsible[open] > summary::before{transform:rotate(45deg)}
+.home-collapsible > summary:focus-visible{outline:2px solid var(--accent,#4285ff);outline-offset:4px}
+.network-home .home-collapsible > summary h2{margin:0}
+.network-home .home-collapsible .list-home-heading{min-width:0}
+.network-home .home-collapsible .list-home-heading p{margin:.55rem 0}
+.recents-home .recents-video-actions{justify-content:flex-end;margin:.45rem 0}
+
 /* Recently played media: compact rows with a visible resume fraction. */
 .recents-home{margin:1.25rem 0;padding:1.1rem 1.2rem;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:16px}
 .recents-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:1.25rem;margin-top:.8rem}
