@@ -2686,7 +2686,8 @@ class Store:
         """Single indexed query, independent from media paging and UI rendering."""
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT c.id,c.name,c.revision,COUNT(ci.work_id) item_count "
+                "SELECT c.id,c.name,c.revision,COUNT(ci.work_id) item_count, "
+                "MIN(ci.work_id) AS sole_work_id "
                 "FROM collections c JOIN collection_items ci ON ci.collection_id=c.id "
                 "GROUP BY c.id ORDER BY c.name COLLATE NOCASE,c.id"
             ).fetchall()
@@ -2696,9 +2697,27 @@ class Store:
                 "AND NOT EXISTS(SELECT 1 FROM collection_items ci WHERE ci.work_id=w.id)"
             ).fetchone()[0]
             if missing:
+                sole = None
+                if missing == 1:
+                    sole = conn.execute(
+                        "SELECT w.id FROM works w WHERE w.kind IN ('movie','tvshow') "
+                        "AND NOT EXISTS(SELECT 1 FROM collection_items ci WHERE ci.work_id=w.id)"
+                        " LIMIT 1"
+                    ).fetchone()[0]
                 result.append({"id": "uncategorized", "name": "Other titles",
-                               "revision": 0, "item_count": missing})
+                               "revision": 0, "item_count": missing,
+                               "sole_work_id": sole})
+            single_ids = [item["sole_work_id"] for item in result
+                          if item["item_count"] == 1 and item["sole_work_id"]]
+            single_items = {}
+            for start in range(0, len(single_ids), 150):
+                chunk = single_ids[start:start + 150]
+                slots = ",".join("?" for _ in chunk)
+                rows = conn.execute(f"SELECT * FROM works WHERE id IN ({slots})", chunk).fetchall()
+                single_items.update({item["id"]: item for item in self._summaries_with_sources(conn, rows)})
             for item in result:
+                item["single_media"] = (single_items.get(item.pop("sole_work_id"))
+                                        if item["item_count"] == 1 else None)
                 item["artwork"] = (
                     f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg"
                     if item["id"] != "uncategorized" else None
