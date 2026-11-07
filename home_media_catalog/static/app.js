@@ -3355,6 +3355,11 @@ $('group-by').addEventListener('change',()=>{
   state.groupBy=$('group-by').value;state.openCollection=null;
   loadMedia();
 });
+$('merge-collections').addEventListener('change',()=>{
+  state.mergeEquivalentCollections=$('merge-collections').checked;
+  state.openCollection=null;
+  loadMedia();
+});
 $('collection-back').addEventListener('click',()=>{state.openCollection=null;renderCards(state.items);});
 document.addEventListener('click',event=>{
   const open=event.target.closest('#results [data-open-collection]');
