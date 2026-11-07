@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from conftest import READ
+
 from home_media_catalog.connectors.base import Record
 from home_media_catalog.internal_catalog import valid_barcode
 
