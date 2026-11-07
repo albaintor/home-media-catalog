@@ -1,7 +1,5 @@
 """Materialized collection index, migrations and revisioned cover behavior."""
 
-from dataclasses import replace
-
 from PIL import Image
 import io
 
