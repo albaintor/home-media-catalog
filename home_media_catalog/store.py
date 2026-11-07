@@ -1572,6 +1572,32 @@ class Store:
         return found
 
     @staticmethod
+    def _collection_sources_for_works(
+        conn: sqlite3.Connection, work_ids: list[str]
+    ) -> dict[str, dict[str, list[str]]]:
+        """Keep the exact provider of each collection label, not just of a work.
+
+        One work can contain editions from several sources. Assigning every
+        label to all of those sources would cause false collection merges.
+        """
+        if not work_ids:
+            return {}
+        slots = ",".join("?" for _ in work_ids)
+        rows = conn.execute(
+            "SELECT DISTINCT r.work_id,r.source_id,j.value AS collection_name"
+            " FROM records r, json_each(r.payload,'$.collections') j"
+            f" WHERE r.work_id IN ({slots}) AND j.type='text' AND trim(j.value)<>''",
+            work_ids,
+        )
+        grouped: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+        for row in rows:
+            grouped[row["work_id"]][row["collection_name"]].add(row["source_id"])
+        return {
+            work_id: {name: sorted(sources) for name, sources in names.items()}
+            for work_id, names in grouped.items()
+        }
+
+    @staticmethod
     def _series_episode_progress(
         conn: sqlite3.Connection, series_ids: list[str]
     ) -> dict[str, dict[str, int]]:
@@ -1640,6 +1666,7 @@ class Store:
     ) -> list[dict[str, Any]]:
         ids = [row["id"] for row in rows]
         by_work = cls._sources_for_works(conn, ids)
+        collection_sources = cls._collection_sources_for_works(conn, ids)
         series_ids = [row["id"] for row in rows if row["kind"] == "tvshow"]
         progress = cls._series_episode_progress(conn, series_ids)
         resumes = cls._latest_playback_resumes(conn, ids)
@@ -1666,6 +1693,7 @@ class Store:
             )
             item.update(progress.get(row["id"], {}))
             item["media_sources"] = by_work.get(row["id"], [])
+            item["collection_sources"] = collection_sources.get(row["id"], {})
             partial = series_resumes.get(row["id"])
             if partial and item["watch_status"] != "watched":
                 item["watch_status"] = "in_progress"
