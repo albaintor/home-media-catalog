@@ -65,9 +65,12 @@
     <section id="video-page" class="catalogue">
       <div class="heading-row"><p id="catalogue-status" class="muted">Chargement du catalogue…</p><button id="internal-add-button" class="primary" type="button" hidden>＋ Ajouter au catalogue</button><div class="view-switch" aria-label="Mode d’affichage"><button id="grid-view" aria-label="Vue pochettes" aria-pressed="true">▦</button><button id="list-view" aria-label="Vue liste" aria-pressed="false">☷</button></div></div>
       <section class="network-home" aria-labelledby="network-home-title">
-        <div class="list-home-heading"><h2 id="network-home-title">Explorateur réseau et cloud</h2><p>Parcourir vos emplacements enregistrés sans quitter la bibliothèque.</p></div>
-        <div id="network-home-locations" class="network-home-locations"></div>
-        <button class="secondary" type="button" id="network-explorer-button">Ouvrir l’explorateur</button>
+        <details class="home-collapsible" id="network-home-details">
+          <summary><h2 id="network-home-title">Explorateur réseau et cloud</h2></summary>
+          <div class="list-home-heading"><p>Parcourir vos emplacements enregistrés sans quitter la bibliothèque.</p></div>
+          <div id="network-home-locations" class="network-home-locations"></div>
+          <button class="secondary" type="button" id="network-explorer-button">Ouvrir l’explorateur</button>
+        </details>
       </section>
       <section class="catalogue-list-actions" aria-labelledby="custom-lists-title"><div class="list-home-heading"><h2 id="custom-lists-title">Listes personnalisées</h2><p>Films à voir, séries à suivre… organisez vos sélections.</p></div><div id="home-list-thumbnails" class="home-list-thumbnails" aria-label="Vos listes"></div><div class="list-entry-buttons"><button class="secondary" data-action="lists">Ouvrir mes listes</button><button id="create-list-button" class="primary" hidden>+ Créer une liste</button></div></section>
       <section id="recents-home" class="recents-home" aria-labelledby="recents-home-title">
@@ -77,8 +80,11 @@
         </div>
         <div class="recents-groups">
           <section aria-labelledby="recents-video-title">
-            <div class="recents-heading"><h3 id="recents-video-title">Recent Videos</h3><button type="button" data-clear-recent="video" class="text-button">Clear</button></div>
-            <div id="recents-videos" class="recents-rows" aria-live="polite"><p class="hint">Loading…</p></div>
+            <details class="home-collapsible" id="recents-video-details">
+              <summary class="recents-heading"><h3 id="recents-video-title">Recent Videos</h3></summary>
+              <div class="recents-heading recents-video-actions"><button type="button" data-clear-recent="video" class="text-button">Clear</button></div>
+              <div id="recents-videos" class="recents-rows" aria-live="polite"><p class="hint">Loading…</p></div>
+            </details>
           </section>
           <section aria-labelledby="recents-music-title">
             <div class="recents-heading"><h3 id="recents-music-title">Recent Music</h3><button type="button" data-clear-recent="music" class="text-button">Clear</button></div>
