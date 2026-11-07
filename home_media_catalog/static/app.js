@@ -69,7 +69,7 @@ state.mergeEquivalentCollections=preferences.mergeEquivalentCollections!==false;
 
 function multiOptions(name) {
   if(name==='watch_status')return [['unwatched','Non vus'],['in_progress','En cours'],['watched','Vus'],['unknown','Non renseigné']];
-  if(name==='source_type')return [['kodi','Kodi'],['clz','CLZ'],['mymovies','MyMovies'],['filmotech','Filmotech']];
+  if(name==='source_type')return [['kodi','Kodi'],['clz','CLZ'],['mymovies','MyMovies'],['filmotech','Filmotech'],['internal','Catalogue interne']];
   return (state.facets?.genres||[]).map(value=>[value,value]);
 }
 function renderMultiFilters() {
@@ -78,7 +78,7 @@ function renderMultiFilters() {
     state.multi[name]=[...new Set(state.multi[name])].filter(value=>valid.has(value));
     const selected=new Set(state.multi[name]);
     $(multiLegacyIds[name]+'-choices').innerHTML=options.map(([value,label])=>
-      `<button type="button" class="multi-choice" data-multi-filter="${esc(name)}" data-multi-value="${esc(value)}" aria-pressed="${selected.has(value)}"><span aria-hidden="true">${selected.has(value)?'✓':'○'}</span>${esc(label)}</button>`
+      `<button type="button" class="multi-choice" data-multi-filter="${esc(name)}" data-multi-value="${esc(value)}" aria-pressed="${selected.has(value)}"><span aria-hidden="true">${selected.has(value)?'✓':'○'}</span>${name==='source_type'?sourceIcon(value):''}${esc(label)}</button>`
     ).join('')||'<span class="hint">Aucune option disponible.</span>';
     const n=selected.size;
     const summary=n===0?(name==='genre'?'Tous':'Toutes'):n===1?options.find(([value])=>selected.has(value))?.[1]||'1 sélection':`${n} sélectionnés`;
@@ -309,15 +309,16 @@ function playbackTime(seconds) {
   return hours?`${hours}:${String(minutes).padStart(2,'0')}:${String(secs).padStart(2,'0')}`:`${minutes}:${String(secs).padStart(2,'0')}`;
 }
 const collectionTypes=['clz','mymovies','filmotech'];
-function sourceName(type) { return ({kodi:'Kodi',clz:'CLZ',mymovies:'MyMovies',filmotech:'Filmotech',internal:'Interne',discogs:'Discogs · musique',clz_music:'CLZ Music',music_csv:'Liste musicale'})[type]||type; }
+function sourceName(type) { return ({kodi:'Kodi',clz:'CLZ',mymovies:'MyMovies',filmotech:'Filmotech',internal:'Catalogue interne',discogs:'Discogs · musique',clz_music:'CLZ Music',music_csv:'Liste musicale'})[type]||type; }
 function sourceIcon(type) {
   const shapes={
     clz:'<path d="m3 7 9-5 9 5-9 5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5" fill="none" stroke="currentColor" stroke-width="2"/>',
     mymovies:'<rect x="2" y="4" width="20" height="16" rx="3"/><path d="m10 8 6 4-6 4Z" fill="var(--bg,#121815)"/>',
     filmotech:'<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M7 3v18M17 3v18M2 8h5m-5 8h5M17 8h5m-5 8h5" fill="none" stroke="var(--bg,#121815)" stroke-width="2"/>',
-    internal:'<rect x="3" y="3" width="18" height="18" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v10m-5-5h10" fill="none" stroke="currentColor" stroke-width="2"/>'
+    internal:'<rect x="1" y="1" width="22" height="22" rx="5"/><circle cx="10" cy="12" r="5"/><circle cx="10" cy="12" r="1.25"/>'
   };
   if(type==='kodi') return `<img class="source-icon" src="${esc(url('static/kodi-logo.svg'))}" alt="" width="18" height="18">`;
+  if(type==='internal') return `<img class="source-icon" src="${esc(url('static/internal-catalog-logo.svg'))}" alt="" width="18" height="18">`;
   return `<svg class="source-icon source-icon-${esc(type)}" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">${shapes[type]||shapes.clz}</svg>`;
 }
 // Use the same directional visual language as iOS: down = Kodi → catalog, up = catalog → Kodi.
