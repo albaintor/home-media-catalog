@@ -1721,8 +1721,9 @@ function releasePage() {
 function showDialog(id) { if (!$(id).open) {lockPage();$(id).showModal();if(id==='connections-dialog')$(id).scrollTop=0;} }
 // Internal catalogue entries are persisted as a distinct source and synchronized by the API.
 function internalPosterURL(path) {
-  return typeof path==='string' && /^\\/[A-Za-z0-9_.-]{1,150}$/.test(path)
-    ? 'https://image.tmdb.org/t/p/w185'+path : null;
+  return typeof path==='string' && path.startsWith('/') &&
+    /^[A-Za-z0-9_.-]{1,150}$/.test(path.slice(1))
+      ? 'https://image.tmdb.org/t/p/w185'+path : null;
 }
 function internalImageURL(url) {
   try {const parsed=new URL(url);return parsed.protocol==='https:'&&parsed.username===''&&
