@@ -782,11 +782,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(writable)],
         status_code=201,
     )
-    def create_internal_media(data: InternalMediaInput):
+    async def create_internal_media(data: InternalMediaInput):
         try:
-            saved = store.save_internal_media(data.model_dump())
+            saved = await asyncio.to_thread(
+                store.save_internal_media, data.model_dump()
+            )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        # The index scheduler calls asyncio.create_task: invoke it on the
+        # request event loop, never in FastAPI's synchronous worker thread.
         start_ai_index()
         return saved
 
@@ -796,11 +800,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(writable)],
         status_code=204,
     )
-    def remove_internal_media(item_id: UUID):
+    async def remove_internal_media(item_id: UUID):
         try:
-            store.delete_internal_media(str(item_id))
+            await asyncio.to_thread(store.delete_internal_media, str(item_id))
         except KeyError as exc:
             raise HTTPException(404, "Internal edition not found.") from exc
+        # This must run on the event loop when OpenAI indexing is configured.
         start_ai_index()
 
     @app.get(
