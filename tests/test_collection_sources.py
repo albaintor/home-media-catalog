@@ -59,3 +59,31 @@ def test_single_title_with_same_collection_from_two_sources_keeps_both_origins(s
                                      collections=["Batman"])])
     (item,) = store.media()["items"]
     assert item["collection_sources"]["Batman"] == sorted([kodi, clz])
+
+
+def test_single_kodi_movie_already_in_physical_boxset_is_one_canonical_work(store):
+    """An imported film and its physical edition must not create separate works."""
+    kodi = store.save_source({"name": "Kodi", "type": "kodi"})["id"]
+    clz = store.save_source({"name": "CLZ", "type": "clz"})["id"]
+    first_id = {"imdb": "tt1160419"}
+    second_id = {"imdb": "tt15239678"}
+    store.apply_snapshot(kodi, [
+        Record("movie:1", "movie", "Dune", year=2021,
+               identifiers=first_id, collections=["Dune"])
+    ])
+    store.apply_snapshot(clz, [
+        Record("blu-ray-1", "movie", "Dune", year=2021,
+               identifiers=first_id, collections=["Dune 1 & 2"],
+               formats=["Blu-ray 4K"]),
+        Record("blu-ray-2", "movie", "Dune: Part Two", year=2024,
+               identifiers=second_id, collections=["Dune 1 & 2"],
+               formats=["Blu-ray 4K"]),
+    ])
+    page = store.media(sort="title")
+    assert page["total"] == 2
+    first = next(item for item in page["items"] if item["year"] == 2021)
+    second = next(item for item in page["items"] if item["year"] == 2024)
+    assert set(first["collections"]) == {"Dune", "Dune 1 & 2"}
+    assert second["collections"] == ["Dune 1 & 2"]
+    assert first["collection_sources"] == {"Dune": [kodi], "Dune 1 & 2": [clz]}
+    assert len(store.detail(first["id"])["editions"]) == 2
