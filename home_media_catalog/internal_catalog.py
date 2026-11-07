@@ -96,6 +96,18 @@ async def find_tmdb(query: str, token: str) -> list[dict]:
     return results
 
 
+def _safe_product_image(item: dict) -> str | None:
+    images = item.get("images")
+    choices = (
+        images if isinstance(images, list)
+        else [item.get("image_url"), item.get("image")] 
+    )
+    for image in choices[:5]:
+        if isinstance(image, str) and len(image) <= 2048 and image.startswith("https://"):
+            return image
+    return None
+
+
 def _result(value: str, source: str, rows: list[dict]) -> dict | None:
     rows = [row for row in rows if isinstance(row.get("title"), str) and row["title"].strip()]
     if not rows:
@@ -103,6 +115,7 @@ def _result(value: str, source: str, rows: list[dict]) -> dict | None:
     return {
         "barcode": value, "found": True, "title": rows[0]["title"],
         "source": source, "items": rows[:5],
+        "image_url": rows[0].get("image_url"),
     }
 
 
@@ -122,6 +135,7 @@ async def _lookup_upcitemdb(value: str, client: httpx.AsyncClient) -> dict | Non
             "title": str(item.get("title") or "")[:300],
             "brand": str(item.get("brand") or "")[:120],
             "category": str(item.get("category") or "")[:120],
+            "image_url": _safe_product_image(item),
         }
         for item in body.get("items", [])[:5] if isinstance(item, dict)
     ]
@@ -178,6 +192,7 @@ async def _lookup_barcodelookup(value: str, client: httpx.AsyncClient, key: str)
             "title": str(item.get("title") or "")[:300],
             "brand": str(item.get("brand") or "")[:120],
             "category": str(item.get("category") or "")[:120],
+            "image_url": _safe_product_image(item),
         }
         for item in body.get("products", [])[:5] if isinstance(item, dict)
     ]
