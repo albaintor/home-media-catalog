@@ -309,7 +309,7 @@ function playbackTime(seconds) {
   return hours?`${hours}:${String(minutes).padStart(2,'0')}:${String(secs).padStart(2,'0')}`:`${minutes}:${String(secs).padStart(2,'0')}`;
 }
 const collectionTypes=['clz','mymovies','filmotech'];
-function sourceName(type) { return ({kodi:'Kodi',clz:'CLZ',mymovies:'MyMovies',filmotech:'Filmotech',discogs:'Discogs · musique',clz_music:'CLZ Music',music_csv:'Liste musicale'})[type]||type; }
+function sourceName(type) { return ({kodi:'Kodi',clz:'CLZ',mymovies:'MyMovies',filmotech:'Filmotech',internal:'Interne',discogs:'Discogs · musique',clz_music:'CLZ Music',music_csv:'Liste musicale'})[type]||type; }
 function sourceIcon(type) {
   const shapes={
     clz:'<path d="m3 7 9-5 9 5-9 5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5" fill="none" stroke="currentColor" stroke-width="2"/>',
@@ -1538,6 +1538,7 @@ async function initialize() {
     // Restore the last URL section (#video or #music) after authentication.
     window.dispatchEvent(new Event('media-app-ready'));
     $('create-list-button').hidden=state.role!=='admin';
+    $('internal-add-button').hidden=state.role!=='admin';
     setView(state.view,false); renderPersonalStatus(); await refresh(); await refreshHomeListThumbnails(); await pollActivity(); void refreshNetworkHome();
     // Only once on authenticated entry; the server enforces the 24h threshold.
     void refreshStaleOnOpen();
@@ -1607,6 +1608,113 @@ function releasePage() {
   observeMore();
 }
 function showDialog(id) { if (!$(id).open) {lockPage();$(id).showModal();if(id==='connections-dialog')$(id).scrollTop=0;} }
+// Internal catalogue entries are persisted as a distinct source and synchronized by the API.
+let internalSelection = null;
+let internalSearchTimer = null;
+let internalSearchSerial = 0;
+$('internal-add-button').addEventListener('click', () => {
+  $('internal-add-form').reset();
+  $('internal-suggestions').replaceChildren();
+  $('internal-add-error').textContent = '';
+  $('internal-selection').textContent = 'Vous pouvez aussi renseigner le titre manuellement.';
+  $('internal-barcode-message').textContent = '';
+  internalSelection = null;
+  showDialog('internal-add-dialog');
+  $('internal-search').focus();
+});
+$('internal-title').addEventListener('input', () => {
+  if (internalSelection && $('internal-title').value !== internalSelection.title) {
+    internalSelection = null;
+    $('internal-selection').textContent = 'Titre saisi manuellement.';
+  }
+});
+$('internal-search').addEventListener('input', () => {
+  const query = $('internal-search').value.trim();
+  const serial = ++internalSearchSerial;
+  clearTimeout(internalSearchTimer);
+  $('internal-suggestions').replaceChildren();
+  if (query.length < 2) return;
+  internalSearchTimer = setTimeout(async () => {
+    try {
+      const response = await api('internal/search?q=' + encodeURIComponent(query));
+      if (serial !== internalSearchSerial) return;
+      const root = $('internal-suggestions');
+      root.replaceChildren();
+      const entries = response.items || [];
+      for (const item of entries) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'internal-suggestion';
+        button.setAttribute('role','option');
+        button.textContent = item.title + (item.year ? ' (' + item.year + ')' : '') +
+          (item.kind === 'tvshow' ? ' · Série' : ' · Film');
+        button.addEventListener('click', () => {
+          internalSelection = item;
+          $('internal-title').value = item.title;
+          $('internal-year').value = item.year || '';
+          $('internal-kind').value = item.kind;
+          $('internal-plot').value = item.plot || '';
+          $('internal-selection').textContent = 'TMDB #' + item.tmdb_id + ' · ' + item.title;
+          root.replaceChildren();
+        });
+        root.appendChild(button);
+      }
+      if (!entries.length) root.textContent = 'Aucun résultat. Saisissez le titre manuellement.';
+    } catch (failure) {
+      if (serial === internalSearchSerial)
+        $('internal-suggestions').textContent = failure.message;
+    }
+  }, 300);
+});
+$('internal-lookup').addEventListener('click', async () => {
+  const barcode = $('internal-barcode').value.trim();
+  const message = $('internal-barcode-message');
+  message.textContent = 'Identification du disque…';
+  try {
+    const found = await api('internal/barcode/' + encodeURIComponent(barcode));
+    if (found.found && found.title) {
+      message.textContent = 'Référence commerciale : ' + found.title + ' · Confirmez le film dans TMDB.';
+      $('internal-search').value = found.title;
+      $('internal-search').dispatchEvent(new Event('input'));
+    } else {
+      message.textContent = 'Code valide, mais aucune référence trouvée. Recherchez le titre dans TMDB.';
+    }
+  } catch (failure) { message.textContent = failure.message; }
+});
+$('internal-add-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const title = $('internal-title').value.trim();
+  if (!title) return;
+  const submit = $('internal-save');
+  submit.disabled = true;
+  $('internal-add-error').textContent = '';
+  const item = {
+    id: crypto.randomUUID(),
+    kind: $('internal-kind').value,
+    title: title,
+    year: $('internal-year').value ? Number($('internal-year').value) : null,
+    plot: $('internal-plot').value.trim() || null,
+    barcode: $('internal-barcode').value.trim() || null,
+    format: $('internal-format').value
+  };
+  if (internalSelection && internalSelection.title === title &&
+      internalSelection.kind === item.kind) {
+    item.tmdb_id = internalSelection.tmdb_id;
+    item.original_title = internalSelection.original_title || null;
+    item.poster_path = internalSelection.poster_path || null;
+    item.rating = internalSelection.rating ?? null;
+  }
+  try {
+    const added = await api('internal/items',{method:'POST',body:JSON.stringify(item)});
+    $('internal-add-dialog').close();
+    toast('Ajouté au catalogue interne.');
+    await refresh();
+    if (added.id) await openDetail(added.id);
+  } catch (failure) {
+    $('internal-add-error').textContent = failure.message;
+  } finally { submit.disabled = false; }
+});
+
 function editionMarkup(e) {
   const m=e.metadata;
   const fields=[['Format',m.formats?.join(', ')],['Vidéo',m.video_streams?.map(v=>[v.width&&v.height?`${v.width} × ${v.height}`:'',v.codec,v.hdr_type,v.hdr_detail,v.stereo_mode].filter(Boolean).join(' · ')).join(' / ')],['Édition',m.edition||m.version],['Code-barres',m.barcode],['Disques',m.disc_count],['Quantité',m.quantity],['Coffret',m.boxset],['Collection',m.collections?.map(collectionName).join(', ')],['Régions',m.regions?.join(', ')],['Audio',m.audio_tracks?.join(', ')],['Sous-titres',m.subtitles?.join(', ')],['Dernier visionnage',e.last_played?date(e.last_played):null],['Historique CLZ',m.seen_dates?.map(date).join(', ')],['Lectures',e.play_count],['Reprise',e.resume_seconds?`${Math.floor(e.resume_seconds/60)} min`:null],['Fichier',m.file],['Ajout',e.date_added?date(e.date_added):null],['Identifiants',Object.entries(e.identifiers).map(([k,v])=>`${k}: ${v}`).join(' · ')]];
