@@ -1213,7 +1213,10 @@ class Store:
         # manual additions) can gain another edition without a second poster.
         # Prefer a strong identifier; otherwise require an unambiguous,
         # compatible exact title and release year. Do not merge remakes.
-        if not candidates and source_type in SOURCE_TYPES and record.kind in {"movie", "tvshow"}:
+        if not candidates and source_type in SOURCE_TYPES and (
+            (source_type == "internal" and record.kind in {"movie", "tvshow"})
+            or (source_type != "internal" and record.kind == "movie" and record.year is not None)
+        ):
             keys = cls._title_keys(record.title, record.original_title)
             matches = []
             if keys:
@@ -1224,6 +1227,8 @@ class Store:
                     if row["id"] == exclude or not keys.intersection(
                         cls._title_keys(row["title"], row["original_title"])
                     ):
+                        continue
+                    if source_type != "internal" and row["year"] != record.year:
                         continue
                     if record.year is not None and row["year"] is not None and record.year != row["year"]:
                         continue
