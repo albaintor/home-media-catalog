@@ -30,7 +30,7 @@ const isSagaCollection = name => !!String(name||'').trim() &&
   !nonSagaCollections.has(physicalCollectionKey(name));
 const collectionName = title => String(title||'').replace(/\s*[-–—]\s*saga\s*$/i,'').trim() || String(title||'');
 function normalizedSagaName(raw, availableNames) {
-  const name=collectionName(raw);
+  const name=state.mergeEquivalentCollections?collectionName(raw):String(raw||'').trim();
   // Strip a duplicate suffix only when the base collection also exists.
   const match=/^(.*?)\s+\(([2-9]\d*)\)$/.exec(name);
   return match&&availableNames.has(collectionFold(match[1]))?match[1]:name;
@@ -107,6 +107,7 @@ function restoreFilters() {
   }
   $('group-by').value=state.groupBy;
   $('merge-collections').checked=state.mergeEquivalentCollections;
+  $('merge-collections-label').hidden=state.groupBy!=='collection';
   renderMultiFilters();
   const previousFormat=preferences.filters?.format;
   const savedFormats=Array.isArray(preferences.formats)?preferences.formats:
@@ -1073,7 +1074,9 @@ function collectionMetric(items, field) {
 }
 function collectionGroups(items) {
   const available=new Set(items.flatMap(media=>media.collections||[])
-    .filter(isSagaCollection).map(collectionName).map(collectionFold));
+    .filter(isSagaCollection)
+    .map(name=>state.mergeEquivalentCollections?collectionName(name):String(name||'').trim())
+    .map(collectionFold));
   const groups=new Map();
   for(const media of items) {
     const names=[...new Set((media.collections||[]).filter(isSagaCollection)
@@ -1578,6 +1581,7 @@ function reset() {
   ['search','kind','collection'].forEach(id=>$(id).value='');
   for(const name of multiNames)state.multi[name]=[];
   state.groupBy='';state.openCollection=null;$('group-by').value='';
+  $('merge-collections-label').hidden=true;
   renderMultiFilters();
   state.formats=[];state.deepSearch=false;$('deep-search').checked=false;
   updateFormatSelections();state.recent=false;updateSearchClearButton();loadMedia();
@@ -3353,6 +3357,7 @@ $('clear-search').addEventListener('click',()=>{
 ['kind','collection','sort'].forEach(id=>$(id).addEventListener('change',()=>{loadMedia();}));
 $('group-by').addEventListener('change',()=>{
   state.groupBy=$('group-by').value;state.openCollection=null;
+  $('merge-collections-label').hidden=state.groupBy!=='collection';
   loadMedia();
 });
 $('merge-collections').addEventListener('change',()=>{
