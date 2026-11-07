@@ -161,3 +161,53 @@ def test_bnf_sru_response_extracts_physical_title_without_scraping():
     result = asyncio.run(run())
     assert result["title"] == "International film - DVD"
     assert result["source"] == "bnf"
+
+
+@pytest.mark.parametrize("source_type", ["kodi", "clz", "mymovies", "filmotech"])
+def test_internal_edition_attaches_to_every_import_source_type(store, source_type):
+    source_id = store.save_source({"name": source_type, "type": source_type})["id"]
+    store.apply_snapshot(source_id, [
+        Record("edition-a", "movie", "Cross-source title", year=2024,
+               identifiers={"imdb": "tt9837659"})
+    ])
+    initial = store.media(q="Cross-source title")
+    assert initial["total"] == 1
+    original_id = initial["items"][0]["id"]
+    saved = store.save_internal_media(entry(
+        title="Cross-source title", year=2024, tmdb_id=None, imdb_id=None,
+        barcode=None, id=str(uuid4())
+    ))
+    assert saved["id"] == original_id
+    assert store.media(q="Cross-source title")["total"] == 1
+    sources = {e["source_type"] for e in store.detail(original_id)["editions"]}
+    assert sources == {source_type, "internal"}
+    store.delete_internal_media(saved["item_id"])
+    assert store.media(q="Cross-source title")["total"] == 1
+    assert [e["source_type"] for e in store.detail(original_id)["editions"]] == [source_type]
+
+
+def test_internal_edition_attaches_to_existing_tv_series_without_duplicate(store):
+    source_id = store.save_source({"name": "Kodi", "type": "kodi"})["id"]
+    store.apply_snapshot(source_id, [
+        Record("series-42", "tvshow", "Same series", year=2021)
+    ])
+    previous = store.media(q="Same series")["items"][0]["id"]
+    added = store.save_internal_media(entry(
+        kind="tvshow", title="Same series", year=2021, tmdb_id=None,
+        barcode=None, id=str(uuid4())
+    ))
+    assert added["id"] == previous
+    assert len(store.detail(previous)["editions"]) == 2
+
+
+def test_manual_edition_does_not_merge_distinct_remake_years(store):
+    source_id = store.save_source({"name": "CLZ", "type": "clz"})["id"]
+    store.apply_snapshot(source_id, [
+        Record("old-edition", "movie", "A Remake", year=1984)
+    ])
+    added = store.save_internal_media(entry(
+        title="A Remake", year=2024, tmdb_id=None, barcode=None,
+        id=str(uuid4())
+    ))
+    assert store.media(q="A Remake")["total"] == 2
+    assert len(store.detail(added["id"])["editions"]) == 1
