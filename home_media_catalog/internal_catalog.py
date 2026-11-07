@@ -12,7 +12,6 @@ from xml.etree.ElementTree import ParseError
 import httpx
 from defusedxml.ElementTree import fromstring
 
-from .connectors.base import ConnectorError
 from .enrichment import tmdb_connection
 
 _LOG = logging.getLogger(__name__)
