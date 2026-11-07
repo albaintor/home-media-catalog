@@ -34,7 +34,7 @@ const funcs = src.slice(src.indexOf('function collectionMetric('),
 const state = {mergeEquivalentCollections:true, order:'desc', sort:'date_added'};
 const $ = () => ({value:state.sort});
 const api = Function('state','$','displayLocale',helpers+'\n'+funcs+
-    '\nreturn {collectionGroups,isSagaCollection};')(state,$,'fr');
+    '\nreturn {collectionGroups,isSagaCollection};')(state,$,()=> 'fr');
 const media = [
     {id:'a',title:'Film A',collections:['OSS 117 la trilogie','Blu-Ray'],
         date_added:'2020-01-01',year:2018,rating:8,user_rating:9},
@@ -60,5 +60,10 @@ state.sort='year';
 assert.equal(api.collectionGroups(media).find(g=>g.title==='OSS 117 la trilogie').metric,2022);
 state.mergeEquivalentCollections=false;
 assert.equal(api.collectionGroups(media).filter(g=>g.title.startsWith('OSS 117')).length,1);
-""".replace("\n", "\n")
+state.sort='title';
+const distinct=[{id:'v',collections:['Avengers']},{id:'s',collections:['Avengers - Saga']}];
+assert.equal(api.collectionGroups(distinct).length,2);
+state.mergeEquivalentCollections=true;
+assert.equal(api.collectionGroups(distinct).length,1);
+"""
     subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
