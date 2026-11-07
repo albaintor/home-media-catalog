@@ -65,5 +65,32 @@ const distinct=[{id:'v',collections:['Avengers']},{id:'s',collections:['Avengers
 assert.equal(api.collectionGroups(distinct).length,2);
 state.mergeEquivalentCollections=true;
 assert.equal(api.collectionGroups(distinct).length,1);
+const batman=[
+  {id:'b1',collections:['Batman','Batman collection'],
+   collection_sources:{Batman:['kodi'], 'Batman collection':['clz']}},
+  {id:'b2',collections:['Batman','Batman collection'],
+   collection_sources:{Batman:['kodi'], 'Batman collection':['clz']}}
+];
+const mergedBatman=api.collectionGroups(batman);
+assert.equal(mergedBatman.length,1);
+assert.equal(mergedBatman[0].title,'Batman');
+assert.equal(mergedBatman[0].items.length,2);
+const asterix=[
+  ...['one','two'].map(id=>({id,collections:['Astérix & Obélix (Animation)','Astérix et Obélix (animation)'],
+    collection_sources:{'Astérix & Obélix (Animation)':['kodi'],'Astérix et Obélix (animation)':['clz']}})),
+  ...['three','four'].map(id=>({id,collections:['Astérix & Obélix (Animation)'],
+    collection_sources:{'Astérix & Obélix (Animation)':['kodi']}})),
+  ...['five','six','seven','eight'].map(id=>({id,collections:['Astérix et Obélix (animation)'],
+    collection_sources:{'Astérix et Obélix (animation)':['clz']}}))
+];
+assert.equal(api.collectionGroups(asterix).length,1);
+assert.equal(api.collectionGroups(asterix)[0].items.length,8);
+assert.equal(api.collectionGroups(asterix)[0].title,'Astérix et Obélix (animation)');
+const sameSource=batman.map(item=>({...item,
+  collection_sources:{Batman:['kodi'],'Batman collection':['kodi']}}));
+assert.equal(api.collectionGroups(sameSource).length,2);
+assert.equal(api.collectionGroups(batman.slice(0,1)).length,2);
+state.mergeEquivalentCollections=false;
+assert.equal(api.collectionGroups(batman).length,2);
 """
     subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
