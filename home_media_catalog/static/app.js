@@ -1150,20 +1150,24 @@ function collectionGroups(items) {
     }
   }
   const ascending=state.order==='asc',sort=$('sort').value;
-  const groupsList=mergeCollectionGroupsByMembers(groups);
-  // A one-film collection is rendered as a direct media card. Do not show it
-  // separately when its work is already in a larger collection. This applies
-  // even with equivalent-name merging disabled, and changes no source data.
+  const namedGroups=mergeCollectionGroupsByMembers(groups).filter(group=>group.id);
+  // A one-film collection is rendered as a direct media card. Suppress it
+  // when its canonical work already belongs to a larger visible collection.
   const containedInLargerCollection=new Set(
-    groupsList.filter(group=>group.id&&group.items.length>1)
+    namedGroups.filter(group=>group.items.length>1)
       .flatMap(group=>group.items.map(media=>media.id))
   );
-  const visibleGroups=groupsList.filter(group=>!group.id||
+  const visibleNamedGroups=namedGroups.filter(group=>
     group.items.length!==1||!containedInLargerCollection.has(group.items[0].id));
-  for(const group of visibleGroups) {
-    if(!group.id)group.title='Autres titres';
+  // Never hide catalogue media in a large "Other titles" collection. For
+  // physical-only CLZ records (e.g. "Blu-Ray") display each film directly.
+  // Reconcile against final visible groups so no work disappears during merges.
+  const represented=new Set(visibleNamedGroups.flatMap(group=>group.items.map(item=>item.id)));
+  const individualMedia=items.filter(item=>!represented.has(item.id))
+    .map(item=>({id:'standalone:'+item.id,title:item.title,items:[item],standalone:true}));
+  const visibleGroups=[...visibleNamedGroups,...individualMedia];
+  for(const group of visibleGroups)
     group.metric=sort==='title'?null:collectionMetric(group.items,sort);
-  }
   return visibleGroups.sort((a,b)=>{
     if(!a.id)return 1;
     if(!b.id)return -1;
@@ -1191,7 +1195,9 @@ function renderCards(items, append=false) {
     const groups=collectionGroups(state.items);
     if(!opened) {
       root.className='collection-grid';
-      root.innerHTML=groups.map(group=>`<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.items.length} titres">${collectionArtwork(group.items)}<strong>${esc(group.title)}</strong><span>${group.items.length} titres</span></button>`).join('');
+      root.innerHTML=groups.map(group=>group.items.length===1
+        ? card(group.items[0])
+        : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.items.length} titres">${collectionArtwork(group.items)}<strong>${esc(group.title)}</strong><span>${group.items.length} titres</span></button>`).join('');
       attachImageFallbacks(root);
       return;
     }
