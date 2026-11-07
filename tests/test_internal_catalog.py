@@ -20,6 +20,9 @@ def entry(**fields):
 def test_gtin_checksum():
     assert valid_barcode("4006381333931")
     assert valid_barcode("036000291452")
+    assert valid_barcode("01234558")  # UPC-E equivalent of GTIN-12 012345000058
+    assert internal_catalog.expand_upce("01234558") == "012345000058"
+    assert "012345000058" in internal_catalog.barcode_variants("01234558")
     assert not valid_barcode("4006381333932")
     assert not valid_barcode("123456789")
     assert not valid_barcode("400638133393x")
