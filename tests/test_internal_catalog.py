@@ -1,9 +1,12 @@
 """Built-in internal source: validation, idempotency and safe edition reconciliation."""
+import asyncio
 from uuid import uuid4
 
+import httpx
 import pytest
 from conftest import READ
 
+from home_media_catalog import internal_catalog
 from home_media_catalog.connectors.base import Record
 from home_media_catalog.internal_catalog import valid_barcode
 
@@ -96,3 +99,62 @@ def test_internal_rest_api_authorization_and_idempotency(client, admin):
     removed = client.delete(endpoint + "/" + payload["id"], headers=admin)
     assert removed.status_code == 204
     assert client.get("/api/v1/media?source_type=internal", headers=admin).json()["total"] == 0
+
+
+def test_existing_clz_barcode_is_used_before_external_provider(client, admin):
+    store = client.app.state.store
+    sid = store.save_source({"name": "My movie collection", "type": "clz"})["id"]
+    store.apply_snapshot(sid, [Record(
+        "disc:99", "movie", "A known physical edition",
+        metadata={"barcode": "036000291452"}, formats=["DVD"],
+    )])
+    response = client.get("/api/v1/internal/barcode/0036000291452", headers=admin)
+    assert response.status_code == 200
+    assert response.json()["title"] == "A known physical edition"
+    assert response.json()["source"] == "catalog"
+
+
+def test_public_barcode_provider_fallback_does_not_depend_on_region(monkeypatch):
+    internal_catalog._CACHE.clear()
+
+    async def unavailable_upc(value, client):
+        raise httpx.ReadTimeout("rate limited")
+
+    async def bnf_fallback(value, client):
+        assert value == "4006381333931"
+        return {
+            "barcode": value, "found": True,
+            "title": "Un film - Blu-ray", "source": "bnf",
+            "items": [{"title": "Un film - Blu-ray"}],
+        }
+
+    monkeypatch.setattr(internal_catalog, "_lookup_upcitemdb", unavailable_upc)
+    monkeypatch.setattr(internal_catalog, "_lookup_bnf", bnf_fallback)
+    monkeypatch.delenv("BARCODELOOKUP_API_KEY", raising=False)
+    result = asyncio.run(internal_catalog.lookup_disc_barcode("4006381333931"))
+    assert result["status"] == "found"
+    assert result["source"] == "bnf"
+    assert result["providers_unavailable"] == ["upcitemdb"]
+
+
+def test_bnf_sru_response_extracts_physical_title_without_scraping():
+    xml = b'''<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/"
+        xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <srw:records><srw:record><srw:recordData>
+        <dc:title>International film - DVD</dc:title>
+        <dc:description>Code a barres commercial : EAN 4006381333931</dc:description>
+        </srw:recordData></srw:record></srw:records>
+        </srw:searchRetrieveResponse>'''
+
+    def handler(request):
+        assert request.url.params["recordSchema"] == "dublincore"
+        assert '4006381333931' in request.url.params["query"]
+        return httpx.Response(200, content=xml)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await internal_catalog._lookup_bnf("4006381333931", client)
+
+    result = asyncio.run(run())
+    assert result["title"] == "International film - DVD"
+    assert result["source"] == "bnf"
