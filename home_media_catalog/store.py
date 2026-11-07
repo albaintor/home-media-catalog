@@ -2724,8 +2724,10 @@ class Store:
                 rows = conn.execute(f"SELECT * FROM works WHERE id IN ({slots})", chunk).fetchall()
                 single_items.update({item["id"]: item for item in self._summaries_with_sources(conn, rows)})
             for item in result:
-                item["single_media"] = (single_items.get(item.pop("sole_work_id"))
-                                        if item["item_count"] == 1 else None)
+                sole_id = item.pop("sole_work_id", None)
+                item["single_media"] = (
+                    single_items.get(sole_id) if item["item_count"] == 1 else None
+                )
                 item["artwork"] = (
                     f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg"
                     if item["id"] != "uncategorized" else None
