@@ -308,7 +308,7 @@ function playbackTime(seconds) {
   const hours=Math.floor(total/3600),minutes=Math.floor(total%3600/60),secs=total%60;
   return hours?`${hours}:${String(minutes).padStart(2,'0')}:${String(secs).padStart(2,'0')}`:`${minutes}:${String(secs).padStart(2,'0')}`;
 }
-const collectionTypes=['clz','mymovies','filmotech','internal'];
+const collectionTypes=['clz','mymovies','filmotech'];
 function sourceName(type) { return ({kodi:'Kodi',clz:'CLZ',mymovies:'MyMovies',filmotech:'Filmotech',internal:'Interne',discogs:'Discogs · musique',clz_music:'CLZ Music',music_csv:'Liste musicale'})[type]||type; }
 function sourceIcon(type) {
   const shapes={
@@ -1794,7 +1794,7 @@ $('internal-add-form').addEventListener('submit', async (event) => {
 function editionMarkup(e) {
   const m=e.metadata;
   const fields=[['Format',m.formats?.join(', ')],['Vidéo',m.video_streams?.map(v=>[v.width&&v.height?`${v.width} × ${v.height}`:'',v.codec,v.hdr_type,v.hdr_detail,v.stereo_mode].filter(Boolean).join(' · ')).join(' / ')],['Édition',m.edition||m.version],['Code-barres',m.barcode],['Disques',m.disc_count],['Quantité',m.quantity],['Coffret',m.boxset],['Collection',m.collections?.map(collectionName).join(', ')],['Régions',m.regions?.join(', ')],['Audio',m.audio_tracks?.join(', ')],['Sous-titres',m.subtitles?.join(', ')],['Dernier visionnage',e.last_played?date(e.last_played):null],['Historique CLZ',m.seen_dates?.map(date).join(', ')],['Lectures',e.play_count],['Reprise',e.resume_seconds?`${Math.floor(e.resume_seconds/60)} min`:null],['Fichier',m.file],['Ajout',e.date_added?date(e.date_added):null],['Identifiants',Object.entries(e.identifiers).map(([k,v])=>`${k}: ${v}`).join(' · ')]];
-  const label=collectionTypes.includes(e.source_type)?(m.formats?.join(' / ')||'Édition physique'):(m.version||'Fichier Kodi');
+  const label=(e.source_type==='internal'||collectionTypes.includes(e.source_type))?(m.formats?.join(' / ')||'Édition physique'):(m.version||'Fichier Kodi');
   return `<details class="edition"><summary><b>${esc(label)}</b> <span class="muted">· ${sourceIcon(e.source_type)} ${esc(e.source_name)}</span></summary><div class="format-badges edition-formats">${formatBadges(m.formats||[])}</div><dl class="edition-grid">${fields.filter(([,v])=>v!==null&&v!==undefined&&v!=='').map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></details>`;
 }
 function tmdbAttribution(item) {
@@ -2001,7 +2001,7 @@ async function diagnoseKodi() {
     if(state.detail?.id!==item.id||!$('kodi-diagnostic'))return;
     const paragraphs=[];
     for(const source of data.sources){
-      paragraphs.push('<p><strong>'+esc(source.source_name)+'</strong> ('+(sourccollectionTypes.includes(e.source_type)?'CLZ':'Kodi')+')</p>');
+      paragraphs.push('<p><strong>'+esc(source.source_name)+'</strong> ('+(collectionTypes.includes(source.source_type)?'CLZ':'Kodi')+')</p>');
       if(collectionTypes.includes(source.source_type)){
         paragraphs.push('<p class="hint">Édition CLZ toujours présente : cette fiche est conservée.</p>');
         continue;
