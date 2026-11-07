@@ -249,6 +249,8 @@ class Store:
             from .music import MusicCatalogue
 
             MusicCatalogue.initialize(conn)
+            conn.execute("INSERT OR IGNORE INTO sources(id,name,type,enabled,config) VALUES(?,?,?,?,?)",
+                         ("internal", "Internal catalog", "internal", 1, "{}"))
             # Remove obsolete separate-writer secrets on existing installations.
             for row in conn.execute("SELECT id,config FROM sources WHERE type='kodi'"):
                 saved = json.loads(row["config"])
@@ -888,6 +890,82 @@ class Store:
             conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
             for work_id in affected:
                 self._rebuild(conn, work_id)
+            self._prune(conn)
+
+    def save_internal_media(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Upsert one internal edition atomically without replacing external snapshots.
+
+        The UUID belongs to the edition, never the TMDB work. Retrying the same
+        POST is a no-op; physical editions of one film share a catalogue work.
+        """
+        from .internal_catalog import valid_barcode
+
+        barcode = data.get("barcode")
+        if barcode and not valid_barcode(barcode):
+            raise ValueError("Invalid barcode check digit.")
+        external_key = data["id"].lower()
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO sources(id,name,type,enabled,config) VALUES(?,?,?,?,?)",
+                ("internal", "Internal catalog", "internal", 1, "{}"),
+            )
+            existing = conn.execute(
+                "SELECT work_id FROM records WHERE source_id='internal' AND external_key=?",
+                (external_key,),
+            ).fetchone()
+            if not existing:
+                ids = {kind: value for kind, value in
+                       (("tmdb", data.get("tmdb_id")), ("imdb", data.get("imdb_id")))
+                       if value}
+                path = data.get("poster_path")
+                poster = (
+                    ["https://image.tmdb.org/t/p/w500" + path]
+                    if path and data.get("tmdb_id") else []
+                )
+                record = Record(
+                    external_key=external_key,
+                    kind=data.get("kind", "movie"),
+                    title=data["title"].strip(),
+                    identifiers=ids,
+                    original_title=data.get("original_title"),
+                    year=data.get("year"),
+                    plot=data.get("plot"),
+                    rating=data.get("rating"),
+                    formats=[data["format"]] if data.get("format") else [],
+                    date_added=now(),
+                    poster=poster,
+                    metadata={"barcode": barcode, "internal": True},
+                )
+                work_id, _ = self._match_work(
+                    conn, record, source_type="internal"
+                )
+                conn.execute(
+                    "INSERT INTO records(id,work_id,source_id,external_key,payload) "
+                    "VALUES(?,?,?,?,?)",
+                    (str(uuid4()), work_id, "internal", external_key, encode(asdict(record))),
+                )
+                self._rebuild(conn, work_id)
+                self._reconcile_titles(conn)
+            current = conn.execute(
+                "SELECT work_id FROM records WHERE source_id='internal' AND external_key=?",
+                (external_key,),
+            ).fetchone()
+            if not current:
+                raise RuntimeError("Internal edition was not saved.")
+            work_id = current["work_id"]
+        return {"id": work_id, "item_id": external_key}
+
+    def delete_internal_media(self, external_key: str) -> None:
+        """Only remove the requested internal edition, never external sources."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT id,work_id FROM records WHERE source_id='internal' AND external_key=?",
+                (external_key.lower(),),
+            ).fetchone()
+            if row is None:
+                raise KeyError(external_key)
+            conn.execute("DELETE FROM records WHERE id=?", (row["id"],))
+            self._rebuild(conn, row["work_id"])
             self._prune(conn)
 
     def has_multiple_kodi_movie_versions(self, source_id: str) -> bool:
