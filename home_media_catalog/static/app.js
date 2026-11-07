@@ -19,7 +19,22 @@ if(typeof preferences!=='object'||Array.isArray(preferences)) preferences={};
 const filterIds = ['search','kind','collection','sort'];
 const multiNames = ['source_type','genre','watch_status'];
 const multiLegacyIds = {source_type:'source-type',genre:'genre',watch_status:'watch-status'};
+// Imported collection names can represent a medium rather than a film saga.
+const nonSagaCollections = new Set([
+  'bluray','bluray4k','4kbluray','uhdbluray','ultrahdbluray',
+  'dvd','hddvd','vhs','4kuhd'
+]);
+const collectionFold = name => String(name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().trim();
+const physicalCollectionKey = name => collectionFold(name).replace(/[\s_-]+/g,'');
+const isSagaCollection = name => !!String(name||'').trim() &&
+  !nonSagaCollections.has(physicalCollectionKey(name));
 const collectionName = title => String(title||'').replace(/\s*[-–—]\s*saga\s*$/i,'').trim() || String(title||'');
+function normalizedSagaName(raw, availableNames) {
+  const name=collectionName(raw);
+  // Strip a duplicate suffix only when the base collection also exists.
+  const match=/^(.*?)\s+\(([2-9]\d*)\)$/.exec(name);
+  return match&&availableNames.has(collectionFold(match[1]))?match[1]:name;
+}
 let filtersRestored=false;
 const savedView = ['grid','list'].includes(preferences.view)?preferences.view:readStorage('kodi_library_view');
 const canonicalFormat = value => {
@@ -50,6 +65,7 @@ const state = {csrf:null,role:'read',view:savedView==='list'?'list':'grid',order
 state.multi={source_type:[],genre:[],watch_status:[]};
 state.groupBy=preferences.groupBy==='collection'?'collection':'';
 state.openCollection=null;
+state.mergeEquivalentCollections=preferences.mergeEquivalentCollections!==false;
 
 function multiOptions(name) {
   if(name==='watch_status')return [['unwatched','Non vus'],['in_progress','En cours'],['watched','Vus'],['unknown','Non renseigné']];
@@ -71,7 +87,7 @@ function renderMultiFilters() {
 }
 function savePreferences() {
   if(!filtersRestored)return;
-  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
+  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,mergeEquivalentCollections:state.mergeEquivalentCollections,formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
 }
 function updateSearchClearButton() {
   $('clear-search').hidden=!$('search').value&&!state.personSearch;
@@ -90,6 +106,7 @@ function restoreFilters() {
       : typeof legacy==='string'&&legacy?[legacy]:[];
   }
   $('group-by').value=state.groupBy;
+  $('merge-collections').checked=state.mergeEquivalentCollections;
   renderMultiFilters();
   const previousFormat=preferences.filters?.format;
   const savedFormats=Array.isArray(preferences.formats)?preferences.formats:
@@ -1041,17 +1058,54 @@ function updateLoadingState() {
   $('load-more').textContent=state.loadError?'Réessayer':'Charger la suite';
   $('load-more-status').textContent=state.loading?'Chargement de la suite…':state.loadError?'Le chargement a échoué. Vous pouvez réessayer.':!state.hasMore&&state.items.length?'Tous les résultats sont affichés.':'';
 }
+function collectionMetric(items, field) {
+  const values=items.map(item=>item[field]).filter(value=>value!==null&&value!==undefined&&value!=='');
+  if(field==='rating'||field==='user_rating') {
+    const ratings=values.map(Number).filter(value=>Number.isFinite(value)&&value>0);
+    return ratings.length?ratings.reduce((sum,value)=>sum+value,0)/ratings.length:null;
+  }
+  if(field==='year') {
+    const years=values.map(Number).filter(value=>Number.isFinite(value)&&value>0);
+    return years.length?Math.max(...years):null;
+  }
+  const timestamps=values.map(value=>Date.parse(String(value))).filter(Number.isFinite);
+  return timestamps.length?Math.max(...timestamps):null;
+}
 function collectionGroups(items) {
+  const available=new Set(items.flatMap(media=>media.collections||[])
+    .filter(isSagaCollection).map(collectionName).map(collectionFold));
   const groups=new Map();
   for(const media of items) {
-    const names=[...new Set((media.collections||[]).map(collectionName).filter(Boolean))];
-    for(const name of names.length?names:['']) {
-      if(!groups.has(name))groups.set(name,[]);
-      groups.get(name).push(media);
+    const names=[...new Set((media.collections||[]).filter(isSagaCollection)
+      .map(name=>normalizedSagaName(name,available))
+      .map(name=>state.mergeEquivalentCollections?collectionFold(name):name))];
+    for(const key of names.length?names:['']) {
+      if(!groups.has(key))groups.set(key,{id:key,title:key,items:[]});
+      const group=groups.get(key);
+      if(!group.items.some(item=>item.id===media.id))group.items.push(media);
+      if(state.mergeEquivalentCollections&&key&&group.title===key) {
+        const original=(media.collections||[]).find(name=>collectionFold(normalizedSagaName(name,available))===key);
+        if(original)group.title=normalizedSagaName(original,available);
+      }
     }
   }
-  return [...groups].map(([id,items])=>({id,title:id||'Autres titres',items}))
-    .sort((a,b)=>!a.id?1:!b.id?-1:a.title.localeCompare(b.title,displayLocale()));
+  const ascending=state.order==='asc',sort=$('sort').value;
+  const groupsList=[...groups.values()];
+  for(const group of groupsList) {
+    if(!group.id)group.title='Autres titres';
+    group.metric=sort==='title'?null:collectionMetric(group.items,sort);
+  }
+  return groupsList.sort((a,b)=>{
+    if(!a.id)return 1;
+    if(!b.id)return -1;
+    if(sort!=='title'&&a.metric!==b.metric) {
+      if(a.metric===null)return 1;
+      if(b.metric===null)return -1;
+      return ascending?a.metric-b.metric:b.metric-a.metric;
+    }
+    const title=a.title.localeCompare(b.title,displayLocale(),{numeric:true});
+    return ascending?title:-title;
+  });
 }
 function collectionArtwork(items) {
   const posters=items.map(item=>item.artwork?.poster).filter(Boolean).slice(0,4);
@@ -1124,7 +1178,7 @@ async function loadMedia({append=false}={}) {
 }
 function fillSelect(id, values, label) {
   const selected=$(id).value;
-  $(id).innerHTML=`<option value="">${label}</option>`+values.map(v=>`<option value="${esc(v)}">${esc(id==='collection'?collectionName(v):v)}</option>`).join('');
+  $(id).innerHTML=`<option value="">${label}</option>`+values.filter(v=>id!=='collection'||isSagaCollection(v)).map(v=>`<option value="${esc(v)}">${esc(id==='collection'?collectionName(v):v)}</option>`).join('');
   if (values.includes(selected)) $(id).value=selected;
 }
 // Playback recents are replicated by the existing local-first history API.
