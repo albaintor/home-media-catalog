@@ -2,7 +2,7 @@
 
 [← Overview](../README.md) · [Install the server](installation.md)
 
-## Current development features (October 2026)
+## Current development features (November 2026)
 
 The native client and server/web application are developed separately. Availability
 depends on the checked-out branch, server compatibility, network source and device.
@@ -36,6 +36,18 @@ depends on the checked-out branch, server compatibility, network source and devi
   release checks](../THIRD_PARTY_NOTICES.md). An experimental dynamic-FFmpeg
   dependency does not make every transitive library App Store compliant.
 
+## Built-in catalogue, barcode identification and collection grouping
+
+The **internal catalogue** is available alongside Kodi, CLZ Movies, My Movies and Filmotech. A movie, TV series or physical DVD/Blu-ray edition can be added without a playable file, an XML export or a Kodi instance. It is usable through the web server and in the native iPhone/iPad app, including iOS standalone mode.
+
+1. **Identify by title:** search TMDB progressively and choose a result with its title, year, media type and poster. The selected poster stays visible while editing; the user can switch to another result.
+2. **Identify by barcode:** enter an EAN/UPC/GTIN on the web, or enter/scan it with the iPhone/iPad camera. The catalog is checked first when available, followed by external product indexes. The first available TMDB search result can be **preselected** following a successful barcode lookup, but must be reviewed before adding: the product barcode identifies an edition, **not** a TMDB film ID. Barcode database coverage and availability are not guaranteed.
+3. **Match across sources:** add the internal physical edition to the existing title when a strong TMDB/IMDb identifier matches or the title/year match is unambiguous and compatible. Different editions can therefore be displayed within **one media detail** even when they come from CLZ, Kodi or another source.
+4. **Remove individually:** use the catalogue item context menu or the button at the bottom of its media details to remove an internal edition. This action must not delete any edition belonging to CLZ, Kodi, My Movies or Filmotech.
+5. **Browse by collection:** group catalog items by collection instead of displaying only individual titles. The web and iOS navigation show collection artwork and allow opening a group to browse its members. Imported collections are separate from user-maintained custom lists.
+
+TMDB identification requires access to TMDB: the server's configured API token for web/paired operation, or a TMDB token configured on-device for standalone mode. The catalogue still supports manual title entry without that service. Local and server-synchronized behavior depends on compatible client/server versions.
+
 ## Full feature list
 
 - Title and original-title search remains available. **The current iOS development client enables advanced search by default** (with a one-time migration of older saved defaults), while users can still disable it in Filters and sorting. Advanced search covers synopses, genres, collections, cast and credits. Multiword person names such as **John Williams** are matched against the exact normalized credit-name index where available, avoiding false positives from independent tokens in unrelated metadata. If no credit is indexed, capitalized names fall back to adjacent FTS phrase matching; ordinary keyword searches still support flexible AND matching and prefix typing.
@@ -45,7 +57,7 @@ depends on the checked-out branch, server compatibility, network source and devi
 - Responsive details with Kodi cast members and roles, resolution and 3D badges, Dolby Vision/HDR10/HDR10+, Dolby/DTS audio, and physical media formats. Per-edition technical details remain available through the API.
 - **Read-only** synchronization from Kodi MariaDB, covering movies, TV shows, episodes, IMDb/TMDB/TVDB identifiers, and alternative versions when exposed by `movie_view`.
 - CLZ Movies XML import: editions, Blu-ray/4K/3D/DVD formats, barcodes, box sets, languages, subtitles, and `seenhistory`.
-- Kodi/CLZ matching using reliable external identifiers and media type, with a conservative fallback to unambiguous title **and** year matches. Editions remain attached to their respective sources.
+- Kodi/CLZ/My Movies/Filmotech/internal matching using reliable external identifiers and media type, with a conservative fallback to unambiguous title **and** year matches. Editions remain attached to their respective sources.
 - Multiple Kodi HTTP/JSON-RPC players associated with a MariaDB source. Play or resume on an **already running** Kodi instance without relying on Home Assistant entities.
 - MariaDB and Kodi connection tests before adding a source: networking, authentication, MyVideos database, read permissions, and Kodi HTTP control. These tests are also available through the API.
 - Persistent local SQLite database and artwork cache: **no second MariaDB server**.
