@@ -56,6 +56,17 @@ def test_internal_multiple_physical_editions_share_one_work(store):
     assert len(store.detail(first["id"])["editions"]) == 2
 
 
+def test_manual_editions_without_provider_ids_join_only_matching_title_and_year(store):
+    first = store.save_internal_media(entry(id=str(uuid4()), tmdb_id=None, format="DVD"))
+    second = store.save_internal_media(entry(id=str(uuid4()), tmdb_id=None,
+                                              format="Blu-ray", barcode=None))
+    assert first["id"] == second["id"]
+    remake = store.save_internal_media(entry(id=str(uuid4()), tmdb_id=None,
+                                              format="DVD", year=2025))
+    assert remake["id"] != first["id"]
+    assert store.media(source_type="internal")["total"] == 2
+
+
 def test_internal_invalid_barcode_does_not_persist(store):
     with pytest.raises(ValueError, match="barcode"):
         store.save_internal_media(entry(barcode="4006381333932"))
