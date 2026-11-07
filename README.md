@@ -7,7 +7,10 @@ Home Media Catalog combines a responsive, self-hosted **web application** with a
 
 ## Highlights
 
-- **Combine** Kodi and CLZ Movies, MyMovies, or Filmotech (XML imports), with editions grouped by title.
+- **Combine** Kodi and CLZ Movies, My Movies, or Filmotech (XML imports), with editions from different sources grouped into the same film or TV-series record when a reliable match exists.
+- **Maintain an internal catalogue:** manually add movies, TV series, DVDs, Blu-rays and 4K UHD Blu-rays without importing a file or requiring Kodi. Remove individual internal editions without deleting matching Kodi, CLZ or other-source records.
+- **Identify discs by barcode or title:** scan an EAN/UPC/GTIN with the iPhone/iPad camera, or enter a barcode or search by title. Select from TMDB results with artwork previews; a barcode match can preselect a TMDB result for review. Public barcode databases cannot identify every commercial release.
+- **Browse by collections:** switch between poster grid, list and collection-grouped navigation, including collection artwork and browsing the titles inside each group.
 - **Explore** movies, TV shows and episodes with posters, cast, formats, advanced filters and optional TMDB metadata.
 - **Organize** your collection using custom lists, personal ratings and watched status.
 - **Play** selected titles on an existing Kodi player, with advanced playback controls and media information.
@@ -19,7 +22,7 @@ Home Media Catalog combines a responsive, self-hosted **web application** with a
 - **Choose standalone or server mode:** in standalone mode the iOS app imports and synchronizes Kodi directly, without Docker. In server mode it synchronizes catalogue metadata with the server while Kodi remote commands are sent directly from the iPhone.
 - **Music** : synchronize your Kodi music library and navigate and play your albums, artists, playlists
 
-Collection-only catalogs do not require Kodi.
+Collection-only catalogues and manually maintained internal entries do not require Kodi. The internal catalogue is available in both the browser and the native iOS/iPadOS app; the latter also works in standalone mode without the server.
 
 ### Web interface
 
@@ -38,6 +41,18 @@ Collection-only catalogs do not require Kodi.
 <img width="250" alt="image" src="https://github.com/user-attachments/assets/c74639b9-a45e-4f1c-87f0-9998220aecbc" />
 
 
+
+### Internal catalogue, disc barcodes and collections
+
+The **internal catalogue** is a first-class source alongside Kodi, CLZ Movies, My Movies and Filmotech. It is designed for films, TV series and physical editions you want to catalogue without an XML import or a playable file.
+
+- **Web:** use **+ Add to catalog** in the video library. Search TMDB by film/series title or enter an EAN/UPC/GTIN barcode. The form shows cover thumbnails, selects a matching TMDB result after a successful barcode lookup, and lets you review or change the match before saving. Entering a barcode in the web interface does not require a camera.
+- **iPhone/iPad:** use the **+** action in the catalogue toolbar. Search by title, type a barcode, or **scan the barcode with the camera**. Results include available cover artwork, and a barcode search automatically preselects an available TMDB match for review. A configured TMDB token is needed for TMDB search in standalone mode.
+- **Multi-source editions:** a manually added edition is associated with an existing work when the TMDB/IMDb identifier or an unambiguous compatible title/year identifies the same title. The existing source editions remain independent; a new physical format is **not** a second copy of the film in the main grid.
+- **Remove safely:** choose **Remove from internal catalog** from a media context menu or from the bottom of its detail view, then select the internal edition. Only that edition is removed; imported Kodi/CLZ/My Movies/Filmotech editions remain.
+- **Browse by collection:** use the collection grouping mode to show grouped covers and open each collection. Imported collection labels are kept distinct from custom user-created lists, and navigation is available in both web and iOS views.
+
+Barcode lookup checks catalogue records and supported external indexes. Coverage differs by country, barcode type and disc release; no provider guarantees a match for every DVD or Blu-ray. TMDB identifies the **film or series**, whereas the barcode identifies a **commercial edition**. When the two cannot be associated confidently, select the correct title manually. In standalone mode, additions are stored on-device; a paired server provides shared catalogue synchronization.
 
 ### Automatic secured pairing
 
@@ -90,6 +105,9 @@ limits. See the [AI setup and privacy guide](docs/ai-search.md).
 
 | Area | Server / web | Native iOS / iPadOS |
 | --- | --- | --- |
+| **Internal catalogue** | Add/remove films, series and physical editions without an external import; link editions to existing works | Create and delete internal editions in standalone or server-paired mode, without removing other-source editions |
+| **Barcode / title identification** | Type EAN/UPC/GTIN or search TMDB; show poster previews and review the proposed match | Type or camera-scan barcodes; TMDB title search, cover thumbnails and automatic first-match preselection after barcode lookup |
+| **Collection-grouped navigation** | Collection cover groups, sortable catalogue and selection of individual collection members | Collection artwork and grouped browsing on iPhone/iPad, including standalone library |
 | **AI search** | OpenAI, Claude and Gemini; one selected language model; optional OpenAI embeddings retained | Configurable through compatible server settings; standard search remains local to the catalogue |
 | **Network explorer** | SMB, FTP, SFTP and mounted NFS sources; browser playback/remux/transcoding | Direct SMB/NFS/FTP/SFTP access in standalone or server-paired mode, plus OneDrive; browsing and file operations |
 | **Playback** | Audio tracks, subtitles and chapters; remux or FFmpeg conversion | AVC/HEVC/VC-1 where supported, selectable tracks/subtitles, compatible Atmos audio, offline video and 48/60 fps MEMC |
@@ -109,7 +127,7 @@ The project includes **more than collection management**:
 - **Cloud media:** OneDrive is currently the only supported integrated provider (including Device Code sign-in for private NAS deployments). Other cloud connectors are not exposed until supported. OneDrive OAuth tokens remain encrypted on the server. Apple's iCloud Drive remains accessible through **iOS Files**, not a server-side iCloud connector.
 - **Native iOS playback:** AVPlayer plus an optional PrismCore/FFmpeg-assisted route for compatible AVC/H.264, HEVC/H.265 and VC-1 videos, track/subtitle selection, chapters, multichannel audio (including Dolby Atmos on compatible playback paths), technical diagnostics, Blu-ray ISO/BDMV playback and offline files. Importing via Files copies the video to app storage; it is not a zero-copy third-party stream.
 - **iOS MEMC motion interpolation:** 48/60 fps targets with Apple VideoToolbox, Vision/Metal optical-flow or AI RIFE processing, coarse-to-fine motion estimation and artifact-protection profiles. MEMC can be disabled at any time; Dolby Vision output depends on the selected video processing path.
-- **Catalogue/sync:** Kodi synchronisation and cleanup, JSON backups, multi-source libraries, personalised lists and optional conversational AI search.
+- **Catalogue/sync:** Kodi synchronisation and cleanup, JSON backups, internal editions matched to other catalogues, collection-grouped browsing, barcode/TMDB title identification, personalised lists and optional conversational AI search.
 
 
 ### iOS evaluation, purchase and support
@@ -120,6 +138,7 @@ The iOS/iPadOS client implements **10 free full-screen video playback sessions**
 The native **Settings → Support** section links to this project's
 [home page](https://github.com/albaintor/home-media-catalog) and
 [issue tracker](https://github.com/albaintor/home-media-catalog/issues).
+The [native iOS description](https://github.com/albaintor/home-media-catalog-ios/blob/2.2.4/docs/APP_STORE_DESCRIPTION_EN.md) is maintained separately for App Store Connect and documents both standalone and server-assisted operation.
 The main collection context menu uses **Play on…** to choose a configured Kodi instance; after opening playback, the app navigates to its Kodi remote tab.
 
 
