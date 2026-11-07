@@ -22,39 +22,39 @@ WIDTH, HEIGHT, GAP = 360, 216, 4
 BACKGROUND = (25, 33, 46)
 
 
-def _regions(count: int) -> list[tuple[int, int, int, int]]:
+def _regions(count: int, width: int = WIDTH, height: int = HEIGHT) -> list[tuple[int, int, int, int]]:
     if count == 1:
-        return [(0, 0, WIDTH, HEIGHT)]
+        return [(0, 0, width, height)]
     if count == 2:
-        left = (WIDTH - GAP) // 2
-        return [(0, 0, left, HEIGHT), (left + GAP, 0, WIDTH - left - GAP, HEIGHT)]
+        left = (width - GAP) // 2
+        return [(0, 0, left, height), (left + GAP, 0, width - left - GAP, height)]
     if count == 3:
-        left = (WIDTH - GAP) // 2
-        top = (HEIGHT - GAP) // 2
+        left = (width - GAP) // 2
+        top = (height - GAP) // 2
         return [
-            (0, 0, left, HEIGHT),
-            (left + GAP, 0, WIDTH - left - GAP, top),
-            (left + GAP, top + GAP, WIDTH - left - GAP, HEIGHT - top - GAP),
+            (0, 0, left, height),
+            (left + GAP, 0, width - left - GAP, top),
+            (left + GAP, top + GAP, width - left - GAP, height - top - GAP),
         ]
-    left, top = (WIDTH - GAP) // 2, (HEIGHT - GAP) // 2
+    left, top = (width - GAP) // 2, (height - GAP) // 2
     return [
         (0, 0, left, top),
-        (left + GAP, 0, WIDTH - left - GAP, top),
-        (0, top + GAP, left, HEIGHT - top - GAP),
-        (left + GAP, top + GAP, WIDTH - left - GAP, HEIGHT - top - GAP),
+        (left + GAP, 0, width - left - GAP, top),
+        (0, top + GAP, left, height - top - GAP),
+        (left + GAP, top + GAP, width - left - GAP, height - top - GAP),
     ]
 
 
-def compose(images: list[bytes | None]) -> bytes:
+def compose(images: list[bytes | None], *, width: int = WIDTH, height: int = HEIGHT) -> bytes:
     """Fill each tile even when its original poster is unavailable."""
-    canvas = Image.new("RGB", (WIDTH, HEIGHT), BACKGROUND)
+    canvas = Image.new("RGB", (width, height), BACKGROUND)
     if not images:
         draw = ImageDraw.Draw(canvas)
-        draw.rounded_rectangle((144, 54, 216, 162), radius=10, outline=(125, 153, 177), width=4)
-        draw.line((153, 75, 207, 75), fill=(125, 153, 177), width=4)
-        draw.line((153, 91, 191, 91), fill=(125, 153, 177), width=4)
+        draw.rounded_rectangle((width * 2 // 5, height // 4, width * 3 // 5, height * 3 // 4), radius=10, outline=(125, 153, 177), width=4)
+        draw.line((width * 9 // 20, height // 3, width * 11 // 20, height // 3), fill=(125, 153, 177), width=4)
+        draw.line((width * 9 // 20, height // 2, width * 11 // 20, height // 2), fill=(125, 153, 177), width=4)
     else:
-        for data, (x, y, w, h) in zip(images[:4], _regions(len(images[:4])), strict=False):
+        for data, (x, y, w, h) in zip(images[:4], _regions(len(images[:4]), width, height), strict=False):
             if data:
                 try:
                     with Image.open(io.BytesIO(data)) as source:
@@ -95,13 +95,19 @@ class ListThumbnails:
         # is built; avoid trusting URL segments as filesystem path components.
         return self.directory / f"{list_id}-{revision}.jpg"
 
+    def thumbnail_input(self, list_id: str):
+        return self.store.list_thumbnail_input(list_id)
+
+    def composite(self, images: list[bytes | None]) -> bytes:
+        return compose(images)
+
     async def ensure(self, list_id: str, revision: int) -> bytes | None:
         """Read already-generated image; generate at most once for a revision."""
         if revision < 0:
             return None
         lock = self._locks.setdefault(list_id, asyncio.Lock())
         async with lock:
-            source = await asyncio.to_thread(self.store.list_thumbnail_input, list_id)
+            source = await asyncio.to_thread(self.thumbnail_input, list_id)
             if source is None or source["revision"] != revision:
                 return None
             path = self._path(list_id, revision)
@@ -126,17 +132,17 @@ class ListThumbnails:
                 )
             except TimeoutError:
                 images = [None] * len(source["posters"])
-            result = await asyncio.to_thread(compose, images)
+            result = await asyncio.to_thread(self.composite, images)
             # An import or list edit may have changed the revision while posters
             # were downloaded. Never cache a stale image under a newer URL.
-            current = await asyncio.to_thread(self.store.list_thumbnail_input, list_id)
+            current = await asyncio.to_thread(self.thumbnail_input, list_id)
             if current is None or current["revision"] != revision:
                 return None
             await asyncio.to_thread(self._save, list_id, revision, result)
             return result
 
     async def warm(self, list_id: str) -> None:
-        source = await asyncio.to_thread(self.store.list_thumbnail_input, list_id)
+        source = await asyncio.to_thread(self.thumbnail_input, list_id)
         if source is not None:
             try:
                 await self.ensure(list_id, source["revision"])
@@ -165,3 +171,17 @@ class ListThumbnails:
         lock = self._locks.setdefault(list_id, asyncio.Lock())
         async with lock:
             await asyncio.to_thread(self.remove_old, list_id)
+
+
+class CollectionThumbnails(ListThumbnails):
+    """Persistent 2:3 mosaics with the same race-free revision checks as lists."""
+
+    def __init__(self, store, artwork, data_dir: Path):
+        super().__init__(store, artwork, data_dir)
+        self.directory = data_dir / "collection-thumbnails"
+
+    def thumbnail_input(self, collection_id: str):
+        return self.store.collection_thumbnail_input(collection_id)
+
+    def composite(self, images: list[bytes | None]) -> bytes:
+        return compose(images, width=300, height=450)
