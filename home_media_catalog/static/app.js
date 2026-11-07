@@ -1150,11 +1150,20 @@ function collectionGroups(items) {
   }
   const ascending=state.order==='asc',sort=$('sort').value;
   const groupsList=mergeCollectionGroupsByMembers(groups);
-  for(const group of groupsList) {
+  // A one-film collection is rendered as a direct media card. Do not show it
+  // separately when its work is already in a larger collection. This applies
+  // even with equivalent-name merging disabled, and changes no source data.
+  const containedInLargerCollection=new Set(
+    groupsList.filter(group=>group.id&&group.items.length>1)
+      .flatMap(group=>group.items.map(media=>media.id))
+  );
+  const visibleGroups=groupsList.filter(group=>!group.id||
+    group.items.length!==1||!containedInLargerCollection.has(group.items[0].id));
+  for(const group of visibleGroups) {
     if(!group.id)group.title='Autres titres';
     group.metric=sort==='title'?null:collectionMetric(group.items,sort);
   }
-  return groupsList.sort((a,b)=>{
+  return visibleGroups.sort((a,b)=>{
     if(!a.id)return 1;
     if(!b.id)return -1;
     if(sort!=='title'&&a.metric!==b.metric) {
