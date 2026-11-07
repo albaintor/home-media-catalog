@@ -1072,6 +1072,52 @@ function collectionMetric(items, field) {
   const timestamps=values.map(value=>Date.parse(String(value))).filter(Number.isFinite);
   return timestamps.length?Math.max(...timestamps):null;
 }
+// Two different source records must independently assign at least two of the
+// same canonical work IDs to different collection names before automatic union.
+function sharedCrossSourceMembers(left, right) {
+  let matches=0;
+  for(const [id,sourceA] of left.provenance) {
+    const sourceB=right.provenance.get(id);
+    if(!sourceB||!sourceA.size||!sourceB.size)continue;
+    if([...sourceA].some(a=>[...sourceB].some(b=>a!==b))) {
+      matches++;
+      if(matches>=2)return true;
+    }
+  }
+  return false;
+}
+function mergeCollectionGroupsByMembers(groups) {
+  if(!state.mergeEquivalentCollections)return groups;
+  const ordered=[...groups.values()].filter(group=>group.id).sort((a,b)=>a.id.localeCompare(b.id));
+  const unseen=new Set(ordered.map(group=>group.id));
+  const merged=[];
+  for(const seed of ordered) {
+    if(!unseen.delete(seed.id))continue;
+    const component=[seed],queue=[seed];
+    while(queue.length) {
+      const current=queue.pop();
+      for(const candidate of ordered) {
+        if(unseen.has(candidate.id)&&sharedCrossSourceMembers(current,candidate)) {
+          unseen.delete(candidate.id);component.push(candidate);queue.push(candidate);
+        }
+      }
+    }
+    const preferred=[...component].sort((a,b)=>b.items.length-a.items.length||
+      a.title.length-b.title.length||a.title.localeCompare(b.title,displayLocale()))[0];
+    const members=new Map(),provenance=new Map();
+    for(const group of component) {
+      for(const item of group.items)members.set(item.id,item);
+      for(const [id,sources] of group.provenance) {
+        if(!provenance.has(id))provenance.set(id,new Set());
+        for(const idOfSource of sources)provenance.get(id).add(idOfSource);
+      }
+    }
+    merged.push({id:preferred.id,title:preferred.title,items:[...members.values()],
+      provenance,seen:new Set(members.keys())});
+  }
+  if(groups.has(''))merged.push(groups.get(''));
+  return merged;
+}
 function collectionGroups(items) {
   const available=new Set(items.flatMap(media=>media.collections||[])
     .filter(isSagaCollection)
@@ -1079,21 +1125,30 @@ function collectionGroups(items) {
     .map(collectionFold));
   const groups=new Map();
   for(const media of items) {
-    const names=[...new Set((media.collections||[]).filter(isSagaCollection)
-      .map(name=>normalizedSagaName(name,available))
-      .map(name=>state.mergeEquivalentCollections?collectionFold(name):name))];
-    for(const key of names.length?names:['']) {
-      if(!groups.has(key))groups.set(key,{id:key,title:key,items:[],seen:new Set()});
+    const matched=(media.collections||[]).filter(isSagaCollection);
+    const names=new Set();
+    for(const raw of matched) {
+      const name=normalizedSagaName(raw,available);
+      const key=state.mergeEquivalentCollections?collectionFold(name):name;
+      names.add(key);
+      if(!groups.has(key))groups.set(key,{id:key,title:name,items:[],seen:new Set(),provenance:new Map()});
       const group=groups.get(key);
       if(!group.seen.has(media.id)){group.seen.add(media.id);group.items.push(media);}
-      if(state.mergeEquivalentCollections&&key&&group.title===key) {
-        const original=(media.collections||[]).find(name=>collectionFold(normalizedSagaName(name,available))===key);
-        if(original)group.title=normalizedSagaName(original,available);
-      }
+      const origin=media.collection_sources?.[raw];
+      const trusted=Array.isArray(origin)?origin:
+        (media.media_sources?.length===1?[media.media_sources[0].id]:[]);
+      if(!group.provenance.has(media.id))group.provenance.set(media.id,new Set());
+      for(const sourceID of trusted)if(typeof sourceID==='string'&&sourceID)
+        group.provenance.get(media.id).add(sourceID);
+    }
+    if(!names.size) {
+      if(!groups.has(''))groups.set('',{id:'',title:'Autres titres',items:[],seen:new Set(),provenance:new Map()});
+      const other=groups.get('');
+      if(!other.seen.has(media.id)){other.seen.add(media.id);other.items.push(media);}
     }
   }
   const ascending=state.order==='asc',sort=$('sort').value;
-  const groupsList=[...groups.values()];
+  const groupsList=mergeCollectionGroupsByMembers(groups);
   for(const group of groupsList) {
     if(!group.id)group.title='Autres titres';
     group.metric=sort==='title'?null:collectionMetric(group.items,sort);
