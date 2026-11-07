@@ -1204,25 +1204,27 @@ class Store:
             if cls._ids_compatible(new_ids, cls._work_ids(conn, candidate)):
                 return candidate, 0
 
-        # No common external ID: only an *unambiguous* exact title (localized
-        # or original) AND a matching year can join entries from different providers.
-        # Never use this fallback after conflicting/ambiguous identifier matches.
-        if (
-            not candidates
-            and source_type in SOURCE_TYPES
-            and record.kind == "movie"
-            and record.year is not None
-        ):
+        # Existing works from ALL sources (Kodi, CLZ, My Movies, Filmotech,
+        # manual additions) can gain another edition without a second poster.
+        # Prefer a strong identifier; otherwise require an unambiguous,
+        # compatible exact title and release year. Do not merge remakes.
+        if not candidates and source_type in SOURCE_TYPES and record.kind in {"movie", "tvshow"}:
             keys = cls._title_keys(record.title, record.original_title)
             matches = []
             if keys:
                 for row in conn.execute(
-                    "SELECT id,title,original_title FROM works WHERE kind=? AND year=?",
-                    (record.kind, record.year),
+                    "SELECT id,title,original_title,year FROM works WHERE kind=?",
+                    (record.kind,),
                 ):
                     if row["id"] == exclude or not keys.intersection(
                         cls._title_keys(row["title"], row["original_title"])
                     ):
+                        continue
+                    if record.year is not None and row["year"] is not None and record.year != row["year"]:
+                        continue
+                    # An unspecified year on both sides would allow same-name
+                    # remakes or unrelated series to collide.
+                    if record.year is None and row["year"] is None:
                         continue
                     kinds = {
                         entry[0]
@@ -1232,9 +1234,6 @@ class Store:
                             (row["id"],),
                         )
                     }
-                    # Internal entries represent physical editions: a second DVD
-                    # of the same exact title/year may join a previous manual one.
-                    # Other importers retain their stricter same-source isolation.
                     if (source_type in kinds and source_type != "internal") or not kinds.intersection(SOURCE_TYPES):
                         continue
                     if cls._ids_compatible(new_ids, cls._work_ids(conn, row["id"])):
