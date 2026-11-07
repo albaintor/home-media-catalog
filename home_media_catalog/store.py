@@ -249,8 +249,6 @@ class Store:
             from .music import MusicCatalogue
 
             MusicCatalogue.initialize(conn)
-            conn.execute("INSERT OR IGNORE INTO sources(id,name,type,enabled,config) VALUES(?,?,?,?,?)",
-                         ("internal", "Internal catalog", "internal", 1, "{}"))
             # Remove obsolete separate-writer secrets on existing installations.
             for row in conn.execute("SELECT id,config FROM sources WHERE type='kodi'"):
                 saved = json.loads(row["config"])
