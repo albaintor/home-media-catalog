@@ -63,7 +63,7 @@
       </nav>
     </header>
     <section id="video-page" class="catalogue">
-      <div class="heading-row"><p id="catalogue-status" class="muted">Chargement du catalogue…</p><div class="view-switch" aria-label="Mode d’affichage"><button id="grid-view" aria-label="Vue pochettes" aria-pressed="true">▦</button><button id="list-view" aria-label="Vue liste" aria-pressed="false">☷</button></div></div>
+      <div class="heading-row"><p id="catalogue-status" class="muted">Chargement du catalogue…</p><button id="internal-add-button" class="primary" type="button" hidden>＋ Ajouter au catalogue</button><div class="view-switch" aria-label="Mode d’affichage"><button id="grid-view" aria-label="Vue pochettes" aria-pressed="true">▦</button><button id="list-view" aria-label="Vue liste" aria-pressed="false">☷</button></div></div>
       <section class="network-home" aria-labelledby="network-home-title">
         <div class="list-home-heading"><h2 id="network-home-title">Explorateur réseau et cloud</h2><p>Parcourir vos emplacements enregistrés sans quitter la bibliothèque.</p></div>
         <div id="network-home-locations" class="network-home-locations"></div>
@@ -163,6 +163,29 @@
         <section id="music-sources" hidden></section>
       </section>
   </main>
+  <dialog id="internal-add-dialog" class="small-dialog internal-add-dialog" aria-labelledby="internal-add-title">
+    <button class="dialog-close" data-close="internal-add-dialog" aria-label="Fermer">×</button>
+    <h2 id="internal-add-title">Ajouter au catalogue interne</h2>
+    <p class="hint">Ajoutez une édition physique ou un titre sans fichier. Le code-barres identifie un produit ; la fiche du film provient de TMDB.</p>
+    <form id="internal-add-form" class="internal-add-form">
+      <label>Code-barres EAN / UPC <span class="hint">(facultatif)</span>
+        <div class="internal-inline"><input id="internal-barcode" inputmode="numeric" autocomplete="off" placeholder="EAN-13 ou UPC-A" maxlength="14"><button id="internal-lookup" type="button" class="secondary">Identifier</button></div>
+      </label>
+      <p id="internal-barcode-message" class="hint" role="status"></p>
+      <label>Rechercher dans TMDB<input id="internal-search" type="search" autocomplete="off" placeholder="Commencez à saisir un titre…"></label>
+      <div id="internal-suggestions" class="internal-suggestions" role="listbox" aria-label="Résultats TMDB"></div>
+      <p id="internal-selection" class="hint" role="status">Vous pouvez aussi renseigner le titre manuellement.</p>
+      <label>Titre<input id="internal-title" required maxlength="300"></label>
+      <div class="internal-inline-fields">
+        <label>Type<select id="internal-kind"><option value="movie">Film</option><option value="tvshow">Série</option></select></label>
+        <label>Année<input id="internal-year" type="number" min="1870" max="2200" step="1"></label>
+      </div>
+      <label>Support<select id="internal-format"><option value="">Non spécifié</option><option>DVD</option><option>Blu-ray</option><option>Blu-ray 3D</option><option>4K Ultra HD Blu-ray</option></select></label>
+      <label>Synopsis (facultatif)<textarea id="internal-plot" maxlength="5000" rows="3"></textarea></label>
+      <p id="internal-add-error" class="error-text" role="alert"></p>
+      <div class="internal-actions"><button type="button" class="secondary" data-close="internal-add-dialog">Annuler</button><button type="submit" class="primary" id="internal-save">Ajouter au catalogue</button></div>
+    </form>
+  </dialog>
   <dialog id="detail-dialog" class="detail-dialog"><button class="dialog-close" data-close="detail-dialog" aria-label="Fermer la fiche">×</button><div id="detail-content"></div></dialog>
   <dialog id="artwork-gallery-dialog" class="artwork-gallery-dialog" aria-label="Galerie d’images du média"><button type="button" class="dialog-close" data-close="artwork-gallery-dialog" aria-label="Fermer la galerie">×</button><div class="artwork-gallery-layout"><div class="artwork-gallery-header"><strong id="artwork-gallery-title"></strong><span id="artwork-gallery-counter" aria-live="polite"></span></div><div class="artwork-gallery-frame"><button type="button" id="artwork-gallery-prev" class="artwork-gallery-step" data-artwork-step="-1" aria-label="Image précédente">‹</button><img id="artwork-gallery-image" draggable="false" alt=""><button type="button" id="artwork-gallery-next" class="artwork-gallery-step" data-artwork-step="1" aria-label="Image suivante">›</button></div><div id="artwork-gallery-caption" class="artwork-gallery-caption" aria-live="polite"></div></div></dialog>
   <dialog id="connections-dialog" class="connections-dialog"><button class="dialog-close" data-close="connections-dialog" aria-label="Fermer les paramètres">×</button><p class="eyebrow">VOTRE CATALOGUE</p><h2>Paramètres</h2><p class="muted">Importez une collection ou connectez la base Kodi. Les lecteurs sont facultatifs.</p><div id="connection-content"></div></dialog>
