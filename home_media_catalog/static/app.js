@@ -1684,6 +1684,7 @@ $('internal-add-button').addEventListener('click', () => {
   $('internal-add-error').textContent = '';
   $('internal-selection').textContent = 'Vous pouvez aussi renseigner le titre manuellement.';
   $('internal-barcode-message').textContent = '';
+  $('internal-search-barcode-web').hidden = true;
   internalSelection = null;
   showDialog('internal-add-dialog');
   $('internal-search').focus();
@@ -1735,6 +1736,9 @@ $('internal-search').addEventListener('input', () => {
 $('internal-lookup').addEventListener('click', async () => {
   const barcode = $('internal-barcode').value.trim();
   const message = $('internal-barcode-message');
+  const webLink = $('internal-search-barcode-web');
+  webLink.href='https://www.google.com/search?q='+encodeURIComponent('"'+barcode+'" DVD Blu-ray');
+  webLink.hidden=true;
   message.textContent = 'Identification du disque…';
   try {
     const found = await api('internal/barcode/' + encodeURIComponent(barcode));
@@ -1748,14 +1752,19 @@ $('internal-lookup').addEventListener('click', async () => {
       $('internal-search').value=simplified||found.title;
       $('internal-search').dispatchEvent(new Event('input'));
     } else if(found.status==='unavailable') {
+      webLink.hidden=false;
       message.textContent='Services de codes-barres indisponibles pour le moment. Réessayez ou recherchez le titre dans TMDB.';
     } else {
+      webLink.hidden=false;
       const failures=found.providers_unavailable||[];
       message.textContent='Code valide mais référence non répertoriée.'+
         (failures.length?' Services indisponibles : '+failures.join(', ')+'.':'')+
         ' Recherchez le titre dans TMDB.';
     }
-  } catch (failure) { message.textContent = failure.message; }
+  } catch (failure) {
+    webLink.hidden=false;
+    message.textContent = failure.message;
+  }
 });
 $('internal-add-form').addEventListener('submit', async (event) => {
   event.preventDefault();
