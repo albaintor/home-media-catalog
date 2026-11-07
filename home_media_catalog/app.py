@@ -762,6 +762,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(authenticated)],
     )
     async def search_internal_barcode(barcode: str):
+        from .internal_catalog import valid_barcode
+
+        if not valid_barcode(barcode):
+            raise HTTPException(422, "Invalid EAN/UPC/GTIN barcode or check digit.")
+        local = await asyncio.to_thread(store.find_barcode, barcode)
+        if local:
+            return local
         try:
             return await lookup_disc_barcode(barcode)
         except ValueError as exc:
