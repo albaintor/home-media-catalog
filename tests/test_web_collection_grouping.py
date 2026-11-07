@@ -153,16 +153,17 @@ for (const merge of [false,true]) {
   const groups=collectionGroups(media);
   assert.equal(groups.length,422);
   assert.ok(!groups.some(group=>group.title==='Autres titres'));
-  assert.equal(groups[0].title,'A - Saga');
-  assert.equal(groups[groups.length-1].title,'Z - Saga');
-  assert.equal(groups.find(group=>group.title==='A - Saga').items.length,2);
+  const firstName=merge?'A':'A - Saga',lastName=merge?'Z':'Z - Saga';
+  assert.equal(groups[0].title,firstName);
+  assert.equal(groups[groups.length-1].title,lastName);
+  assert.equal(groups.find(group=>group.title===firstName).items.length,2);
   assert.deepEqual(
     groups.filter(group=>group.id.startsWith('standalone:'))
       .map(group=>group.items[0].id).sort(),
     media.slice(0,420).map(item=>item.id).sort()
   );
   state.order='desc';
-  assert.equal(collectionGroups(media)[0].title,'Z - Saga');
+  assert.equal(collectionGroups(media)[0].title,lastName);
 }
 """
     subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
