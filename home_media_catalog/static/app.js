@@ -1739,11 +1739,21 @@ $('internal-lookup').addEventListener('click', async () => {
   try {
     const found = await api('internal/barcode/' + encodeURIComponent(barcode));
     if (found.found && found.title) {
-      message.textContent = 'Référence commerciale : ' + found.title + ' · Confirmez le film dans TMDB.';
-      $('internal-search').value = found.title;
+      const provider=({catalog:'votre catalogue',bnf:'BnF',upcitemdb:'UPCitemdb',
+        barcodelookup:'Barcode Lookup'})[found.source] || 'une base de codes-barres';
+      message.textContent='Référence trouvée dans '+provider+' : '+found.title+
+        ' · Vérifiez la correspondance du film dans TMDB.';
+      const simplified=found.title.replace(/\b(?:blu[- ]?ray|dvd|ultra hd|4k|edition|édition|disc|disque)\b/gi,'')
+        .replace(/\s{2,}/g,' ').trim();
+      $('internal-search').value=simplified||found.title;
       $('internal-search').dispatchEvent(new Event('input'));
+    } else if(found.status==='unavailable') {
+      message.textContent='Services de codes-barres indisponibles pour le moment. Réessayez ou recherchez le titre dans TMDB.';
     } else {
-      message.textContent = 'Code valide, mais aucune référence trouvée. Recherchez le titre dans TMDB.';
+      const failures=found.providers_unavailable||[];
+      message.textContent='Code valide mais référence non répertoriée.'+
+        (failures.length?' Services indisponibles : '+failures.join(', ')+'.':'')+
+        ' Recherchez le titre dans TMDB.';
     }
   } catch (failure) { message.textContent = failure.message; }
 });
