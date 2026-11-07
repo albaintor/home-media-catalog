@@ -163,6 +163,13 @@
         <section id="music-sources" hidden></section>
       </section>
   </main>
+  <dialog id="internal-remove-dialog" class="small-dialog" aria-labelledby="internal-remove-title">
+    <button type="button" class="dialog-close" data-close="internal-remove-dialog" aria-label="Fermer">×</button>
+    <h2 id="internal-remove-title">Retirer une édition interne</h2>
+    <p class="hint">Seules les éditions du catalogue interne peuvent être supprimées. Les éditions CLZ, Kodi et des autres sources restent intactes.</p>
+    <div id="internal-remove-list" class="internal-remove-list"></div>
+    <button type="button" class="secondary" data-close="internal-remove-dialog">Annuler</button>
+  </dialog>
   <dialog id="internal-add-dialog" class="small-dialog internal-add-dialog" aria-labelledby="internal-add-title">
     <button class="dialog-close" data-close="internal-add-dialog" aria-label="Fermer">×</button>
     <h2 id="internal-add-title">Ajouter au catalogue interne</h2>
