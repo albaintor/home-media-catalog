@@ -92,5 +92,30 @@ assert.equal(api.collectionGroups(sameSource).length,2);
 assert.equal(api.collectionGroups(batman.slice(0,1)).length,2);
 state.mergeEquivalentCollections=false;
 assert.equal(api.collectionGroups(batman).length,2);
+// A Kodi one-film set is redundant once the same canonical film appears
+// alongside the sequel in a larger physical collection, in either merge mode.
+const dune=[
+  {id:'dune-one',title:'Dune',year:2021,collections:['Dune','Dune 1 & 2'],
+   collection_sources:{Dune:['kodi'],'Dune 1 & 2':['clz']}},
+  {id:'dune-two',title:'Dune: Part Two',year:2024,collections:['Dune 1 & 2'],
+   collection_sources:{'Dune 1 & 2':['clz']}}
+];
+for(const merge of [false,true]){
+  state.mergeEquivalentCollections=merge;
+  const visible=api.collectionGroups(dune);
+  assert.equal(visible.length,1);
+  assert.equal(visible[0].title,'Dune 1 & 2');
+  assert.deepEqual(visible[0].items.map(item=>item.id).sort(),['dune-one','dune-two']);
+}
+// Do not hide a singleton which does not actually share a canonical work ID.
+const distinctMovies=[
+  {id:'single',title:'Different Dune',collections:['Dune']},
+  {id:'boxed-one',title:'Dune',collections:['Dune 1 & 2']},
+  {id:'boxed-two',title:'Dune: Part Two',collections:['Dune 1 & 2']}
+];
+state.mergeEquivalentCollections=false;
+assert.equal(api.collectionGroups(distinctMovies).length,2);
+// A pair of single-film collections has no larger collection to supersede it.
+assert.equal(api.collectionGroups([{id:'one',collections:['Short','Alternate']}]).length,2);
 """
     subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
