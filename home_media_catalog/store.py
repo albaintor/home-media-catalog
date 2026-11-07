@@ -1202,7 +1202,10 @@ class Store:
                             (row["id"],),
                         )
                     }
-                    if source_type in kinds or not kinds.intersection(SOURCE_TYPES):
+                    # Internal entries represent physical editions: a second DVD
+                    # of the same exact title/year may join a previous manual one.
+                    # Other importers retain their stricter same-source isolation.
+                    if (source_type in kinds and source_type != "internal") or not kinds.intersection(SOURCE_TYPES):
                         continue
                     if cls._ids_compatible(new_ids, cls._work_ids(conn, row["id"])):
                         matches.append(row["id"])
