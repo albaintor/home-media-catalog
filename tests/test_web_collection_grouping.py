@@ -1,8 +1,8 @@
 """Contracts for web film-saga grouping and sort parity with iOS."""
 
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
