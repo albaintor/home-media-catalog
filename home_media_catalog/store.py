@@ -1397,7 +1397,7 @@ class Store:
         search_text += " " + " ".join(
             str(p.get("metadata", {}).get(n) or "")
             for p, _ in entries
-            for n in ("director", "show_title", "tags", "cast", "people")
+            for n in ("director", "show_title", "tags", "cast", "people", "barcode")
         )
         enrichment = conn.execute(
             "SELECT payload FROM enrichment WHERE work_id=?", (work_id,)
