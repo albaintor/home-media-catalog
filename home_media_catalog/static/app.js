@@ -1750,7 +1750,31 @@ function internalPreview(element, imageURL, description, subtitle='') {
 let internalSelection = null;
 let internalSearchTimer = null;
 let internalSearchSerial = 0;
+let internalAutoSelectQuery = null;
+function selectInternalTMDB(item, automatically=false) {
+  internalSelection=item;
+  $('internal-title').value=item.title;
+  $('internal-year').value=item.year||'';
+  $('internal-kind').value=item.kind;
+  $('internal-plot').value=item.plot||'';
+  const caption=[item.year||'',item.kind==='tvshow'?'Série':'Film','TMDB #'+item.tmdb_id]
+    .filter(Boolean).join(' · ');
+  internalPreview($('internal-selected-preview'),
+    internalPosterURL(item.poster_path),item.title,caption);
+  $('internal-selection').textContent=automatically
+    ? 'Correspondance TMDB présélectionnée à partir du code-barres : vérifiez le titre et l’affiche avant de valider.'
+    : 'Correspondance TMDB sélectionnée. Vous pouvez choisir un autre résultat ci-dessous.';
+  for(const button of $('internal-suggestions').querySelectorAll('[data-internal-tmdb-id]')){
+    const picked=button.dataset.internalTmdbId===String(item.tmdb_id)&&
+      button.dataset.internalKind===item.kind;
+    button.classList.toggle('is-selected',picked);
+    button.setAttribute('aria-selected',String(picked));
+  }
+}
 $('internal-add-button').addEventListener('click', () => {
+  clearTimeout(internalSearchTimer);
+  ++internalSearchSerial;
+  internalAutoSelectQuery=null;
   $('internal-add-form').reset();
   $('internal-suggestions').replaceChildren();
   $('internal-add-error').textContent = '';
@@ -1775,6 +1799,14 @@ $('internal-search').addEventListener('input', () => {
   const serial = ++internalSearchSerial;
   clearTimeout(internalSearchTimer);
   $('internal-suggestions').replaceChildren();
+  if(internalAutoSelectQuery!==query){
+    internalAutoSelectQuery=null;
+    if(internalSelection){
+      internalSelection=null;
+      $('internal-selected-preview').hidden=true;
+      $('internal-selection').textContent='Choisissez une correspondance TMDB.';
+    }
+  }
   if (query.length < 2) return;
   internalSearchTimer = setTimeout(async () => {
     try {
@@ -1787,7 +1819,10 @@ $('internal-search').addEventListener('input', () => {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'internal-suggestion';
+        button.dataset.internalTmdbId=String(item.tmdb_id);
+        button.dataset.internalKind=item.kind;
         button.setAttribute('role','option');
+        button.setAttribute('aria-selected','false');
         const poster=internalPosterURL(item.poster_path);
         if(poster){
           const img=document.createElement('img');img.src=poster;
@@ -1801,17 +1836,17 @@ $('internal-search').addEventListener('input', () => {
           (item.kind==='tvshow'?' · Série':' · Film');
         button.appendChild(label);
         button.addEventListener('click', () => {
-          internalSelection = item;
-          $('internal-title').value = item.title;
-          $('internal-year').value = item.year || '';
-          $('internal-kind').value = item.kind;
-          $('internal-plot').value = item.plot || '';
-          $('internal-selection').textContent = 'TMDB #' + item.tmdb_id + ' · ' + item.title;
-          internalPreview($('internal-selected-preview'),poster,
-            item.title,(item.year||'')+' · TMDB #'+item.tmdb_id);
-          root.replaceChildren();
+          internalAutoSelectQuery=null;
+          selectInternalTMDB(item);
         });
         root.appendChild(button);
+      }
+      if(internalAutoSelectQuery===query){
+        internalAutoSelectQuery=null;
+        if(entries.length)selectInternalTMDB(entries[0],true);
+        else{
+          $('internal-selection').textContent='Aucune correspondance TMDB pour ce code-barres. Saisissez le titre manuellement.';
+        }
       }
       if (!entries.length) root.textContent = 'Aucun résultat. Saisissez le titre manuellement.';
     } catch (failure) {
@@ -1838,7 +1873,12 @@ $('internal-lookup').addEventListener('click', async () => {
         ' · Vérifiez la correspondance du film dans TMDB.';
       const simplified=found.title.replace(/\b(?:blu[- ]?ray|dvd|ultra hd|4k|edition|édition|disc|disque)\b/gi,'')
         .replace(/\s{2,}/g,' ').trim();
-      $('internal-search').value=simplified||found.title;
+      const tmdbQuery=simplified||found.title;
+      internalSelection=null;
+      $('internal-selected-preview').hidden=true;
+      internalAutoSelectQuery=tmdbQuery;
+      $('internal-selection').textContent='Recherche d’une correspondance TMDB pour le code-barres…';
+      $('internal-search').value=tmdbQuery;
       $('internal-search').dispatchEvent(new Event('input'));
     } else if(found.status==='unavailable') {
       $('internal-barcode-preview').hidden=true;
