@@ -21,8 +21,7 @@ DC_NS = "{http://purl.org/dc/elements/1.1/}"
 _CACHE: dict[str, tuple[float, dict]] = {}
 
 
-def valid_barcode(value: str) -> bool:
-    """Verify GTIN-8/12/13/14 with GS1's rightmost-body weight of 3."""
+def _valid_gtin(value: str) -> bool:
     if not BARCODE_RE.fullmatch(value):
         return False
     digits = [int(c) for c in value]
@@ -31,9 +30,34 @@ def valid_barcode(value: str) -> bool:
     return (10 - total % 10) % 10 == digits[-1]
 
 
+def expand_upce(value: str) -> str | None:
+    """Expand the short US UPC-E representation into equivalent UPC-A (GTIN-12)."""
+    if len(value) != 8 or not value.isascii() or not value.isdigit() or value[0] not in "01":
+        return None
+    system, a, b, c, d, e, f, check = value
+    if f in "012":
+        manufacturer, product = a + b + f + "00", "00" + c + d + e
+    elif f == "3":
+        manufacturer, product = a + b + c + "00", "000" + d + e
+    elif f == "4":
+        manufacturer, product = a + b + c + d + "0", "0000" + e
+    else:
+        manufacturer, product = a + b + c + d + e, "0000" + f
+    expanded = system + manufacturer + product + check
+    return expanded if _valid_gtin(expanded) else None
+
+
+def valid_barcode(value: str) -> bool:
+    """Accept GS1 GTIN-8/12/13/14 plus checksum-valid US UPC-E symbols."""
+    return _valid_gtin(value) or expand_upce(value) is not None
+
+
 def barcode_variants(value: str) -> tuple[str, ...]:
-    """UPC-A and its leading-zero EAN-13 form refer to the same product."""
+    """Equivalent representations of the same product for exact-match lookup."""
     aliases = [value]
+    upca = expand_upce(value)
+    if upca:
+        aliases.extend([upca, "0" + upca])
     if len(value) == 12:
         aliases.append("0" + value)
     elif len(value) == 13 and value.startswith("0"):
@@ -41,7 +65,6 @@ def barcode_variants(value: str) -> tuple[str, ...]:
     if len(value) == 14 and value.startswith("00"):
         aliases.append(value[2:])
     return tuple(dict.fromkeys(aliases))
-
 
 async def find_tmdb(query: str, token: str) -> list[dict]:
     if len(query.strip()) < 2:
@@ -178,6 +201,9 @@ async def lookup_disc_barcode(value: str) -> dict:
         attempted.append("upcitemdb")
         try:
             answer = await _lookup_upcitemdb(value, client)
+            # UPC-E is often stored using its expanded UPC-A equivalent.
+            if answer is None and expand_upce(value):
+                answer = await _lookup_upcitemdb(expand_upce(value), client)
         except (httpx.HTTPError, ValueError) as exc:
             errors.append("upcitemdb")
             _LOG.info("UPCitemdb barcode lookup unavailable: %s", type(exc).__name__)
