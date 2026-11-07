@@ -23,8 +23,6 @@ def test_gtin_checksum():
 
 
 def test_internal_edition_merges_with_external_without_mutating_it(store):
-    assert any(s["id"] == "internal" and s["type"] == "internal"
-               for s in store.sources())
     external = store.save_source({"name": "Kodi", "type": "kodi"})["id"]
     store.apply_snapshot(external, [
         Record("movie:9", "movie", "Internal Example", year=2024,
@@ -32,6 +30,8 @@ def test_internal_edition_merges_with_external_without_mutating_it(store):
     ])
     item = entry()
     created = store.save_internal_media(item)
+    assert any(s["id"] == "internal" and s["type"] == "internal"
+               for s in store.sources())
     again = store.save_internal_media(item)
     assert created == again
     detail = store.detail(created["id"])
