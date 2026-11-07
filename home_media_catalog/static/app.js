@@ -1675,6 +1675,32 @@ function releasePage() {
 }
 function showDialog(id) { if (!$(id).open) {lockPage();$(id).showModal();if(id==='connections-dialog')$(id).scrollTop=0;} }
 // Internal catalogue entries are persisted as a distinct source and synchronized by the API.
+function internalPosterURL(path) {
+  return typeof path==='string' && /^\\/[A-Za-z0-9_.-]{1,150}$/.test(path)
+    ? 'https://image.tmdb.org/t/p/w185'+path : null;
+}
+function internalImageURL(url) {
+  try {const parsed=new URL(url);return parsed.protocol==='https:'&&parsed.username===''&&
+    parsed.password===''&&url.length<2048?parsed.href:null;}catch{return null;}
+}
+function internalPreview(element, imageURL, description, subtitle='') {
+  element.replaceChildren();
+  const image=internalImageURL(imageURL);
+  if(image) {
+    const img=document.createElement('img');
+    img.src=image;img.alt='Affiche : '+description;img.loading='lazy';
+    element.appendChild(img);
+  } else {
+    const placeholder=document.createElement('span');placeholder.className='internal-poster-placeholder';
+    placeholder.textContent='🎞';placeholder.setAttribute('aria-hidden','true');
+    element.appendChild(placeholder);
+  }
+  const text=document.createElement('div');
+  const strong=document.createElement('strong');strong.textContent=description;text.appendChild(strong);
+  if(subtitle) {const smaller=document.createElement('small');smaller.textContent=subtitle;text.appendChild(smaller);}
+  element.appendChild(text);
+  element.hidden=false;
+}
 let internalSelection = null;
 let internalSearchTimer = null;
 let internalSearchSerial = 0;
@@ -1685,6 +1711,8 @@ $('internal-add-button').addEventListener('click', () => {
   $('internal-selection').textContent = 'Vous pouvez aussi renseigner le titre manuellement.';
   $('internal-barcode-message').textContent = '';
   $('internal-search-barcode-web').hidden = true;
+  $('internal-selected-preview').hidden = true;
+  $('internal-barcode-preview').hidden = true;
   internalSelection = null;
   showDialog('internal-add-dialog');
   $('internal-search').focus();
@@ -1693,6 +1721,7 @@ $('internal-title').addEventListener('input', () => {
   if (internalSelection && $('internal-title').value !== internalSelection.title) {
     internalSelection = null;
     $('internal-selection').textContent = 'Titre saisi manuellement.';
+    $('internal-selected-preview').hidden = true;
   }
 });
 $('internal-search').addEventListener('input', () => {
@@ -1713,8 +1742,18 @@ $('internal-search').addEventListener('input', () => {
         button.type = 'button';
         button.className = 'internal-suggestion';
         button.setAttribute('role','option');
-        button.textContent = item.title + (item.year ? ' (' + item.year + ')' : '') +
-          (item.kind === 'tvshow' ? ' · Série' : ' · Film');
+        const poster=internalPosterURL(item.poster_path);
+        if(poster){
+          const img=document.createElement('img');img.src=poster;
+          img.alt='Affiche de '+item.title;img.loading='lazy';button.appendChild(img);
+        }else{
+          const ph=document.createElement('span');ph.className='internal-poster-placeholder';
+          ph.textContent='🎞';ph.setAttribute('aria-hidden','true');button.appendChild(ph);
+        }
+        const label=document.createElement('span');
+        label.textContent=item.title+(item.year?' ('+item.year+')':'')+
+          (item.kind==='tvshow'?' · Série':' · Film');
+        button.appendChild(label);
         button.addEventListener('click', () => {
           internalSelection = item;
           $('internal-title').value = item.title;
@@ -1722,6 +1761,8 @@ $('internal-search').addEventListener('input', () => {
           $('internal-kind').value = item.kind;
           $('internal-plot').value = item.plot || '';
           $('internal-selection').textContent = 'TMDB #' + item.tmdb_id + ' · ' + item.title;
+          internalPreview($('internal-selected-preview'),poster,
+            item.title,(item.year||'')+' · TMDB #'+item.tmdb_id);
           root.replaceChildren();
         });
         root.appendChild(button);
@@ -1743,6 +1784,8 @@ $('internal-lookup').addEventListener('click', async () => {
   try {
     const found = await api('internal/barcode/' + encodeURIComponent(barcode));
     if (found.found && found.title) {
+      internalPreview($('internal-barcode-preview'),
+        found.image_url,found.title,found.source||'Code-barres');
       const provider=({catalog:'votre catalogue',bnf:'BnF',upcitemdb:'UPCitemdb',
         barcodelookup:'Barcode Lookup'})[found.source] || 'une base de codes-barres';
       message.textContent='Référence trouvée dans '+provider+' : '+found.title+
@@ -1752,9 +1795,11 @@ $('internal-lookup').addEventListener('click', async () => {
       $('internal-search').value=simplified||found.title;
       $('internal-search').dispatchEvent(new Event('input'));
     } else if(found.status==='unavailable') {
+      $('internal-barcode-preview').hidden=true;
       webLink.hidden=false;
       message.textContent='Services de codes-barres indisponibles pour le moment. Réessayez ou recherchez le titre dans TMDB.';
     } else {
+      $('internal-barcode-preview').hidden=true;
       webLink.hidden=false;
       const failures=found.providers_unavailable||[];
       message.textContent='Code valide mais référence non répertoriée.'+
