@@ -1252,10 +1252,32 @@ function renderCards(items, append=false) {
   if(!append) root.replaceChildren();
   root.append(template.content);
 }
+// Return to exactly the same position in the grouped collection grid.
+let collectionReturnPosition=null;
+function enterCollection(collectionId) {
+  if(state.groupBy!=='collection'||state.openCollection!==null)return;
+  collectionReturnPosition={x:window.scrollX,y:window.scrollY};
+  state.openCollection=collectionId;
+  renderCards(state.items);
+  $('results').scrollIntoView({block:'start'});
+}
+function leaveCollection() {
+  if(state.openCollection===null)return;
+  const position=collectionReturnPosition;
+  collectionReturnPosition=null;
+  state.openCollection=null;
+  renderCards(state.items);
+  if(position)requestAnimationFrame(()=>{
+    // A filter change or another navigation may supersede this return.
+    if(state.groupBy==='collection'&&state.openCollection===null)
+      window.scrollTo(position.x,position.y);
+  });
+}
 async function loadMedia({append=false}={}) {
   if(append&&(state.loading||!state.hasMore)) return;
   if(!append)savePreferences();
   if(!append) {
+    collectionReturnPosition=null;
     ++state.seq; state.controller?.abort(); state.items=[]; state.ids=new Set(); state.nextOffset=0; state.total=0; state.hasMore=false;
     $('results').replaceChildren();
   }
@@ -3691,13 +3713,11 @@ $('merge-collections').addEventListener('change',()=>{
   state.openCollection=null;
   loadMedia();
 });
-$('collection-back').addEventListener('click',()=>{state.openCollection=null;renderCards(state.items);});
+$('collection-back').addEventListener('click',leaveCollection);
 document.addEventListener('click',event=>{
   const open=event.target.closest('#results [data-open-collection]');
   if(open){
-    state.openCollection=open.dataset.openCollection;
-    renderCards(state.items);
-    $('results').scrollIntoView({block:'start'});
+    enterCollection(open.dataset.openCollection);
     return;
   }
   const choice=event.target.closest('[data-multi-filter][data-multi-value]');
