@@ -98,11 +98,7 @@ def test_clean_falls_back_to_http_without_claiming_completion():
 
         async def rpc(method, params):
             calls.append((method, params))
-            return (
-                {"RemoveData": True}
-                if method == "JSONRPC.Permission"
-                else "OK"
-            )
+            return {"RemoveData": True} if method == "JSONRPC.Permission" else "OK"
 
         yield rpc
 
