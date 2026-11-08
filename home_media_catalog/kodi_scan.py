@@ -183,12 +183,8 @@ async def scan_until_finished(config: dict) -> str:
         return "http"
 
 
-async def clean_until_finished(config: dict) -> str:
-    """Clean Kodi only with a confirmed OnCleanFinished notification.
-
-    Unlike Scan, never fall back to a SQL-only import or assume that an HTTP
-    'OK' response means the asynchronous cleanup has finished.
-    """
+async def _websocket_clean_until_finished(config: dict) -> str:
+    """Clean Kodi and confirm completion with OnCleanFinished over WebSocket."""
     requested = False
     try:
         async with aiohttp.ClientSession(
@@ -269,3 +265,44 @@ async def clean_until_finished(config: dict) -> str:
         raise ConnectorError(
             "Nettoyage Kodi déclenché mais fin non confirmée ; catalogue local inchangé."
         ) from exc
+
+
+async def _http_clean_request(config: dict) -> str:
+    """Trigger Kodi cleanup when WebSocket is disabled.
+
+    Kodi acknowledges VideoLibrary.Clean before its background job finishes.
+    Do not import or prune the local catalogue based on this acknowledgement.
+    A later explicit sync can reconcile the authoritative Kodi snapshot.
+    """
+    try:
+        async with connection(config, timeout=6) as rpc:
+            permissions = await rpc("JSONRPC.Permission", {})
+            if not isinstance(permissions, dict) or (
+                permissions.get("RemoveData", permissions.get("removedata")) is not True
+            ):
+                raise KodiScanUnavailable(
+                    "Kodi HTTP refuse le droit RemoveData requis pour le nettoyage."
+                )
+            if await rpc("VideoLibrary.Clean", {"showdialogs": False}) != "OK":
+                raise KodiScanUnavailable("Kodi HTTP a refusé VideoLibrary.Clean.")
+    except KodiUnavailable as exc:
+        raise KodiScanUnavailable(
+            "Kodi ne répond ni sur WebSocket ni sur HTTP JSON-RPC. "
+            "Démarrez une instance Kodi et vérifiez son adresse, ses ports "
+            "et les autorisations de contrôle distant."
+        ) from exc
+    return "http_requested"
+
+
+async def clean_until_finished(config: dict) -> str:
+    """Prefer confirmed WebSocket cleanup; otherwise request it over HTTP.
+
+    'http_requested' is NOT a completion signal. Callers must not import a
+    potentially intermediate library snapshot on that result.
+    """
+    try:
+        return await _websocket_clean_until_finished(config)
+    except KodiScanUnavailable:
+        # Kodi's HTTP JSON-RPC port can be reachable while port 9090 is closed.
+        # Do not retry when the WebSocket command may already have been sent.
+        return await _http_clean_request(config)
