@@ -95,3 +95,37 @@ def test_collection_endpoints(client, admin):
     assert page.json()["total"] == 1
     assert client.get("/api/v1/media", params={"collection_id":group["id"]},
                       headers=admin).json()["total"] == 1
+
+
+def test_media_collection_filter_accepts_multiple_values(client, admin):
+    """Selected collections are a union; other filters still intersect."""
+    store = client.app.state.store
+    source = _source(store)
+    store.apply_snapshot(source, [
+        Record("first", "movie", "First Film", year=2000, collections=["Alpha"]),
+        Record("second", "movie", "Second Film", year=2005, collections=["Beta"]),
+        Record("third", "movie", "Third Film", year=2010, collections=["Gamma"]),
+        Record("overlap", "movie", "Both Films", year=2015, collections=["Alpha", "Beta"]),
+    ])
+    response = client.get(
+        "/api/v1/media",
+        params=[("collection", "Alpha"), ("collection", "Beta")],
+        headers=admin,
+    )
+    assert response.status_code == 200
+    assert response.json()["total"] == 3
+    assert {item["title"] for item in response.json()["items"]} == {
+        "First Film", "Second Film", "Both Films"
+    }
+    response = client.get(
+        "/api/v1/media",
+        params=[("collection", "Alpha"), ("collection", "Beta"), ("year", "2005")],
+        headers=admin,
+    )
+    assert response.status_code == 200
+    assert [item["title"] for item in response.json()["items"]] == ["Second Film"]
+    single = client.get(
+        "/api/v1/media", params={"collection": "Alpha"}, headers=admin
+    )
+    assert single.status_code == 200
+    assert single.json()["total"] == 2
