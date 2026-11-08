@@ -1,5 +1,6 @@
 """Transactional local catalogue. SQLite never shares Kodi's schema or writes to MariaDB."""
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -34,6 +35,19 @@ CREATE TABLE IF NOT EXISTS works (
  collections TEXT DEFAULT '[]', source_types TEXT DEFAULT '[]', poster TEXT DEFAULT '[]',
  fanart TEXT DEFAULT '[]', search_text TEXT NOT NULL DEFAULT ''
 );
+-- Materialized collection index: provenance stays in works.collections, memberships
+-- are indexed for paging and fast grouping. Covers are revisioned independently.
+CREATE TABLE IF NOT EXISTS collections (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, normalized_name TEXT NOT NULL UNIQUE,
+ merge_key TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS collections_merge_key ON collections(merge_key);
+CREATE TABLE IF NOT EXISTS collection_items (
+ collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+ work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+ PRIMARY KEY(collection_id,work_id)
+);
+CREATE INDEX IF NOT EXISTS collection_items_by_work ON collection_items(work_id,collection_id);
 CREATE TABLE IF NOT EXISTS records (
  id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
  source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
@@ -258,6 +272,19 @@ class Store:
                     conn.execute(
                         "UPDATE sources SET config=? WHERE id=?", (encode(saved), row["id"])
                     )
+            # Backfill persisted collection memberships without a source re-import.
+            # The marker avoids JSON scans on every server startup.
+            if not conn.execute(
+                "SELECT 1 FROM catalogue_meta WHERE key='collections_index_v1'"
+            ).fetchone():
+                for row in conn.execute(
+                    "SELECT id FROM works WHERE kind IN ('movie','tvshow')"
+                ).fetchall():
+                    self._sync_collections(conn, row["id"])
+                conn.execute(
+                    "INSERT INTO catalogue_meta(key,value) VALUES('collections_index_v1',?)",
+                    (now(),),
+                )
             # Backfill the new title-only index for existing installations without
             # requiring users to reimport their Kodi or CLZ data.
             if not conn.execute("SELECT 1 FROM works_title_fts LIMIT 1").fetchone():
@@ -1375,6 +1402,58 @@ class Store:
         return merged
 
     @staticmethod
+    def _collection_identity(name: str) -> tuple[str, str, str, str]:
+        # Only cosmetic variants are normalized. Never merge distinct franchises
+        # using fuzzy string similarity (e.g. overlapping Avengers universes).
+        title = " ".join(name.strip().split())
+        normalized = fold(title)
+        base = re.sub(r"\s*[-–—]\s*saga\s*$", "", title, flags=re.IGNORECASE).strip()
+        merge_key = fold(base or title)
+        return ("collection-" + hashlib.sha256(normalized.encode()).hexdigest()[:24],
+                title, normalized, merge_key)
+
+    @classmethod
+    def _sync_collections(cls, conn: sqlite3.Connection, work_id: str) -> None:
+        row = conn.execute(
+            "SELECT kind,collections FROM works WHERE id=?", (work_id,)
+        ).fetchone()
+        values = json.loads(row["collections"] or "[]") if row and row["kind"] in ("movie", "tvshow") else []
+        desired = {}
+        for name in values:
+            if not isinstance(name, str) or not name.strip():
+                continue
+            identity = cls._collection_identity(name)
+            desired[identity[0]] = identity
+        previous = {item[0] for item in conn.execute(
+            "SELECT collection_id FROM collection_items WHERE work_id=?", (work_id,)
+        )}
+        for identity in desired.values():
+            conn.execute(
+                "INSERT OR IGNORE INTO collections(id,name,normalized_name,merge_key) VALUES(?,?,?,?)",
+                identity,
+            )
+        wanted = set(desired)
+        for collection_id in previous - wanted:
+            conn.execute(
+                "DELETE FROM collection_items WHERE collection_id=? AND work_id=?",
+                (collection_id, work_id),
+            )
+        for collection_id in wanted - previous:
+            conn.execute(
+                "INSERT OR IGNORE INTO collection_items(collection_id,work_id) VALUES(?,?)",
+                (collection_id, work_id),
+            )
+        # Also invalidate covers when a member's poster changes without moving groups.
+        for collection_id in previous | wanted:
+            conn.execute(
+                "UPDATE collections SET revision=revision+1 WHERE id=?", (collection_id,)
+            )
+        conn.execute(
+            "DELETE FROM collections WHERE NOT EXISTS "
+            "(SELECT 1 FROM collection_items WHERE collection_id=collections.id)"
+        )
+
+    @staticmethod
     def _rebuild(conn: sqlite3.Connection, work_id: str) -> None:
         rows = conn.execute(
             "SELECT r.payload,s.type FROM records r JOIN sources s ON s.id=r.source_id WHERE r.work_id=?",
@@ -1546,6 +1625,7 @@ class Store:
             "INSERT INTO works_title_fts(work_id,titles) VALUES(?,?)",
             (work_id, fold(title_text)),
         )
+        Store._sync_collections(conn, work_id)
         for payload, _ in entries:
             for namespace, value in payload.get("identifiers", {}).items():
                 conn.execute(
@@ -1564,8 +1644,20 @@ class Store:
         conn.execute(
             "DELETE FROM works_title_fts WHERE work_id IN (SELECT id FROM works w WHERE NOT EXISTS(SELECT 1 FROM records r WHERE r.work_id=w.id))"
         )
+        # A deleted work removes membership through FK cascades; bump revisions
+        # before the cascade so previously cached composite covers are invalidated.
+        conn.execute(
+            "UPDATE collections SET revision=revision+1 WHERE id IN ("
+            "SELECT DISTINCT ci.collection_id FROM collection_items ci "
+            "JOIN works w ON w.id=ci.work_id "
+            "WHERE NOT EXISTS(SELECT 1 FROM records r WHERE r.work_id=w.id))"
+        )
         conn.execute(
             "DELETE FROM works WHERE NOT EXISTS(SELECT 1 FROM records r WHERE r.work_id=works.id)"
+        )
+        conn.execute(
+            "DELETE FROM collections WHERE NOT EXISTS "
+            "(SELECT 1 FROM collection_items WHERE collection_id=collections.id)"
         )
 
     @staticmethod
@@ -1983,6 +2075,7 @@ class Store:
         genre: str | list[str] | None = None,
         format: str | list[str] | None = None,
         collection: str | None = None,
+        collection_id: str | None = None,
         source_type: str | list[str] | None = None,
         source_id: str | None = None,
         parent_id: str | None = None,
@@ -2132,6 +2225,13 @@ class Store:
         if conditions:
             clauses.append("(" + " OR ".join(conditions) + ")")
 
+        if collection_id is not None:
+            if collection_id == "uncategorized":
+                clauses.append("NOT EXISTS(SELECT 1 FROM collection_items ci WHERE ci.work_id=w.id)")
+            else:
+                clauses.append("EXISTS(SELECT 1 FROM collection_items ci "
+                               "WHERE ci.work_id=w.id AND ci.collection_id=?)")
+                params.append(collection_id)
         for name, selected in (
             ("genres", genre),
             ("collections", collection),
@@ -2736,13 +2836,73 @@ class Store:
             row = conn.execute(f"SELECT {aspect} FROM works WHERE id=?", (work_id,)).fetchone()
             return json.loads(row[0]) if row else []
 
+    def collection_index(self) -> list[dict[str, Any]]:
+        """Single indexed query, independent from media paging and UI rendering."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT c.id,c.name,c.revision,COUNT(ci.work_id) item_count, "
+                "MIN(ci.work_id) AS sole_work_id "
+                "FROM collections c JOIN collection_items ci ON ci.collection_id=c.id "
+                "GROUP BY c.id ORDER BY c.name COLLATE NOCASE,c.id"
+            ).fetchall()
+            result = [dict(row) for row in rows]
+            missing = conn.execute(
+                "SELECT COUNT(*) FROM works w WHERE w.kind IN ('movie','tvshow') "
+                "AND NOT EXISTS(SELECT 1 FROM collection_items ci WHERE ci.work_id=w.id)"
+            ).fetchone()[0]
+            if missing:
+                sole = None
+                if missing == 1:
+                    sole = conn.execute(
+                        "SELECT w.id FROM works w WHERE w.kind IN ('movie','tvshow') "
+                        "AND NOT EXISTS(SELECT 1 FROM collection_items ci WHERE ci.work_id=w.id)"
+                        " LIMIT 1"
+                    ).fetchone()[0]
+                result.append({"id": "uncategorized", "name": "Other titles",
+                               "revision": 0, "item_count": missing,
+                               "sole_work_id": sole})
+            single_ids = [item["sole_work_id"] for item in result
+                          if item["item_count"] == 1 and item["sole_work_id"]]
+            single_items = {}
+            for start in range(0, len(single_ids), 150):
+                chunk = single_ids[start:start + 150]
+                slots = ",".join("?" for _ in chunk)
+                rows = conn.execute(f"SELECT * FROM works WHERE id IN ({slots})", chunk).fetchall()
+                single_items.update({item["id"]: item for item in self._summaries_with_sources(conn, rows)})
+            for item in result:
+                sole_id = item.pop("sole_work_id", None)
+                item["single_media"] = (
+                    single_items.get(sole_id) if item["item_count"] == 1 else None
+                )
+                item["artwork"] = (
+                    f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg"
+                    if item["id"] != "uncategorized" else None
+                )
+            return result
+
+    def collection_thumbnail_input(self, collection_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            found = conn.execute(
+                "SELECT revision FROM collections WHERE id=?", (collection_id,)
+            ).fetchone()
+            if not found:
+                return None
+            posters = [json.loads(row["poster"] or "[]") for row in conn.execute(
+                "SELECT w.poster FROM collection_items ci JOIN works w ON w.id=ci.work_id "
+                "WHERE ci.collection_id=? ORDER BY w.year,w.sort_title,w.id LIMIT 4",
+                (collection_id,),
+            )]
+            return {"revision": found["revision"], "posters": posters}
+
     def facets(self) -> dict[str, Any]:
         with self.connect() as conn:
             value = {
                 name: [
                     r[0]
                     for r in conn.execute(
-                        f"SELECT DISTINCT j.value FROM works w,json_each(w.{name}) j ORDER BY j.value COLLATE NOCASE"
+                        "SELECT name FROM collections ORDER BY name COLLATE NOCASE"
+                         if name == "collections" else
+                         f"SELECT DISTINCT j.value FROM works w,json_each(w.{name}) j ORDER BY j.value COLLATE NOCASE"
                     )
                 ]
                 for name in ("genres", "formats", "collections")

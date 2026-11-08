@@ -57,7 +57,7 @@ from .connectors.base import ConnectorError
 from .connectors.kodi import KodiConnector
 from .enrichment import enrich_tmdb, probe_tmdb
 from .internal_catalog import find_tmdb, lookup_disc_barcode
-from .list_thumbnails import ListThumbnails
+from .list_thumbnails import CollectionThumbnails, ListThumbnails
 from .models import (
     CatalogueStatus,
     ConnectionResult,
@@ -201,6 +201,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.data_dir = settings.data_dir
     thumbnails = ListThumbnails(store, app.state.artwork, settings.data_dir)
     app.state.list_thumbnails = thumbnails
+    collection_thumbnails = CollectionThumbnails(store, app.state.artwork, settings.data_dir)
+    app.state.collection_thumbnails = collection_thumbnails
     enrichment_lock = asyncio.Lock()
     if settings.cors_origins:
         app.add_middleware(
@@ -825,6 +827,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         genre: list[str] | None = Query(None),
         format: list[str] | None = Query(None),
         collection: str | None = Query(None, max_length=200),
+        collection_id: str | None = Query(None, max_length=120),
         source_type: list[Literal["kodi", "clz", "mymovies", "filmotech", "internal"]] | None = Query(None),
         source_id: str | None = None,
         parent_id: str | None = None,
@@ -847,6 +850,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             genre=genre,
             format=format,
             collection=collection,
+            collection_id=collection_id,
             source_type=source_type,
             source_id=source_id,
             parent_id=parent_id,
@@ -858,6 +862,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             limit=limit,
             offset=offset,
         )
+
+    @app.get(
+        API + "/collections",
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+    )
+    def list_collections():
+        return store.collection_index()
+
+    @app.get(
+        API + "/collections/{collection_id}/media",
+        response_model=MediaPage,
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+    )
+    def collection_media(
+        collection_id: str,
+        limit: int = Query(60, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ):
+        if collection_id != "uncategorized" and not store.collection_thumbnail_input(collection_id):
+            raise HTTPException(404, "Unknown collection.")
+        return store.media(collection_id=collection_id, limit=limit, offset=offset, sort="title", order="asc")
+
+    @app.get(
+        API + "/collections/{collection_id}/thumbnails/{revision}.jpg",
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+        responses={200: {"content": {"image/jpeg": {}}}},
+    )
+    async def collection_thumbnail(collection_id: str, revision: int):
+        source = await asyncio.to_thread(store.collection_thumbnail_input, collection_id)
+        if source is None or revision != source["revision"]:
+            raise HTTPException(404, "Unknown collection thumbnail revision.")
+        data = await collection_thumbnails.ensure(collection_id, revision)
+        if data is None:
+            raise HTTPException(404, "Collection changed while loading.")
+        return Response(data, media_type="image/jpeg")
 
     @app.get(
         API + "/media/{media_id}/seasons",
