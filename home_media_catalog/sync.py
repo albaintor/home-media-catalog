@@ -99,6 +99,25 @@ class SyncManager:
             await asyncio.to_thread(self.store.start_job, job["id"])
             await asyncio.to_thread(self.store.update_job_progress, job["id"], "kodi_cleaning")
             method = await clean_until_finished(player["config"])
+            if method == "http_requested":
+                # HTTP JSON-RPC only acknowledges that the asynchronous Kodi
+                # job was queued. Without OnCleanFinished, importing now could
+                # publish an incomplete snapshot and remove valid editions.
+                await asyncio.to_thread(
+                    self.store.finish_job,
+                    job["id"],
+                    result={
+                        "kodi_clean": "requested_unconfirmed",
+                        "kodi_clean_method": "http",
+                        "kodi_clean_player": player["name"],
+                        "kodi_clean_warning": (
+                            "Kodi a accepté le nettoyage via HTTP. "
+                            "La fin n'est pas vérifiable sans WebSocket ; "
+                            "synchronisez la source une fois le nettoyage terminé."
+                        ),
+                    },
+                )
+                return
             await asyncio.to_thread(
                 self.store.update_job_progress, job["id"], "kodi_clean_finished"
             )
