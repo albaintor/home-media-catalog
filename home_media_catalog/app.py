@@ -826,7 +826,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         watch_status: list[WatchStatus] | None = Query(None),
         genre: list[str] | None = Query(None),
         format: list[str] | None = Query(None),
-        collection: str | None = Query(None, max_length=200),
+        collection: list[str] | None = Query(None, max_length=40),
         collection_id: str | None = Query(None, max_length=120),
         source_type: list[Literal["kodi", "clz", "mymovies", "filmotech", "internal"]] | None = Query(None),
         source_id: str | None = None,
