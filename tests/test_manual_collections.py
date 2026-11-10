@@ -1,5 +1,6 @@
 """Manual collections override imported memberships and remain stable after synchronization."""
 
+from home_media_catalog.backup import export_backup, import_backup
 from home_media_catalog.connectors.base import Record
 
 
@@ -94,3 +95,21 @@ def test_manual_collection_endpoints_and_permissions(client, admin):
         f"/api/v1/collections/{collection_id}", headers=admin,
     ).status_code == 204
     assert client.get("/api/v1/media", headers=admin).json()["total"] == 3
+
+
+def test_manual_collections_are_in_portable_backups(store):
+    _, _, ids = _seed(store)
+    collection = store.save_manual_collection("My Mixed Collection")
+    store.add_manual_collection_items(
+        collection["id"], [ids["Film A"], ids["Series B"]]
+    )
+    backup = export_backup(store)
+    assert "collections" in backup["tables"]
+    assert "collection_items" in backup["tables"]
+    store.delete_manual_collection(collection["id"])
+    import_backup(store, backup)
+    restored = next(
+        row for row in store.collection_index() if row["id"] == collection["id"]
+    )
+    assert restored["item_count"] == 2
+    assert restored["is_manual"] is True
