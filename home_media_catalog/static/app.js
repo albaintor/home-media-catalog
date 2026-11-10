@@ -65,6 +65,10 @@ const state = {csrf:null,role:'read',view:savedView==='list'?'list':'grid',order
 state.multi={source_type:[],genre:[],watch_status:[]};
 state.groupBy=preferences.groupBy==='collection'?'collection':'';
 state.openCollection=null;
+state.manualCollections=[];
+state.manualEditing=false;
+state.manualSelected=new Set();
+state.manualSearchSeq=0;
 state.mergeEquivalentCollections=preferences.mergeEquivalentCollections!==false;
 
 function multiOptions(name) {
@@ -1166,7 +1170,22 @@ function collectionGroups(items) {
     .map(name=>state.mergeEquivalentCollections?collectionName(name):String(name||'').trim())
     .map(collectionFold));
   const groups=new Map();
+  const manualGroups=new Map((state.manualCollections||[]).filter(c=>c.is_manual).map(c=>
+    [c.id,{id:c.id,title:c.name,items:[],seen:new Set(),provenance:new Map(),manual:true}]));
+  const showEmptyManual=!$('kind').value&&!$('search').value&&!state.multi.genre.length&&
+    !state.multi.watch_status.length&&!state.multi.source_type.length&&!state.formats.length&&
+    !$('collection').value&&!state.recent;
   for(const media of items) {
+    const manualIDs=media.manual_collection_ids||[];
+    if(manualIDs.length) {
+      for(const id of manualIDs) {
+        const group=manualGroups.get(id);
+        if(group&&!group.seen.has(media.id)) {
+          group.seen.add(media.id);group.items.push(media);
+        }
+      }
+      continue;
+    }
     const matched=(media.collections||[]).filter(isSagaCollection);
     const names=new Set();
     for(const raw of matched) {
@@ -1190,7 +1209,10 @@ function collectionGroups(items) {
     }
   }
   const ascending=state.order==='asc',sort=$('sort').value;
-  const namedGroups=mergeCollectionGroupsByMembers(groups).filter(group=>group.id);
+  const namedGroups=[
+    ...[...manualGroups.values()].filter(group=>showEmptyManual||group.items.length),
+    ...mergeCollectionGroupsByMembers(groups).filter(group=>group.id)
+  ];
   // A one-film collection is rendered as a direct media card. Suppress it
   // when its canonical work already belongs to a larger visible collection.
   const containedInLargerCollection=new Set(
@@ -1198,7 +1220,7 @@ function collectionGroups(items) {
       .flatMap(group=>group.items.map(media=>media.id))
   );
   const visibleNamedGroups=namedGroups.filter(group=>
-    group.items.length!==1||!containedInLargerCollection.has(group.items[0].id));
+    group.manual||group.items.length!==1||!containedInLargerCollection.has(group.items[0].id));
   // Never hide catalogue media in a large "Other titles" collection. For
   // physical-only CLZ records (e.g. "Blu-Ray") display each film directly.
   // Reconcile against final visible groups so no work disappears during merges.
@@ -1235,7 +1257,7 @@ function renderCards(items, append=false) {
     const groups=collectionGroups(state.items);
     if(!opened) {
       root.className='collection-grid';
-      root.innerHTML=groups.map(group=>group.items.length===1
+      root.innerHTML=groups.map(group=>group.items.length===1&&!group.manual
         ? card(group.items[0])
         : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.items.length} titres">${collectionArtwork(group.items)}<strong>${esc(group.title)}</strong><span>${group.items.length} titres</span></button>`).join('');
       attachImageFallbacks(root);
@@ -1243,7 +1265,23 @@ function renderCards(items, append=false) {
     }
     const group=groups.find(group=>group.id===state.openCollection);
     $('collection-current').textContent=group?.title||'';
+    const editable=!!group?.manual&&state.role==='admin';
+    $('manual-collection-actions').hidden=!editable;
+    $('manual-edit-button').textContent=state.manualEditing?'Terminer':'Modifier';
+    $('manual-remove-selected-button').hidden=!editable||!state.manualEditing||!state.manualSelected.size;
     items=group?.items||[];
+    if(editable&&state.manualEditing) {
+      items=items.map(item=>item);
+      root.className=state.view==='grid'?'poster-grid':'list-results';
+      root.innerHTML=items.map(item=>`<div class="manual-edit-item">
+        ${card(item)}
+        <button type="button" class="manual-select" data-manual-select="${esc(item.id)}"
+          aria-pressed="${state.manualSelected.has(item.id)}"
+          aria-label="Sélectionner ${esc(item.title)}">${state.manualSelected.has(item.id)?'✓':'○'}</button>
+      </div>`).join('');
+      attachImageFallbacks(root);
+      return;
+    }
     append=false;
   }
   root.className=state.view==='grid'?'poster-grid':'list-results';
@@ -1258,6 +1296,8 @@ function enterCollection(collectionId) {
   if(state.groupBy!=='collection'||state.openCollection!==null)return;
   collectionReturnPosition={x:window.scrollX,y:window.scrollY};
   state.openCollection=collectionId;
+  state.manualEditing=false;
+  state.manualSelected.clear();
   renderCards(state.items);
   $('results').scrollIntoView({block:'start'});
 }
@@ -1266,6 +1306,9 @@ function leaveCollection() {
   const position=collectionReturnPosition;
   collectionReturnPosition=null;
   state.openCollection=null;
+  state.manualEditing=false;
+  state.manualSelected.clear();
+  $('manual-collection-actions').hidden=true;
   renderCards(state.items);
   if(position)requestAnimationFrame(()=>{
     // A filter change or another navigation may supersede this return.
@@ -1289,6 +1332,10 @@ async function loadMedia({append=false}={}) {
   updateLoadingState();
   updateFilterState();
   try {
+    if(!append&&state.groupBy==='collection') {
+      state.manualCollections=(await api('collections',{signal:state.controller.signal}))
+        .filter(c=>c.is_manual);
+    }
     const page=await api(`media?${currentParams(offset)}`,{signal:state.controller.signal});
     if (seq!==state.seq) return;
     const added=page.items.filter(item=>!state.ids.has(item.id));
@@ -1296,7 +1343,7 @@ async function loadMedia({append=false}={}) {
     state.items.push(...added); state.total=page.total; state.nextOffset=offset+page.items.length;
     state.hasMore=page.has_more&&page.items.length>0;
     $('result-count').textContent=`${page.total.toLocaleString(displayLocale())} résultat${page.total>1?'s':''}${state.personSearch?.tmdbId?' · TMDB #'+state.personSearch.tmdbId+' (crédits non identifiés inclus)':state.personSearch?.imdbId?' · IMDb '+state.personSearch.imdbId+' (crédits non identifiés inclus)':''}${state.recent?' · ajoutés depuis 30 jours':''}`;
-    if (!append&&!page.items.length) {
+    if (!append&&!page.items.length&&!(state.groupBy==='collection'&&state.manualCollections.length)) {
       const empty=!state.facets?.sources.length || state.facets.sources.every(s=>!s.item_count);
       $('results').innerHTML=`<div class="empty-state"><span class="empty-icon" aria-hidden="true">▦</span><h2>${empty?'Votre bibliothèque commence ici.':'Aucun titre ne correspond.'}</h2><p>${empty?'Connectez la base Kodi ou importez un export CLZ Movies.':'Modifiez les filtres ou essayez un autre mot.'}</p>${state.role==='admin'&&empty?'<button class="primary" data-action="connections">Ajouter une source →</button>':'<button class="secondary" data-action="reset">Effacer les filtres</button>'}</div>`;
     } else renderCards(state.groupBy==='collection'?state.items:added,append);
@@ -1315,7 +1362,7 @@ async function loadMedia({append=false}={}) {
 }
 function fillSelect(id, values, label) {
   const selected=$(id).value;
-  $(id).innerHTML=`<option value="">${label}</option>`+values.filter(v=>id!=='collection'||isSagaCollection(v)).map(v=>`<option value="${esc(v)}">${esc(id==='collection'?collectionName(v):v)}</option>`).join('');
+  $(id).innerHTML=`<option value="">${label}</option>`+values.filter(v=>id!=='collection'||isSagaCollection(v)||(state.manualCollections||[]).some(c=>c.name===v)).map(v=>`<option value="${esc(v)}">${esc(id==='collection'?collectionName(v):v)}</option>`).join('');
   if (values.includes(selected)) $(id).value=selected;
 }
 // Playback recents are replicated by the existing local-first history API.
@@ -1673,6 +1720,7 @@ async function initialize() {
     window.dispatchEvent(new Event('media-app-ready'));
     $('create-list-button').hidden=state.role!=='admin';
     $('internal-add-button').hidden=state.role!=='admin';
+    $('manual-create-button').hidden=state.role!=='admin';
     setView(state.view,false); renderPersonalStatus(); await refresh(); await refreshHomeListThumbnails(); await pollActivity(); void refreshNetworkHome();
     // Only once on authenticated entry; the server enforces the 24h threshold.
     void refreshStaleOnOpen();
@@ -3714,6 +3762,105 @@ $('merge-collections').addEventListener('change',()=>{
   loadMedia();
 });
 $('collection-back').addEventListener('click',leaveCollection);
+function currentManualCollection() {
+  return state.manualCollections.find(c=>c.id===state.openCollection);
+}
+async function createManualCollection() {
+  if(state.role!=='admin')return;
+  const name=localizedPrompt('Nom de la nouvelle collection');
+  if(!name?.trim())return;
+  try {
+    const collection=await api('collections',{method:'POST',body:JSON.stringify({name:name.trim()})});
+    state.groupBy='collection';
+    $('group-by').value='collection';
+    $('merge-collections-label').hidden=false;
+    await loadMedia();
+    enterCollection(collection.id);
+    toast('Collection créée.');
+  }catch(e){toast(e.message);}
+}
+let manualSearchTimer;
+async function searchManualCandidates() {
+  const target=currentManualCollection();
+  if(!target||!$('manual-picker-dialog').open)return;
+  const query=$('manual-picker-search').value.trim();
+  const seq=++state.manualSearchSeq;
+  $('manual-picker-results').textContent='Recherche…';
+  try {
+    const params=new URLSearchParams({q:query,limit:'60',sort:'title',order:'asc'});
+    const response=await api('media?'+params);
+    if(seq!==state.manualSearchSeq)return;
+    const existing=new Set((collectionGroups(state.items).find(c=>c.id===target.id)?.items||[]).map(c=>c.id));
+    $('manual-picker-results').innerHTML=response.items.filter(item=>
+      item.kind==='movie'||item.kind==='tvshow').map(item=>
+      `<button type="button" class="manual-picker-row" data-manual-add="${esc(item.id)}"
+      ${existing.has(item.id)?'disabled':''}>
+      <strong>${esc(item.title)}</strong> <small>${item.kind==='tvshow'?'Série':'Film'} · ${esc(item.year||'')}</small>
+      <span>${existing.has(item.id)?'Déjà ajouté':'＋'}</span></button>`).join('')||'<p>Aucun résultat.</p>';
+  }catch(e){if(seq===state.manualSearchSeq)$('manual-picker-results').textContent=e.message;}
+}
+$('manual-create-button').addEventListener('click',createManualCollection);
+$('manual-edit-button').addEventListener('click',()=>{
+  state.manualEditing=!state.manualEditing;
+  state.manualSelected.clear();
+  renderCards(state.items);
+});
+$('manual-add-items-button').addEventListener('click',()=>{
+  if(!currentManualCollection())return;
+  $('manual-picker-search').value='';
+  showDialog('manual-picker-dialog');
+  searchManualCandidates();
+});
+$('manual-picker-search').addEventListener('input',()=>{
+  clearTimeout(manualSearchTimer);
+  manualSearchTimer=setTimeout(searchManualCandidates,250);
+});
+$('manual-remove-selected-button').addEventListener('click',async()=>{
+  const collection=currentManualCollection();
+  if(!collection||!state.manualSelected.size||!localizedConfirm('Retirer les éléments sélectionnés de cette collection ?'))return;
+  try {
+    for(const mediaID of state.manualSelected) {
+      await api('collections/'+encodeURIComponent(collection.id)+'/items/'+encodeURIComponent(mediaID),
+        {method:'DELETE'});
+    }
+    state.manualSelected.clear();
+    await loadMedia();
+  }catch(e){toast(e.message);}
+});
+$('manual-delete-button').addEventListener('click',async()=>{
+  const collection=currentManualCollection();
+  if(!collection||!localizedConfirm('Supprimer la collection sans supprimer les fiches ?'))return;
+  try {
+    await api('collections/'+encodeURIComponent(collection.id),{method:'DELETE'});
+    state.openCollection=null;
+    state.manualEditing=false;
+    state.manualSelected.clear();
+    await loadMedia();
+    toast('Collection supprimée.');
+  }catch(e){toast(e.message);}
+});
+document.addEventListener('click',async event=>{
+  const selection=event.target.closest('[data-manual-select]');
+  if(selection&&state.manualEditing) {
+    const id=selection.dataset.manualSelect;
+    if(state.manualSelected.has(id))state.manualSelected.delete(id);
+    else state.manualSelected.add(id);
+    renderCards(state.items);
+    return;
+  }
+  const add=event.target.closest('[data-manual-add]');
+  const collection=currentManualCollection();
+  if(add&&collection&&!add.disabled) {
+    add.disabled=true;
+    try {
+      await api('collections/'+encodeURIComponent(collection.id)+'/items',
+        {method:'POST',body:JSON.stringify({media_ids:[add.dataset.manualAdd]})});
+      await loadMedia();
+      await searchManualCandidates();
+    }catch(e){toast(e.message);add.disabled=false;}
+  }
+});
+
 document.addEventListener('click',event=>{
   const open=event.target.closest('#results [data-open-collection]');
   if(open){
