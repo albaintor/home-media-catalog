@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS works (
 -- are indexed for paging and fast grouping. Covers are revisioned independently.
 CREATE TABLE IF NOT EXISTS collections (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, normalized_name TEXT NOT NULL UNIQUE,
- merge_key TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1
+ merge_key TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+ is_manual INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS collections_merge_key ON collections(merge_key);
 CREATE TABLE IF NOT EXISTS collection_items (
@@ -259,6 +260,13 @@ class Store:
                 )
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            # Existing SQLite databases predate locally managed collections.
+            if "is_manual" not in {
+                row["name"] for row in conn.execute("PRAGMA table_info(collections)")
+            }:
+                conn.execute(
+                    "ALTER TABLE collections ADD COLUMN is_manual INTEGER NOT NULL DEFAULT 0"
+                )
             # Music tables are additive and independent from video works.
             from .music import MusicCatalogue
 
@@ -1391,6 +1399,13 @@ class Store:
                     "watched=COALESCE(watched,?) WHERE work_id=?",
                     (former["user_rating"], former["watched"], keep),
                 )
+            # Preserve manual memberships before the losing work ID cascades away.
+            conn.execute(
+                "INSERT OR IGNORE INTO collection_items(collection_id,work_id) "
+                "SELECT collection_id,? FROM collection_items WHERE work_id=? "
+                "AND collection_id IN (SELECT id FROM collections WHERE is_manual=1)",
+                (keep, drop),
+            )
             conn.execute("UPDATE records SET work_id=? WHERE work_id=?", (keep, drop))
             conn.execute("DELETE FROM identifiers WHERE work_id=?", (drop,))
             conn.execute("DELETE FROM works_fts WHERE work_id=?", (drop,))
@@ -1425,7 +1440,9 @@ class Store:
             identity = cls._collection_identity(name)
             desired[identity[0]] = identity
         previous = {item[0] for item in conn.execute(
-            "SELECT collection_id FROM collection_items WHERE work_id=?", (work_id,)
+            "SELECT ci.collection_id FROM collection_items ci "
+            "JOIN collections c ON c.id=ci.collection_id "
+            "WHERE ci.work_id=? AND c.is_manual=0", (work_id,)
         )}
         for identity in desired.values():
             conn.execute(
@@ -1449,7 +1466,7 @@ class Store:
                 "UPDATE collections SET revision=revision+1 WHERE id=?", (collection_id,)
             )
         conn.execute(
-            "DELETE FROM collections WHERE NOT EXISTS "
+            "DELETE FROM collections WHERE is_manual=0 AND NOT EXISTS "
             "(SELECT 1 FROM collection_items WHERE collection_id=collections.id)"
         )
 
@@ -1656,7 +1673,7 @@ class Store:
             "DELETE FROM works WHERE NOT EXISTS(SELECT 1 FROM records r WHERE r.work_id=works.id)"
         )
         conn.execute(
-            "DELETE FROM collections WHERE NOT EXISTS "
+            "DELETE FROM collections WHERE is_manual=0 AND NOT EXISTS "
             "(SELECT 1 FROM collection_items WHERE collection_id=collections.id)"
         )
 
@@ -1799,6 +1816,17 @@ class Store:
         ids = [row["id"] for row in rows]
         by_work = cls._sources_for_works(conn, ids)
         collection_sources = cls._collection_sources_for_works(conn, ids)
+        # Manual memberships supersede imported labels for both grouping and filters.
+        manual_memberships: dict[str, list[str]] = defaultdict(list)
+        if ids:
+            slots = ",".join("?" for _ in ids)
+            for membership in conn.execute(
+                "SELECT ci.work_id,c.name FROM collection_items ci "
+                "JOIN collections c ON c.id=ci.collection_id "
+                f"WHERE c.is_manual=1 AND ci.work_id IN ({slots}) "
+                "ORDER BY c.name COLLATE NOCASE", ids
+            ):
+                manual_memberships[membership["work_id"]].append(membership["name"])
         series_ids = [row["id"] for row in rows if row["kind"] == "tvshow"]
         progress = cls._series_episode_progress(conn, series_ids)
         resumes = cls._latest_playback_resumes(conn, ids)
@@ -1825,7 +1853,12 @@ class Store:
             )
             item.update(progress.get(row["id"], {}))
             item["media_sources"] = by_work.get(row["id"], [])
-            item["collection_sources"] = collection_sources.get(row["id"], {})
+            manual = manual_memberships.get(row["id"])
+            if manual:
+                item["collections"] = manual
+                item["collection_sources"] = {name: ["internal"] for name in manual}
+            else:
+                item["collection_sources"] = collection_sources.get(row["id"], {})
             partial = series_resumes.get(row["id"])
             if partial and item["watch_status"] != "watched":
                 item["watch_status"] = "in_progress"
@@ -2229,8 +2262,15 @@ class Store:
             if collection_id == "uncategorized":
                 clauses.append("NOT EXISTS(SELECT 1 FROM collection_items ci WHERE ci.work_id=w.id)")
             else:
-                clauses.append("EXISTS(SELECT 1 FROM collection_items ci "
-                               "WHERE ci.work_id=w.id AND ci.collection_id=?)")
+                clauses.append(
+                    "EXISTS(SELECT 1 FROM collection_items ci "
+                    "JOIN collections c ON c.id=ci.collection_id "
+                    "WHERE ci.work_id=w.id AND ci.collection_id=? "
+                    "AND (c.is_manual=1 OR NOT EXISTS("
+                    "SELECT 1 FROM collection_items manual_ci "
+                    "JOIN collections manual_c ON manual_c.id=manual_ci.collection_id "
+                    "WHERE manual_ci.work_id=w.id AND manual_c.is_manual=1)))"
+                )
                 params.append(collection_id)
         for name, selected in (
             ("genres", genre),
@@ -2244,10 +2284,21 @@ class Store:
             values = list(dict.fromkeys(values))
             if values:
                 placeholders = ",".join("?" for _ in values)
-                clauses.append(
-                    f"EXISTS(SELECT 1 FROM json_each(w.{name}) "
-                    f"WHERE value COLLATE NOCASE IN ({placeholders}))"
-                )
+                if name == "collections":
+                    clauses.append(
+                        "EXISTS(SELECT 1 FROM collection_items ci "
+                        "JOIN collections c ON c.id=ci.collection_id "
+                        f"WHERE ci.work_id=w.id AND c.name COLLATE NOCASE IN ({placeholders}) "
+                        "AND (c.is_manual=1 OR NOT EXISTS("
+                        "SELECT 1 FROM collection_items mi JOIN collections mc "
+                        "ON mc.id=mi.collection_id WHERE mi.work_id=w.id "
+                        "AND mc.is_manual=1)))"
+                    )
+                else:
+                    clauses.append(
+                        f"EXISTS(SELECT 1 FROM json_each(w.{name}) "
+                        f"WHERE value COLLATE NOCASE IN ({placeholders}))"
+                    )
                 params.extend(values)
         if year_min is not None:
             clauses.append("w.year>=?")
@@ -2837,13 +2888,18 @@ class Store:
             return json.loads(row[0]) if row else []
 
     def collection_index(self) -> list[dict[str, Any]]:
-        """Single indexed query, independent from media paging and UI rendering."""
+        """List manual and imported collections with manual membership precedence."""
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT c.id,c.name,c.revision,COUNT(ci.work_id) item_count, "
+                "SELECT c.id,c.name,c.revision,c.is_manual,COUNT(ci.work_id) item_count, "
                 "MIN(ci.work_id) AS sole_work_id "
-                "FROM collections c JOIN collection_items ci ON ci.collection_id=c.id "
-                "GROUP BY c.id ORDER BY c.name COLLATE NOCASE,c.id"
+                "FROM collections c LEFT JOIN collection_items ci "
+                "ON ci.collection_id=c.id AND (c.is_manual=1 OR NOT EXISTS("
+                "SELECT 1 FROM collection_items mi "
+                "JOIN collections mc ON mc.id=mi.collection_id "
+                "WHERE mi.work_id=ci.work_id AND mc.is_manual=1)) "
+                "GROUP BY c.id HAVING c.is_manual=1 OR COUNT(ci.work_id)>0 "
+                "ORDER BY c.is_manual DESC,c.name COLLATE NOCASE,c.id"
             ).fetchall()
             result = [dict(row) for row in rows]
             missing = conn.execute(
@@ -2860,7 +2916,7 @@ class Store:
                     ).fetchone()[0]
                 result.append({"id": "uncategorized", "name": "Other titles",
                                "revision": 0, "item_count": missing,
-                               "sole_work_id": sole})
+                               "sole_work_id": sole, "is_manual": 0})
             single_ids = [item["sole_work_id"] for item in result
                           if item["item_count"] == 1 and item["sole_work_id"]]
             single_items = {}
@@ -2871,14 +2927,116 @@ class Store:
                 single_items.update({item["id"]: item for item in self._summaries_with_sources(conn, rows)})
             for item in result:
                 sole_id = item.pop("sole_work_id", None)
+                item["is_manual"] = bool(item["is_manual"])
                 item["single_media"] = (
                     single_items.get(sole_id) if item["item_count"] == 1 else None
                 )
                 item["artwork"] = (
                     f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg"
-                    if item["id"] != "uncategorized" else None
+                    if item["id"] != "uncategorized" and item["item_count"] else None
                 )
             return result
+
+    def manual_collection(self, collection_id: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT id,name,revision,is_manual FROM collections "
+                "WHERE id=? AND is_manual=1", (collection_id,)
+            ).fetchone()
+        if not row:
+            raise KeyError("Unknown manual collection.")
+        return dict(row)
+
+    def save_manual_collection(self, name: str, collection_id: str | None = None) -> dict[str, Any]:
+        name = " ".join(name.strip().split())
+        if not name or len(name) > 120:
+            raise ValueError("Collection name must contain 1 to 120 characters.")
+        normalized = "manual:" + fold(name)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if collection_id:
+                row = conn.execute(
+                    "SELECT is_manual FROM collections WHERE id=?", (collection_id,)
+                ).fetchone()
+                if not row or not row["is_manual"]:
+                    raise KeyError("Unknown manual collection.")
+                try:
+                    conn.execute(
+                        "UPDATE collections SET name=?,normalized_name=?,merge_key=?,"
+                        "revision=revision+1 WHERE id=?",
+                        (name, normalized, fold(name), collection_id),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise ValueError("A manual collection with that name already exists.") from exc
+            else:
+                collection_id = "manual-" + str(uuid4())
+                try:
+                    conn.execute(
+                        "INSERT INTO collections(id,name,normalized_name,merge_key,is_manual)"
+                        " VALUES(?,?,?,?,1)",
+                        (collection_id, name, normalized, fold(name)),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise ValueError("A manual collection with that name already exists.") from exc
+        return next(item for item in self.collection_index() if item["id"] == collection_id)
+
+    def delete_manual_collection(self, collection_id: str) -> None:
+        with self.connect() as conn:
+            if not conn.execute(
+                "DELETE FROM collections WHERE id=? AND is_manual=1", (collection_id,)
+            ).rowcount:
+                raise KeyError("Unknown manual collection.")
+
+    def add_manual_collection_items(
+        self, collection_id: str, media_ids: list[str]
+    ) -> dict[str, int]:
+        ids = list(dict.fromkeys(media_ids))
+        if not 1 <= len(ids) <= 200:
+            raise ValueError("Supply between 1 and 200 distinct media IDs.")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute(
+                "SELECT 1 FROM collections WHERE id=? AND is_manual=1", (collection_id,)
+            ).fetchone():
+                raise KeyError("Unknown manual collection.")
+            slots = ",".join("?" for _ in ids)
+            available = {row[0] for row in conn.execute(
+                f"SELECT id FROM works WHERE id IN ({slots}) "
+                "AND kind IN ('movie','tvshow')", ids
+            )}
+            if len(available) != len(ids):
+                raise ValueError("Collections can contain existing movies and TV shows only.")
+            added = 0
+            for media_id in ids:
+                added += conn.execute(
+                    "INSERT OR IGNORE INTO collection_items(collection_id,work_id) VALUES(?,?)",
+                    (collection_id, media_id),
+                ).rowcount
+            if added:
+                conn.execute(
+                    "UPDATE collections SET revision=revision+1 WHERE id=?", (collection_id,)
+                )
+            return {
+                "added": added, "already_present": len(ids) - added,
+                "total_requested": len(ids),
+            }
+
+    def remove_manual_collection_item(self, collection_id: str, media_id: str) -> bool:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute(
+                "SELECT 1 FROM collections WHERE id=? AND is_manual=1", (collection_id,)
+            ).fetchone():
+                raise KeyError("Unknown manual collection.")
+            removed = conn.execute(
+                "DELETE FROM collection_items WHERE collection_id=? AND work_id=?",
+                (collection_id, media_id),
+            ).rowcount
+            if removed:
+                conn.execute(
+                    "UPDATE collections SET revision=revision+1 WHERE id=?", (collection_id,)
+                )
+            return bool(removed)
 
     def collection_thumbnail_input(self, collection_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
