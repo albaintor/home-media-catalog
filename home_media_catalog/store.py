@@ -1817,16 +1817,18 @@ class Store:
         by_work = cls._sources_for_works(conn, ids)
         collection_sources = cls._collection_sources_for_works(conn, ids)
         # Manual memberships supersede imported labels for both grouping and filters.
-        manual_memberships: dict[str, list[str]] = defaultdict(list)
+        manual_memberships: dict[str, list[tuple[str, str]]] = defaultdict(list)
         if ids:
             slots = ",".join("?" for _ in ids)
             for membership in conn.execute(
-                "SELECT ci.work_id,c.name FROM collection_items ci "
+                "SELECT ci.work_id,c.id,c.name FROM collection_items ci "
                 "JOIN collections c ON c.id=ci.collection_id "
                 f"WHERE c.is_manual=1 AND ci.work_id IN ({slots}) "
                 "ORDER BY c.name COLLATE NOCASE", ids
             ):
-                manual_memberships[membership["work_id"]].append(membership["name"])
+                manual_memberships[membership["work_id"]].append(
+                    (membership["id"], membership["name"])
+                )
         series_ids = [row["id"] for row in rows if row["kind"] == "tvshow"]
         progress = cls._series_episode_progress(conn, series_ids)
         resumes = cls._latest_playback_resumes(conn, ids)
@@ -1855,8 +1857,9 @@ class Store:
             item["media_sources"] = by_work.get(row["id"], [])
             manual = manual_memberships.get(row["id"])
             if manual:
-                item["collections"] = manual
-                item["collection_sources"] = {name: ["internal"] for name in manual}
+                item["collections"] = [name for _, name in manual]
+                item["manual_collection_ids"] = [collection_id for collection_id, _ in manual]
+                item["collection_sources"] = {name: ["internal"] for _, name in manual}
             else:
                 item["collection_sources"] = collection_sources.get(row["id"], {})
             partial = series_resumes.get(row["id"])
