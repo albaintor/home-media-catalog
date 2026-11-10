@@ -63,7 +63,7 @@
       </nav>
     </header>
     <section id="video-page" class="catalogue">
-      <div class="heading-row"><p id="catalogue-status" class="muted">Chargement du catalogue…</p><button id="internal-add-button" class="primary" type="button" hidden>＋ Ajouter au catalogue</button><div class="view-switch" aria-label="Mode d’affichage"><button id="grid-view" aria-label="Vue pochettes" aria-pressed="true">▦</button><button id="list-view" aria-label="Vue liste" aria-pressed="false">☷</button></div></div>
+      <div class="heading-row"><p id="catalogue-status" class="muted">Chargement du catalogue…</p><button id="manual-create-button" class="secondary" type="button" hidden>＋ Nouvelle collection</button><button id="internal-add-button" class="primary" type="button" hidden>＋ Ajouter au catalogue</button><div class="view-switch" aria-label="Mode d’affichage"><button id="grid-view" aria-label="Vue pochettes" aria-pressed="true">▦</button><button id="list-view" aria-label="Vue liste" aria-pressed="false">☷</button></div></div>
       <section class="network-home" aria-labelledby="network-home-title">
         <details class="home-collapsible" id="network-home-details">
           <summary><h2 id="network-home-title">Explorateur réseau et cloud</h2></summary>
@@ -139,7 +139,7 @@
         </section>
       </details>
       <div class="results-heading"><span id="result-count" aria-live="polite"></span><button id="reset-filters" class="text-button" hidden>Effacer les filtres</button></div>
-      <div id="collection-navigation" class="collection-navigation" hidden><button id="collection-back" type="button" class="secondary">← Toutes les collections</button><strong id="collection-current"></strong></div>
+      <div id="collection-navigation" class="collection-navigation" hidden><button id="collection-back" type="button" class="secondary">← Toutes les collections</button><strong id="collection-current"></strong><span class="manual-collection-actions" id="manual-collection-actions" hidden><button id="manual-edit-button" class="secondary" type="button">Modifier</button><button id="manual-add-items-button" class="secondary" type="button">＋ Ajouter</button><button id="manual-remove-selected-button" class="secondary" type="button" hidden>Retirer la sélection</button><button id="manual-delete-button" class="secondary" type="button">Supprimer la collection</button></span></div>
       <div id="error-banner" class="error-banner" role="alert" hidden></div>
       <section id="results" class="poster-grid" aria-label="Résultats du catalogue" aria-busy="false"></section>
       <div id="pagination" class="pagination catalogue-loading" hidden><span id="page-info" aria-live="polite"></span><p id="load-more-status" role="status"></p><button id="load-more" class="secondary" type="button" aria-controls="results">Charger la suite</button><div id="load-more-trigger" aria-hidden="true"></div></div>
@@ -166,6 +166,13 @@
         <section id="music-sources" hidden></section>
       </section>
   </main>
+  <dialog id="manual-picker-dialog" class="small-dialog manual-picker-dialog" aria-labelledby="manual-picker-title">
+    <button class="dialog-close" data-close="manual-picker-dialog" aria-label="Fermer">×</button>
+    <h2 id="manual-picker-title">Ajouter à la collection</h2>
+    <label>Rechercher un film ou une série<input id="manual-picker-search" type="search" autocomplete="off" placeholder="Titre du film ou de la série"></label>
+    <div id="manual-picker-results" role="listbox" aria-label="Résultats de recherche"></div>
+    <button type="button" class="secondary" data-close="manual-picker-dialog">Terminer</button>
+  </dialog>
   <dialog id="internal-remove-dialog" class="small-dialog" aria-labelledby="internal-remove-title">
     <button type="button" class="dialog-close" data-close="internal-remove-dialog" aria-label="Fermer">×</button>
     <h2 id="internal-remove-title">Retirer une édition interne</h2>
