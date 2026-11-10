@@ -70,6 +70,22 @@ class SourceConfig(StrictModel):
 
 
 
+class ManualCollectionInput(StrictModel):
+    name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def normalized_name(cls, value: str) -> str:
+        value = " ".join(value.strip().split())
+        if not value:
+            raise ValueError("Collection name must not be blank.")
+        return value
+
+
+class ManualCollectionItemsInput(StrictModel):
+    media_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 class InternalMediaInput(StrictModel):
     """One physical edition, identified by a client-generated idempotency UUID."""
     id: str = Field(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
