@@ -25,6 +25,9 @@ TABLES = (
     "catalogue_meta",
     "players",
 )
+# Collection index tables include manually managed groups; older backups omit them.
+COLLECTION_TABLES = ("collections", "collection_items")
+
 # Music tables (added later). Older backups without them remain importable.
 MUSIC_TABLES = (
     "music_artists",
@@ -53,7 +56,7 @@ def export_backup(store) -> dict:
     with store.connect() as conn:
         conn.execute("BEGIN")
         tables = {}
-        for table in TABLES + MUSIC_TABLES:
+        for table in TABLES + COLLECTION_TABLES + MUSIC_TABLES:
             rows = [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
             if table in ("sources", "players"):
                 for row in rows:
@@ -79,9 +82,17 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
     ):
         raise ValueError("Unsupported backup format or database schema.")
     tables = document.get("tables")
-    if not isinstance(tables, dict) or set(tables) - set(MUSIC_TABLES) != set(TABLES):
+    if (
+        not isinstance(tables, dict)
+        or set(tables) - set(MUSIC_TABLES) - set(COLLECTION_TABLES) != set(TABLES)
+        or ("collection_items" in tables) != ("collections" in tables)
+    ):
         raise ValueError("Backup is missing required catalogue tables.")
-    restored = TABLES + tuple(t for t in MUSIC_TABLES if t in tables)
+    restored = (
+        TABLES
+        + tuple(t for t in COLLECTION_TABLES if t in tables)
+        + tuple(t for t in MUSIC_TABLES if t in tables)
+    )
     if any(
         not isinstance(tables[name], list) or any(not isinstance(row, dict) for row in tables[name])
         for name in restored
@@ -133,6 +144,8 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
                 "writeback_pending",
                 "writeback_audit",
                 "jobs",
+                "collection_items",
+                "collections",
                 "list_items",
                 "lists",
                 "personal",
@@ -181,6 +194,14 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
 
             # Thumbnail revision must differ even when restoring the same list ID.
             conn.execute("UPDATE lists SET revision=revision+1")
+            if "collections" in tables:
+                conn.execute("UPDATE collections SET revision=revision+1")
+            else:
+                # Older backups had no collection tables. Rebuild the imported
+                # index on the next catalogue initialization.
+                conn.execute(
+                    "DELETE FROM catalogue_meta WHERE key='collections_index_v1'"
+                )
             conn.executemany(
                 "INSERT INTO works_fts(work_id,search_text) VALUES(?,?)",
                 (
