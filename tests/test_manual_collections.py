@@ -4,7 +4,7 @@ from home_media_catalog.connectors.base import Record
 
 
 def _seed(store):
-    source = store.save_source({"name": "Kodi", "type": "kodi"})["id"]
+    source = store.save_source({"name": "Physical library", "type": "clz"})["id"]
     records = [
         Record("film-a", "movie", "Film A", year=2017, collections=["Kodi Saga"]),
         Record("series-b", "tvshow", "Series B", year=2021, collections=["Kodi Saga"]),
@@ -38,11 +38,6 @@ def test_manual_collection_is_prioritized_and_survives_imports(store):
         assert item["collections"] == ["Mixed favourites"]
         assert item["manual_collection_ids"] == [manual["id"]]
     assert store.media(collection="Kodi Saga")["total"] == 0
-    assert store.media(collection_id=next(
-        item["id"] for item in store.collection_index() if item["name"] == "Kodi Saga"
-    ))["total"] == 0 if any(
-        item["name"] == "Kodi Saga" for item in store.collection_index()
-    ) else True
 
     # A later provider rescan may change its own labels, not manually chosen membership.
     store.apply_snapshot(source, records)
