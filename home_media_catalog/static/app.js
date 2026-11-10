@@ -1297,7 +1297,7 @@ function enterCollection(collectionId) {
   collectionReturnPosition={x:window.scrollX,y:window.scrollY};
   state.openCollection=collectionId;
   state.manualEditing=false;
-  state.manualSelected.clear();
+  state.manualSelected?.clear();
   renderCards(state.items);
   $('results').scrollIntoView({block:'start'});
 }
@@ -1307,8 +1307,7 @@ function leaveCollection() {
   collectionReturnPosition=null;
   state.openCollection=null;
   state.manualEditing=false;
-  state.manualSelected.clear();
-  $('manual-collection-actions').hidden=true;
+  state.manualSelected?.clear();
   renderCards(state.items);
   if(position)requestAnimationFrame(()=>{
     // A filter change or another navigation may supersede this return.
@@ -3802,7 +3801,7 @@ async function searchManualCandidates() {
 $('manual-create-button').addEventListener('click',createManualCollection);
 $('manual-edit-button').addEventListener('click',()=>{
   state.manualEditing=!state.manualEditing;
-  state.manualSelected.clear();
+  state.manualSelected?.clear();
   renderCards(state.items);
 });
 $('manual-add-items-button').addEventListener('click',()=>{
