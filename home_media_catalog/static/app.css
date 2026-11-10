@@ -802,3 +802,19 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .internal-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
 .internal-add-form .error-text{margin:0}
 @media(max-width:500px){.internal-inline-fields{grid-template-columns:1fr}#internal-add-button{font-size:11px;padding:8px}}
+
+/* Manual collection tools live alongside the collection heading, not in the toolbar. */
+.manual-collection-actions { display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto; }
+.manual-collection-actions[hidden] { display:none!important; }
+.manual-edit-item { position:relative;min-width:0; }
+.manual-select { position:absolute;top:8px;right:8px;z-index:3;border:1px solid currentColor;
+  border-radius:999px;background:var(--surface,#18202b);color:inherit;min-width:38px;min-height:38px;cursor:pointer; }
+.manual-select[aria-pressed="true"] { background:#235d97;color:#fff; }
+.manual-picker-dialog { max-width:min(620px,95vw); }
+.manual-picker-dialog label { display:grid;gap:8px; }
+#manual-picker-search { width:100%;box-sizing:border-box; }
+#manual-picker-results { display:grid;max-height:min(55vh,470px);overflow-y:auto;gap:4px;margin:12px 0; }
+.manual-picker-row { display:flex;align-items:center;gap:10px;text-align:left;padding:12px;
+  background:transparent;color:inherit;border:1px solid rgba(128,128,128,.25);border-radius:8px;cursor:pointer; }
+.manual-picker-row strong { flex:1; }
+.manual-picker-row[disabled] { opacity:.55;cursor:default; }
