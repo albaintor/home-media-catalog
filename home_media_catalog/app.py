@@ -66,6 +66,8 @@ from .models import (
     ErrorResponse,
     Facets,
     InternalMediaInput,
+    ManualCollectionInput,
+    ManualCollectionItemsInput,
     JobView,
     Kind,
     KodiConnectionInput,
@@ -870,6 +872,71 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def list_collections():
         return store.collection_index()
+
+    @app.post(
+        API + "/collections",
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+        status_code=201,
+    )
+    def create_manual_collection(data: ManualCollectionInput):
+        try:
+            return store.save_manual_collection(data.name)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.patch(
+        API + "/collections/{collection_id}",
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+    )
+    def rename_manual_collection(collection_id: str, data: ManualCollectionInput):
+        try:
+            return store.save_manual_collection(data.name, collection_id)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.delete(
+        API + "/collections/{collection_id}",
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+        status_code=204,
+    )
+    def remove_manual_collection(collection_id: str):
+        try:
+            store.delete_manual_collection(collection_id)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @app.post(
+        API + "/collections/{collection_id}/items",
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+    )
+    def add_manual_collection_items(
+        collection_id: str, data: ManualCollectionItemsInput
+    ):
+        try:
+            return store.add_manual_collection_items(collection_id, data.media_ids)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.delete(
+        API + "/collections/{collection_id}/items/{media_id}",
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+        status_code=204,
+    )
+    def remove_manual_collection_item(collection_id: str, media_id: str):
+        try:
+            if not store.remove_manual_collection_item(collection_id, media_id):
+                raise HTTPException(404, "Media is not in this collection.")
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @app.get(
         API + "/collections/{collection_id}/media",
