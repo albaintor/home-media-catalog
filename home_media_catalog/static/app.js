@@ -1250,10 +1250,13 @@ function collectionGroups(items) {
   });
 }
 function collectionArtwork(items) {
-  const posters=items.map(item=>item.artwork?.poster).filter(Boolean).slice(0,4);
-  if(!posters.length)return '<span class="collection-artwork-placeholder" aria-hidden="true">▦</span>';
-  const images=posters.length===3?[...posters,posters[0]]:posters;
-  return `<span class="collection-artwork ${images.length===1?'single':images.length===2?'pair':'mosaic'}" aria-hidden="true">${images.map(path=>`<img src="${esc(url(path))}" alt="" loading="lazy">`).join('')}</span>`;
+  const selected=(items||[]).slice(0,4);
+  if(!selected.length)return '<span class="collection-artwork-placeholder" aria-hidden="true">▦</span>';
+  const layout=['','single','pair','triple','mosaic'][selected.length];
+  const cells=selected.map(item=>item.artwork?.poster
+    ? `<img src="${esc(url(item.artwork.poster))}" alt="" loading="lazy">`
+    : '<span class="collection-artwork-empty" aria-hidden="true">▦</span>');
+  return `<span class="collection-artwork ${layout}" aria-hidden="true">${cells.join('')}</span>`;
 }
 function renderCards(items, append=false) {
   const root=$('results');
