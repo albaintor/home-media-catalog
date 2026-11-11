@@ -19,6 +19,10 @@ from .people import category as credit_category
 from .people import person_view, youtube_url
 from .utils import fold, now
 
+# Keep at most ten completed/failed writeback events in persistent history.
+# Pending work is separate and must never be discarded by history retention.
+WRITEBACK_AUDIT_MAX_ENTRIES = 10
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
@@ -271,6 +275,8 @@ class Store:
             from .music import MusicCatalogue
 
             MusicCatalogue.initialize(conn)
+            # Enforce retention once for databases created by older releases.
+            self._prune_writeback_audit(conn)
             # Remove obsolete separate-writer secrets on existing installations.
             for row in conn.execute("SELECT id,config FROM sources WHERE type='kodi'"):
                 saved = json.loads(row["config"])
@@ -3442,6 +3448,20 @@ class Store:
             :limit
         ]
 
+    @staticmethod
+    def _prune_writeback_audit(conn: sqlite3.Connection) -> None:
+        """Keep only the ten newest audit rows, regardless of source or work.
+
+        A pending update is stored separately in writeback_pending and is
+        never deleted here. Both date and rowid determine stable ordering.
+        """
+        conn.execute(
+            "DELETE FROM writeback_audit WHERE rowid NOT IN ("
+            "SELECT rowid FROM writeback_audit "
+            "ORDER BY created_at DESC,rowid DESC LIMIT ?)",
+            (WRITEBACK_AUDIT_MAX_ENTRIES,),
+        )
+
     def record_writebacks(
         self, work_id: str, changes: dict, results: list[dict], *, replay: bool = False
     ) -> None:
@@ -3494,6 +3514,8 @@ class Store:
                         result.get("message"),
                     ),
                 )
+            # Run once after the batch, within the same write transaction.
+            self._prune_writeback_audit(conn)
 
     def writeback_history(
         self, *, work_id: str | None = None, source_id: str | None = None, limit: int = 50
