@@ -3585,6 +3585,29 @@ document.addEventListener('submit',async event=>{
 });
 document.addEventListener('click',async event=>{
   const button=event.target.closest('button'); if(!button) return;
+  if(button.id==='detail-add-manual'&&state.detail?.id){openManualChoice(state.detail.id);return;}
+  if(button.dataset.openManual){await openManualCollectionPopup(button.dataset.openManual);return;}
+  if(button.dataset.manualChoice) {
+    const mediaID=$('manual-choice-dialog').dataset.mediaId;
+    $('manual-choice-dialog').close();
+    if(mediaID)await quickAddToManual(mediaID,button.dataset.manualChoice);
+    return;
+  }
+  if(button.hasAttribute('data-manual-new')) {
+    const mediaID=$('manual-choice-dialog').dataset.mediaId;
+    $('manual-choice-dialog').close();
+    await createManualCollection(mediaID);
+    return;
+  }
+  if(button.id==='manual-view-open'&&state.popupManualCollection) {
+    await openFullManualCollection(state.popupManualCollection);
+    return;
+  }
+  if(button.dataset.manualViewMedia) {
+    $('manual-view-dialog').close();
+    await openDetail(button.dataset.manualViewMedia);
+    return;
+  }
   if(button.id==='play-choose-episode'){await choosePlaybackSeriesEpisode();return;}
   if(button.id==='play-back-series'){returnToPlaybackSeries();return;}
   if(button.id==='copy-media-title'){await copyMediaTitle();return;}
@@ -3850,12 +3873,20 @@ $('collection-back').addEventListener('click',leaveCollection);
 function currentManualCollection() {
   return state.manualCollections.find(c=>c.id===state.openCollection);
 }
-async function createManualCollection() {
+async function createManualCollection(mediaID=null) {
   if(state.role!=='admin')return;
   const name=localizedPrompt('Nom de la nouvelle collection');
   if(!name?.trim())return;
   try {
     const collection=await api('collections',{method:'POST',body:JSON.stringify({name:name.trim()})});
+    if(typeof mediaID==='string'&&mediaID) {
+      await api('collections/'+encodeURIComponent(collection.id)+'/items',{
+        method:'POST',body:JSON.stringify({media_ids:[mediaID]})
+      });
+    }
+    if($('manual-choice-dialog').open)$('manual-choice-dialog').close();
+    if($('detail-dialog').open)$('detail-dialog').close();
+    state.openCollection=null;
     state.groupBy='collection';
     $('group-by').value='collection';
     $('merge-collections-label').hidden=false;
@@ -3884,7 +3915,7 @@ async function searchManualCandidates() {
       <span>${existing.has(item.id)?'Déjà ajouté':'＋'}</span></button>`).join('')||'<p>Aucun résultat.</p>';
   }catch(e){if(seq===state.manualSearchSeq)$('manual-picker-results').textContent=e.message;}
 }
-$('manual-create-button').addEventListener('click',createManualCollection);
+$('manual-create-button').addEventListener('click',()=>createManualCollection());
 $('manual-edit-button').addEventListener('click',()=>{
   state.manualEditing=!state.manualEditing;
   state.manualSelected?.clear();
