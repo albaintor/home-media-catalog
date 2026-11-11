@@ -2133,6 +2133,7 @@ class Store:
         order: str = "desc",
         limit: int = 60,
         offset: int = 0,
+        fast_scroll_target: str | None = None,
     ) -> dict[str, Any]:
         clauses, params = [], []
         # By default, the public catalogue displays works, not their
@@ -2382,6 +2383,22 @@ class Store:
                 (*params, limit, offset),
             ).fetchall()
             items = self._summaries_with_sources(conn, rows)
+            # An iOS alphabet jump must use the same sort_title as the actual
+            # ORDER BY, not the first letter of the displayed title. Kodi
+            # providers may supply a distinct sort title (e.g. moved articles).
+            # Count matching rows before the requested section using the same
+            # filter and SQL collation; avoid a non-monotonic client binary search.
+            target_offset = None
+            if fast_scroll_target and sort == "title":
+                target_key = fold(fast_scroll_target.strip())
+                comparison = "<" if order == "asc" else ">"
+                target_where = where + (" AND " if where else " WHERE ")
+                target_where += f"w.sort_title {comparison} ?"
+                preceding = conn.execute(
+                    "SELECT COUNT(*) FROM works w" + target_where,
+                    (*params, target_key),
+                ).fetchone()[0]
+                target_offset = min(preceding, max(0, total - 1))
             if person_name or person_tmdb_id or person_imdb_id:
                 roles = self._matched_person_roles(
                     conn,
@@ -2398,6 +2415,7 @@ class Store:
                 "limit": limit,
                 "offset": offset,
                 "has_more": offset + len(rows) < total,
+                **({"target_offset": target_offset} if target_offset is not None else {}),
             }
 
     def seasons(self, parent_id: str) -> list[dict[str, int]] | None:
