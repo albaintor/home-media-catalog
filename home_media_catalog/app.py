@@ -916,10 +916,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(writable)],
     )
     def add_manual_collection_items(
-        collection_id: str, data: ManualCollectionItemsInput
+        collection_id: str, data: ManualCollectionItemsInput, background_tasks: BackgroundTasks
     ):
         try:
-            return store.add_manual_collection_items(collection_id, data.media_ids)
+            outcome = store.add_manual_collection_items(collection_id, data.media_ids)
+            if outcome['added']:
+                background_tasks.add_task(collection_thumbnails.warm, collection_id)
+            return outcome
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from exc
         except ValueError as exc:
@@ -931,10 +934,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(writable)],
         status_code=204,
     )
-    def remove_manual_collection_item(collection_id: str, media_id: str):
+    def remove_manual_collection_item(
+        collection_id: str, media_id: str, background_tasks: BackgroundTasks
+    ):
         try:
             if not store.remove_manual_collection_item(collection_id, media_id):
                 raise HTTPException(404, "Media is not in this collection.")
+            background_tasks.add_task(collection_thumbnails.warm, collection_id)
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from exc
 
