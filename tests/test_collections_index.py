@@ -53,6 +53,35 @@ def test_collection_index_reuses_media_and_exposes_singletons(store):
     assert store.media(collection_id=identifier)["total"] == 1
 
 
+
+def test_collection_thumbnail_uses_release_year_not_membership_order(store):
+    source = _source(store)
+    store.apply_snapshot(source, [
+        Record("recent", "movie", "Recent", year=2020,
+               poster=["https://example.org/recent.jpg"]),
+        Record("undated", "tvshow", "Undated",
+               poster=["https://example.org/undated.jpg"]),
+        Record("middle", "movie", "Middle", year=2001,
+               poster=["https://example.org/middle.jpg"]),
+        Record("oldest", "movie", "Oldest", year=1980,
+               poster=["https://example.org/oldest.jpg"]),
+        Record("second", "movie", "Second", year=1990,
+               poster=["https://example.org/second.jpg"]),
+    ])
+    ids = {item["title"]: item["id"] for item in store.media()["items"]}
+    collection = store.save_manual_collection("Release chronology")
+    # Intentionally insert in a different order than the release years.
+    store.add_manual_collection_items(collection["id"], [
+        ids["Recent"], ids["Undated"], ids["Middle"],
+        ids["Oldest"], ids["Second"],
+    ])
+    covers = store.collection_thumbnail_input(collection["id"])["posters"]
+    assert [cover[0].rsplit("/", 1)[-1] for cover in covers] == [
+        "oldest.jpg", "second.jpg", "middle.jpg", "recent.jpg"
+    ]
+    assert store.collection_index()[0]["artwork"].endswith("?layout=4")
+
+
 def test_collection_index_migrates_existing_catalogue(store):
     source = _source(store)
     store.apply_snapshot(source, [
