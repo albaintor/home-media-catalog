@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 
-from home_media_catalog.connectors.base import Record
 from home_media_catalog.artwork import ArtworkError
+from home_media_catalog.connectors.base import Record
 from home_media_catalog.list_thumbnails import HEIGHT, WIDTH, compose
 
 
