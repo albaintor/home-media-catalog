@@ -130,7 +130,7 @@
           <div class="format-category"><span class="format-category-title">Support</span><div id="disc-formats" class="format-choices" role="group" aria-label="Formats des supports"></div></div>
           <span id="format-selection-count" class="format-help" aria-live="polite">Sélectionnez plusieurs formats pour les cumuler (ET).</span>
         </div>
-        <label>Collection<select id="collection"><option value="">Toutes les collections</option></select></label>
+        <details class="multi-filter collection-filter" id="collection-picker"><summary>Collection <span id="collection-summary">Toutes les collections</span></summary><div class="collection-picker-content"><label class="collection-internal-option"><input type="checkbox" id="collection-internal-only"> Collections internes uniquement</label><input id="collection-filter-search" type="search" placeholder="Rechercher une collection…" aria-label="Rechercher une collection" autocomplete="off"><div class="multi-choices collection-choices" id="collection-choices" role="group" aria-label="Collections"></div><button id="collection-clear" class="text-button" type="button">Effacer la sélection</button></div></details>
         <details class="multi-filter" id="multi-watch-status"><summary>État <span id="watch-status-summary">Tous</span></summary><div class="multi-choices" id="watch-status-choices" role="group" aria-label="États de lecture"></div></details>
         <label class="deep-search-option"><input id="deep-search" type="checkbox"> Recherche avancée <small>Synopsis, acteurs, genres et autres métadonnées</small></label>
         <label>Regrouper<select id="group-by"><option value="">Aucun</option><option value="collection">Collection</option></select></label>
