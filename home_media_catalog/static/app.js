@@ -75,6 +75,7 @@ state.multi={source_type:[],genre:[],watch_status:[]};
 state.groupBy=preferences.collectionDefaultsVersion===2?(preferences.groupBy==='collection'?'collection':''):'collection';
 state.openCollection=null;
 state.manualCollections=[];
+state.indexedCollections=[];
 state.collections=Array.isArray(preferences.collections)?preferences.collections.filter(v=>typeof v==='string').slice(0,40):[];
 state.internalCollectionsOnly=preferences.internalCollectionsOnly===true;
 state.collectionChoices=[];
@@ -1241,7 +1242,7 @@ function mergeCollectionGroupsByMembers(groups) {
       }
     }
     merged.push({id:preferred.id,title:preferred.title,items:[...members.values()],
-      provenance,seen:new Set(members.keys())});
+      provenance,seen:new Set(members.keys()),mergeComponentCount:component.length});
   }
   if(groups.has(''))merged.push(groups.get(''));
   return merged;
@@ -1303,6 +1304,24 @@ function collectionGroups(items) {
   );
   const visibleNamedGroups=namedGroups.filter(group=>
     group.manual||group.items.length!==1||!containedInLargerCollection.has(group.items[0].id));
+  // The server has already composed revisioned JPEG mosaics in release-year
+  // order. Use them when the displayed group is exactly one indexed group.
+  // Merged groups spanning several server collections still need the client
+  // chronology-based fallback to represent all their combined members.
+  const indexedByName=new Map();
+  for(const indexed of state.indexedCollections||[]) {
+    if(indexed.is_manual||!indexed.artwork)continue;
+    const key=collectionFold(indexed.name||'');
+    indexedByName.set(key,[...(indexedByName.get(key)||[]),indexed]);
+  }
+  for(const group of visibleNamedGroups) {
+    if(group.manual||group.mergeComponentCount>1)continue;
+    const matches=indexedByName.get(collectionFold(group.title))||[];
+    if(matches.length===1&&Number(matches[0].item_count)===group.items.length) {
+      group.artwork=matches[0].artwork;
+      group.itemCount=matches[0].item_count;
+    }
+  }
   // Never hide catalogue media in a large "Other titles" collection. For
   // physical-only CLZ records (e.g. "Blu-Ray") display each film directly.
   // Reconcile against final visible groups so no work disappears during merges.
@@ -1336,14 +1355,13 @@ function collectionMosaicItems(items) {
   }).slice(0,4);
 }
 function collectionArtwork(items, fallbackArtwork=null, expectedCount=null) {
-  const selected=collectionMosaicItems(items);
-  // Use the revisioned server mosaic if a paginated grid lacks the latest
-  // members: a two-item cached page must not depict a three-item collection.
-  const incomplete=Number.isInteger(expectedCount)&&
-    selected.length<Math.min(4,expectedCount);
-  if((incomplete||!selected.length||!selected.some(item=>item.artwork?.poster))&&fallbackArtwork) {
+  // The indexed server mosaic is authoritative and versioned with the
+  // collection revision; never replace it with a page-dependent browser
+  // composition. In particular, a third movie changes the URL and layout.
+  if(fallbackArtwork) {
     return `<span class="collection-artwork single server-artwork" aria-hidden="true"><span class="collection-artwork-empty">▦</span><img src="${esc(url(fallbackArtwork))}" alt="" loading="lazy"></span>`;
   }
+  const selected=collectionMosaicItems(items);
   if(!selected.length)return '<span class="collection-artwork-placeholder" aria-hidden="true">▦</span>';
   const layout=['','single','pair','triple','mosaic'][selected.length];
   const cells=selected.map(item=>item.artwork?.poster
@@ -1441,8 +1459,8 @@ async function loadMedia({append=false}={}) {
   try {
     if(!append) {
       // Both the collection grid and media context menus need internal groups.
-      state.manualCollections=(await api('collections',{signal:state.controller.signal}))
-        .filter(c=>c.is_manual);
+      state.indexedCollections=await api('collections',{signal:state.controller.signal});
+      state.manualCollections=state.indexedCollections.filter(c=>c.is_manual);
       renderCollectionPicker();
     }
     const page=await api(`media?${currentParams(offset)}`,{signal:state.controller.signal});
