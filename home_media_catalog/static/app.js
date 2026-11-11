@@ -1196,7 +1196,7 @@ function collectionGroups(items) {
     .map(collectionFold));
   const groups=new Map();
   const manualGroups=new Map((state.manualCollections||[]).filter(c=>c.is_manual).map(c=>
-    [c.id,{id:c.id,title:c.name,items:[],seen:new Set(),provenance:new Map(),manual:true}]));
+    [c.id,{id:c.id,title:c.name,items:[],seen:new Set(),provenance:new Map(),manual:true,artwork:c.artwork}]));
   for(const media of items) {
     const manualIDs=media.manual_collection_ids||[];
     if(manualIDs.length) {
@@ -1264,8 +1264,11 @@ function collectionGroups(items) {
     return ascending?title:-title;
   });
 }
-function collectionArtwork(items) {
+function collectionArtwork(items, fallbackArtwork=null) {
   const selected=(items||[]).slice(0,4);
+  if((!selected.length||!selected.some(item=>item.artwork?.poster))&&fallbackArtwork) {
+    return `<span class="collection-artwork single server-artwork" aria-hidden="true"><span class="collection-artwork-empty">▦</span><img src="${esc(url(fallbackArtwork))}" alt="" loading="lazy"></span>`;
+  }
   if(!selected.length)return '<span class="collection-artwork-placeholder" aria-hidden="true">▦</span>';
   const layout=['','single','pair','triple','mosaic'][selected.length];
   const cells=selected.map(item=>item.artwork?.poster
@@ -1287,12 +1290,12 @@ function renderCards(items, append=false) {
       root.className='collection-grid';
       root.innerHTML=groups.map(group=>group.items.length===1&&!group.manual
         ? card(group.items[0])
-        : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.items.length} titres">${collectionArtwork(group.items)}<strong>${esc(group.title)}</strong><span>${group.items.length} titres</span></button>`).join('');
+        : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.items.length} titres">${collectionArtwork(group.items,group.artwork)}<strong>${esc(group.title)}</strong><span>${group.items.length} titres</span></button>`).join('');
       attachImageFallbacks(root);
       return;
     }
     const group=groups.find(group=>group.id===state.openCollection);
-    backdrop.innerHTML=group?.items.length?collectionArtwork(group.items):'';
+    backdrop.innerHTML=group?(group.items.length||group.artwork?collectionArtwork(group.items,group.artwork):''):'';
     attachImageFallbacks(backdrop);
     $('collection-current').textContent=group?.title||'';
     const editable=!!group?.manual&&state.role==='admin';
@@ -2151,7 +2154,7 @@ async function openManualCollectionPopup(collectionID) {
     state.popupManualCollection=collectionID;
     $('manual-view-title').textContent=collection.name;
     $('manual-view-count').textContent=members.length+' titre(s)';
-    $('manual-view-artwork').innerHTML=collectionArtwork(members);
+    $('manual-view-artwork').innerHTML=collectionArtwork(members,collection.artwork);
     $('manual-view-items').innerHTML=members.map(item=>
       '<button type="button" data-manual-view-media="'+esc(item.id)+'">'+esc(item.title)+
       ' <small>'+(item.kind==='tvshow'?'Série':'Film')+'</small></button>'
