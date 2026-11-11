@@ -21,6 +21,7 @@ class WatchStatus(StrEnum):
 
 class SortField(StrEnum):
     TITLE = "title"
+    ORIGINAL_TITLE = "original_title"
     DATE_ADDED = "date_added"
     YEAR = "year"
     RATING = "rating"
