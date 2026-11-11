@@ -2713,7 +2713,7 @@ class Store:
         return [
             {
                 **dict(r),
-                "thumbnail": f"/api/v1/lists/{r['id']}/thumbnails/{r['revision']}.jpg",
+                "thumbnail": f"/api/v1/lists/{r['id']}/thumbnails/{r['revision']}.jpg?layout=2",
             }
             for r in conn.execute(
                 "SELECT l.*,"
@@ -2941,7 +2941,7 @@ class Store:
                     single_items.get(sole_id) if item["item_count"] == 1 else None
                 )
                 item["artwork"] = (
-                    f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg"
+                    f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg?layout=2"
                     if item["id"] != "uncategorized" and item["item_count"] else None
                 )
             return result
