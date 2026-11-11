@@ -1332,7 +1332,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "pending_count": store.writeback_pending_count(),
             "pending": store.pending_writebacks(),
-            "recent": store.writeback_state(limit=30),
+            "recent": store.writeback_state(limit=10),
         }
 
     @app.get(
