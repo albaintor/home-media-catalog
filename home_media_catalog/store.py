@@ -2941,7 +2941,7 @@ class Store:
                     single_items.get(sole_id) if item["item_count"] == 1 else None
                 )
                 item["artwork"] = (
-                    f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg?layout=3"
+                    f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg?layout=4"
                     if item["id"] != "uncategorized" and item["item_count"] else None
                 )
             return result
@@ -3054,10 +3054,13 @@ class Store:
             ).fetchone()
             if not found:
                 return None
+            # Artwork follows release chronology, not poster availability or
+            # the current list sort. Unknown years remain last, with a stable
+            # title/ID tie-breaker. Membership edits bump the revision.
             posters = [json.loads(row["poster"] or "[]") for row in conn.execute(
                 "SELECT w.poster FROM collection_items ci JOIN works w ON w.id=ci.work_id "
                 "WHERE ci.collection_id=? ORDER BY "
-                "(w.poster IS NULL OR w.poster = '[]'),w.year,w.sort_title,w.id LIMIT 4",
+                "(w.year IS NULL OR w.year <= 0),w.year,w.sort_title,w.id LIMIT 4",
                 (collection_id,),
             )]
             return {"revision": found["revision"], "posters": posters}
