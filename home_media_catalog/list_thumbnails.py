@@ -190,7 +190,7 @@ class CollectionThumbnails(ListThumbnails):
 
     def _path(self, list_id: str, revision: int) -> Path:
         # Invalidate covers cached with the old, potentially empty layout.
-        return self.directory / f"{list_id}-{revision}-layout3.jpg"
+        return self.directory / f"{list_id}-{revision}-layout4.jpg"
 
     def thumbnail_input(self, collection_id: str):
         return self.store.collection_thumbnail_input(collection_id)
