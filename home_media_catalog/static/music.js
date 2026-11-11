@@ -97,14 +97,25 @@ async function loadMore() {
   if (state.query) params.set('q', state.query);
   if (state.tab === 'albums' && state.format) params.set('format', state.format);
   try {
-    const page = await api(`music/${state.tab}?${params}`);
+    let page;
+    if (state.tab === 'genres') {
+      const facets = await api('music/facets');
+      const names = (facets.genres || []).filter(name => name.toLocaleLowerCase().includes(state.query.toLocaleLowerCase()));
+      page = {items: names.map(name => ({id:name,name})),total:names.length};
+    } else if (state.tab === 'playlists') {
+      const lists = await api('music/playlists');
+      const items = lists.filter(list => list.name.toLocaleLowerCase().includes(state.query.toLocaleLowerCase()));
+      page = {items,total:items.length};
+    } else page = await api(`music/${state.tab}?${params}`);
     if (seq !== state.seq) return;
     state.total = page.total; state.offset += page.items.length; state.items.push(...page.items);
-    const html = page.items.map(state.tab === 'albums' ? albumCard : state.tab === 'artists' ? artistCard : trackRow).join('');
+    const render = state.tab === 'albums' ? albumCard : state.tab === 'artists' ? artistCard
+      : state.tab === 'genres' ? genreCard : state.tab === 'playlists' ? playlistCard : trackRow;
+    const html = page.items.map(render).join('');
     const results = $('music-results');
     results.className = state.tab === 'tracks' ? 'music-track-list' : 'music-grid';
     results.insertAdjacentHTML('beforeend', html);
-    if (state.tab === 'artists') observeArtistCards(results);
+    if (['artists','genres','playlists'].includes(state.tab)) observeMosaicCards(results);
     if (!state.items.length) results.innerHTML = `<p class="empty-state">${esc(tr(state.query ? 'Aucun résultat.' : 'Aucun élément. Ajoutez une source musicale dans l’onglet Sources.'))}</p>`;
     $('music-more').hidden = state.offset >= state.total;
   } catch (error) {
@@ -114,34 +125,57 @@ async function loadMore() {
 
 const albumCard = (album) => `<button type="button" class="music-card" data-album="${esc(album.id)}">${artwork('albums', album.id, album.title)}<span class="card-title">${esc(album.title)}</span><span class="card-meta">${esc(album.artist)}${album.year ? ' · ' + album.year : ''}</span><span class="music-formats">${formatBadges(album.formats)}</span></button>`;
 const artistCard = (artist) => `<button type="button" class="music-card artist" data-artist="${esc(artist.id)}"><span class="music-cover music-artist-mosaic" data-mosaic-artist="${esc(artist.id)}"><span class="music-cover-placeholder">♫</span></span><span class="card-title">${esc(artist.name)}</span><span class="card-meta">${artist.album_count} ${esc(tr('albums'))}</span></button>`;
+const genreCard = (genre) => `<button type="button" class="music-card" data-music-genre="${esc(genre.id)}"><span class="music-cover" data-mosaic-genre="${esc(genre.id)}"><span class="music-cover-placeholder">♫</span></span><span class="card-title">${esc(genre.name)}</span></button>`;
+const playlistCard = (playlist) => `<button type="button" class="music-card" data-music-playlist="${esc(playlist.id)}"><span class="music-cover" data-mosaic-playlist="${esc(playlist.id)}"><span class="music-cover-placeholder">♫</span></span><span class="card-title">${esc(playlist.name)}</span><span class="card-meta">${playlist.track_count} ${esc(tr('titres'))}</span></button>`;
 
-function artistMosaic(albums) {
-  const selected = albums.slice(0, 4);
-  if (!selected.length) return '<span class="music-cover-placeholder">♫</span>';
-  const cells = selected.map(album => `<img alt="" loading="lazy" decoding="async" src="${url(`api/v1/music/albums/${encodeURIComponent(album.id)}/artwork/thumb`)}" onerror="this.style.visibility='hidden'">`);
-  while (cells.length < 4 && selected.length > 2) cells.push('<span class="music-mosaic-empty">♫</span>');
-  return `<span class="music-mosaic-cells ${selected.length === 1 ? 'single' : selected.length === 2 ? 'double' : ''}">${cells.join('')}</span>`;
+function playlistAlbums(tracks) {
+  const ids = new Set();
+  return tracks.filter(track => {
+    if (!track.album_id || ids.has(track.album_id)) return false;
+    ids.add(track.album_id);
+    return true;
+  }).slice(0,4).map(track => ({id:track.album_id}));
 }
 
-function observeArtistCards(root) {
+function artistMosaic(albums) {
+  const selected = albums.slice(0,4);
+  if (!selected.length) return '<span class="music-cover-placeholder">♫</span>';
+  const cells = selected.map(album => `<img alt="" loading="lazy" decoding="async" src="${url(`api/v1/music/albums/${encodeURIComponent(album.id)}/artwork/thumb`)}" onerror="this.style.visibility='hidden'">`);
+  const layout = ['','single','double','triple','mosaic'][selected.length];
+  return `<span class="music-mosaic-cells ${layout}">${cells.join('')}</span>`;
+}
+
+function mosaicKey(element) {
+  if (element.dataset.mosaicArtist !== undefined) return ['artist',element.dataset.mosaicArtist];
+  if (element.dataset.mosaicGenre !== undefined) return ['genre',element.dataset.mosaicGenre];
+  return ['playlist',element.dataset.mosaicPlaylist];
+}
+
+async function mosaicAlbums(kind, id) {
+  if (kind === 'artist') return (await api(`music/artists/${encodeURIComponent(id)}`)).albums || [];
+  if (kind === 'genre') return (await api(`music/albums?${new URLSearchParams({genre:id,limit:4})}`)).items || [];
+  return playlistAlbums((await api(`music/playlists/${encodeURIComponent(id)}`)).tracks || []);
+}
+
+function observeMosaicCards(root) {
   if (!state.artistObserver) {
     state.artistObserver = new IntersectionObserver(entries => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         state.artistObserver.unobserve(entry.target);
-        const element = entry.target, id = element.dataset.mosaicArtist;
-        const cached = state.artistAlbums.get(id);
+        const element = entry.target;
+        const [kind,id] = mosaicKey(element), key = kind + '|' + id;
+        const cached = state.artistAlbums.get(key);
         if (cached) { element.innerHTML = artistMosaic(cached); continue; }
-        api(`music/artists/${encodeURIComponent(id)}`).then(artist => {
-          const albums = artist.albums || [];
-          state.artistAlbums.set(id, albums);
-          if (element.isConnected && element.dataset.mosaicArtist === id) element.innerHTML = artistMosaic(albums);
-        }).catch(() => { /* retain placeholder when artist detail is unavailable */ });
+        mosaicAlbums(kind,id).then(albums => {
+          state.artistAlbums.set(key,albums);
+          if (element.isConnected && mosaicKey(element).join('|') === key) element.innerHTML = artistMosaic(albums);
+        }).catch(() => { /* retain placeholder when artwork is unavailable */ });
       }
     }, {rootMargin:'200px'});
   }
-  for (const element of root.querySelectorAll('[data-mosaic-artist]')) {
-    const cached = state.artistAlbums.get(element.dataset.mosaicArtist);
+  for (const element of root.querySelectorAll('[data-mosaic-artist],[data-mosaic-genre],[data-mosaic-playlist]')) {
+    const [kind,id] = mosaicKey(element), cached = state.artistAlbums.get(kind + '|' + id);
     if (cached) element.innerHTML = artistMosaic(cached);
     else state.artistObserver.observe(element);
   }
@@ -185,6 +219,24 @@ async function showArtist(id) {
     ${artist.biography ? `<p class="synopsis">${esc(artist.biography)}</p>` : ''}</div></div>
     <div class="detail-section"><p class="section-label">${esc(tr('ALBUMS'))} · ${artist.albums.length}</p><div class="music-grid">${artist.albums.map(albumCard).join('')}</div></div>
     ${artist.appears_on.length ? `<div class="detail-section"><p class="section-label">${esc(tr('APPARAÎT SUR'))}</p><div class="music-grid">${artist.appears_on.map(albumCard).join('')}</div></div>` : ''}`;
+  $('music-detail-dialog').showModal();
+}
+
+async function showGenre(name) {
+  const albums = (await api(`music/albums?${new URLSearchParams({genre:name,limit:200})}`)).items || [];
+  $('music-detail').innerHTML = `<h2>${esc(name)}</h2><p class="muted">${albums.length} ${esc(tr('albums'))}</p><div class="music-grid">${albums.map(albumCard).join('')}</div>`;
+  $('music-detail-dialog').showModal();
+}
+
+async function showPlaylist(id) {
+  const playlist = await api(`music/playlists/${encodeURIComponent(id)}`);
+  const tracks = playlist.tracks || [];
+  const albums = playlistAlbums(tracks);
+  state.detailTracks = tracks;
+  $('music-detail').innerHTML = `<div class="music-detail-head"><span class="music-cover">${artistMosaic(albums)}</span><div>
+    <p class="eyebrow">${esc(tr('PLAYLIST'))}</p><h2>${esc(playlist.name)}</h2><p class="muted">${tracks.length} ${esc(tr('titres'))}</p>
+    ${tracks.some(track => track.playable) ? `<button type="button" class="primary" data-play-album>▶ ${esc(tr('Écouter'))}</button>` : ''}</div></div>
+    <div class="detail-section"><div class="music-track-list">${tracks.map((track,i) => trackRow(track,i)).join('')}</div></div>`;
   $('music-detail-dialog').showModal();
 }
 
@@ -727,11 +779,13 @@ export function startMusic() {
     }
   }
   document.addEventListener('click', async event => {
-    const target = event.target.closest('[data-album],[data-artist],[data-play-track],[data-play-album],[data-kodi-album],[data-music-sync],[data-music-delete]');
+    const target = event.target.closest('[data-album],[data-artist],[data-music-genre],[data-music-playlist],[data-play-track],[data-play-album],[data-kodi-album],[data-music-sync],[data-music-delete]');
     if (!target || !target.closest('#music-page,#music-detail-dialog')) return;
     try {
       if (target.dataset.album) await showAlbum(target.dataset.album);
       else if (target.dataset.artist) await showArtist(target.dataset.artist);
+      else if (target.dataset.musicGenre) await showGenre(target.dataset.musicGenre);
+      else if (target.dataset.musicPlaylist) await showPlaylist(target.dataset.musicPlaylist);
       else if (target.dataset.playTrack) {
         const inDetail = target.closest('#music-detail-dialog');
         const list = inDetail ? state.detailTracks : state.items;
