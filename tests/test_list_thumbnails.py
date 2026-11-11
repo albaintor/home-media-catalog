@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 from PIL import Image
 
 from home_media_catalog.connectors.base import Record
+from home_media_catalog.artwork import ArtworkError
 from home_media_catalog.list_thumbnails import HEIGHT, WIDTH, compose
 
 
@@ -133,3 +134,33 @@ def test_legacy_lists_lazily_materialize_thumbnail_on_first_request(client, admi
     assert client.get(url, headers=admin).status_code == 200
     assert path.is_file()
     assert client.get(url, headers=admin).content == path.read_bytes()
+
+
+def test_manual_collection_thumbnail_recovers_after_temporary_artwork_failure(client, admin):
+    store = client.app.state.store
+    thumbnails = client.app.state.collection_thumbnails
+    source = store.save_source({"name": "Kodi", "type": "kodi"})
+    store.apply_snapshot(
+        source["id"],
+        [Record("movie:retry", "movie", "Recovering", poster=["https://example.org/retry.jpg"])],
+    )
+    media_id = store.media()["items"][0]["id"]
+    collection = store.save_manual_collection("Recovering collection")
+    store.add_manual_collection_items(collection["id"], [media_id])
+    indexed = next(item for item in store.collection_index() if item["id"] == collection["id"])
+    thumbnail_url = indexed["artwork"]
+    assert thumbnail_url.endswith("?layout=3")
+
+    with patch.object(thumbnails.artwork, "get", new_callable=AsyncMock) as getter:
+        getter.side_effect = ArtworkError("Artwork temporarily unavailable")
+        assert client.get(thumbnail_url, headers=admin).status_code == 200
+        # Do not persist a blank mosaic for the lifetime of this revision.
+        assert not list(thumbnails.directory.glob(f"{collection['id']}-*.jpg"))
+
+        getter.side_effect = None
+        getter.return_value = (colored_poster((195, 40, 45)), "image/png")
+        recovered = client.get(thumbnail_url, headers=admin)
+        assert recovered.status_code == 200
+        assert list(thumbnails.directory.glob(f"{collection['id']}-*-layout3.jpg"))
+        with Image.open(io.BytesIO(recovered.content)) as image:
+            assert image.getpixel((20, 20))[0] > 120
