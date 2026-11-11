@@ -2425,8 +2425,8 @@ class Store:
                 **({"target_offset": target_offset} if target_offset is not None else {}),
             }
 
-    def seasons(self, parent_id: str) -> list[dict[str, int]] | None:
-        """Compact TV season index. Includes specials (season 0) if present."""
+    def seasons(self, parent_id: str) -> list[dict[str, Any]] | None:
+        """Combine imported Kodi episodes with individually owned CLZ seasons."""
         with self.connect() as conn:
             show = conn.execute("SELECT kind FROM works WHERE id=?", (parent_id,)).fetchone()
             if not show or show["kind"] != "tvshow":
@@ -2438,21 +2438,50 @@ class Store:
                 " GROUP BY season ORDER BY season",
                 (parent_id,),
             ).fetchall()
+            index = {
+                row["season"]: {
+                    **dict(row), "owned_physical": False,
+                    "physical_edition_count": 0, "physical_formats": [],
+                    "physical_title": None, "physical_year": None,
+                }
+                for row in rows
+            }
+            physical_posters = set()
+            for row in conn.execute(
+                "SELECT r.payload FROM records r JOIN sources s ON s.id=r.source_id "
+                "WHERE r.work_id=? AND s.type='clz'", (parent_id,),
+            ):
+                payload = json.loads(row["payload"])
+                metadata = payload.get("metadata") or {}
+                number = metadata.get("physical_season")
+                if not isinstance(number, int) or isinstance(number, bool) or not 0 <= number <= 10000:
+                    continue
+                season = index.setdefault(number, {
+                    "season": number, "episode_count": 0, "watched_count": 0,
+                    "owned_physical": False, "physical_edition_count": 0,
+                    "physical_formats": [], "physical_title": None, "physical_year": None,
+                })
+                season["owned_physical"] = True
+                season["physical_edition_count"] += 1
+                season["physical_formats"] = sorted(set(
+                    season["physical_formats"] + payload.get("formats", [])
+                ))
+                season["physical_title"] = season["physical_title"] or metadata.get("physical_title")
+                season["physical_year"] = season["physical_year"] or metadata.get("physical_year")
+                if payload.get("poster"):
+                    physical_posters.add(number)
             cached = conn.execute(
                 "SELECT payload FROM enrichment WHERE work_id=?", (parent_id,)
             ).fetchone()
             posters = json.loads(cached["payload"]).get("season_posters", {}) if cached else {}
-            return [
-                {
-                    **dict(row),
-                    "poster": (
-                        f"/api/v1/media/{parent_id}/seasons/{row['season']}/poster"
-                        if isinstance(posters, dict) and posters.get(str(row["season"]))
-                        else None
-                    ),
-                }
-                for row in rows
-            ]
+            for number, season in index.items():
+                season["poster"] = (
+                    f"/api/v1/media/{parent_id}/seasons/{number}/poster"
+                    if number in physical_posters or isinstance(posters, dict) and posters.get(str(number))
+                    else None
+                )
+            return [index[number] for number in sorted(index)]
+
 
     def set_episode_watch_status(
         self,
@@ -2503,24 +2532,32 @@ class Store:
         }
 
     def season_poster(self, parent_id: str, season: int) -> list[str]:
-        """Read a validated server-cached TMDB season poster candidate."""
+        """Use the CLZ physical season cover, then cached TMDB artwork."""
         if season < 0 or season > 10000:
             return []
         with self.connect() as conn:
+            candidates = []
+            for row in conn.execute(
+                "SELECT r.payload FROM records r JOIN sources s ON s.id=r.source_id "
+                "JOIN works w ON w.id=r.work_id "
+                "WHERE w.id=? AND w.kind='tvshow' AND s.type='clz'", (parent_id,),
+            ):
+                payload = json.loads(row["payload"])
+                if (payload.get("metadata") or {}).get("physical_season") == season:
+                    candidates.extend(payload.get("poster") or [])
             row = conn.execute(
                 "SELECT e.payload FROM enrichment e JOIN works w ON w.id=e.work_id"
-                " WHERE w.id=? AND w.kind='tvshow'",
-                (parent_id,),
+                " WHERE w.id=? AND w.kind='tvshow'", (parent_id,),
             ).fetchone()
-            if not row:
-                return []
-            posters = json.loads(row["payload"]).get("season_posters", {})
-            candidate = posters.get(str(season)) if isinstance(posters, dict) else None
-            if isinstance(candidate, str) and re.fullmatch(
-                r"https://image\.tmdb\.org/t/p/w342/[A-Za-z0-9_.-]+", candidate
-            ):
-                return [candidate]
-            return []
+            if row:
+                posters = json.loads(row["payload"]).get("season_posters", {})
+                candidate = posters.get(str(season)) if isinstance(posters, dict) else None
+                if isinstance(candidate, str) and re.fullmatch(
+                    r"https://image\.tmdb\.org/t/p/w342/[A-Za-z0-9_.-]+", candidate
+                ):
+                    candidates.append(candidate)
+            return list(dict.fromkeys(candidates))
+
 
     def save_playback_resume(
         self, work_id: str, edition_id: str, position: float,

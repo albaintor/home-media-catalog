@@ -457,6 +457,11 @@ class SeasonSummary(BaseModel):
     episode_count: int
     watched_count: int
     poster: str | None = None
+    owned_physical: bool = False
+    physical_edition_count: int = 0
+    physical_formats: list[str] = Field(default_factory=list)
+    physical_title: str | None = None
+    physical_year: int | None = None
 
 
 class MediaPage(BaseModel):

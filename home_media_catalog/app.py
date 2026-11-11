@@ -983,7 +983,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(authenticated)],
     )
     def media_seasons(media_id: str):
-        """Navigable season list; empty for shows without imported episodes."""
+        """Navigate Kodi episodes and CLZ physical seasons, even without episode files."""
         result = store.seasons(media_id)
         if result is None:
             raise HTTPException(404, "Unknown TV show.")

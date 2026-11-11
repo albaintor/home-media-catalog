@@ -148,12 +148,23 @@ def parse_clz(data: bytes) -> list[Record]:
             except ValueError:
                 # A viewing without a valid date still counts as watched.
                 continue
+        # CLZ season discs are separate physical editions of a single series.
+        # Never use the shared series IMDb ID to infer a season number.
+        series_title = text(node, "series/displayname")
+        season_match = re.search(
+            r"(?:^|[\s:—-])(?:season|saison)\s*0*(\d{1,3})\b",
+            title, flags=re.IGNORECASE,
+        )
+        physical_season = (
+            int(season_match.group(1))
+            if is_tv and series_title and season_match else None
+        )
         record = Record(
             external_key=key,
             kind="tvshow" if is_tv else "movie",
-            title=title,
+            title=series_title if physical_season is not None else title,
             original_title=text(node, "originaltitle") or None,
-            sort_title=text(node, "sorttitle") or title,
+            sort_title=series_title if physical_season is not None else (text(node, "sorttitle") or title),
             year=integer(text(node, "releasedate/year/displayname")),
             plot=plain_text(text(node, "plot")),
             runtime_minutes=integer(text(node, "runtime")),
@@ -214,6 +225,13 @@ def parse_clz(data: bytes) -> list[Record]:
                 "country": text(node, "country/displayname") or None,
                 "language": text(node, "language/displayname") or None,
                 "purchase_date": text(node, "purchasedate/displaydate") or None,
+                "series_title": series_title or None,
+                "physical_season": physical_season,
+                "physical_title": title if physical_season is not None else None,
+                "physical_year": (
+                    integer(text(node, "releasedate/year/displayname"))
+                    if physical_season is not None else None
+                ),
                 "clz_movie_id": text(node, "bpmovieid"),
                 "clz_media_id": text(node, "bpmediaid"),
             },

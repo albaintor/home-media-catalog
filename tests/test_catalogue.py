@@ -889,3 +889,39 @@ def test_fast_scroll_title_uses_server_sort_title_and_both_directions(store):
                     sort="title", order=direction, offset=position, limit=1
                 )["items"][0]["id"]
             )
+
+
+def test_clz_physical_seasons_keep_separate_editions(store):
+    def entry(number):
+        return f"""<movie><hash>season-{number}</hash>
+          <bpmediaid>{1000+number}</bpmediaid>
+          <title>The Mandalorian: Season {number}</title>
+          <series><displayname>The Mandalorian</displayname></series>
+          <istvseries boolvalue="1">Yes</istvseries>
+          <imdbnr>8111088</imdbnr><upc>{9000+number}</upc>
+          <formats><format><displayname>4K UHD</displayname></format></formats>
+          <coverfront>https://example.com/season{number}.jpg</coverfront>
+        </movie>"""
+    xml = ("<collectorz><data><movieinfo><movielist>" +
+           "".join(entry(n) for n in (1, 2, 3)) +
+           "</movielist></movieinfo></data></collectorz>").encode()
+    records = parse_clz(xml)
+    assert [r.metadata["physical_season"] for r in records] == [1, 2, 3]
+    assert [r.title for r in records] == ["The Mandalorian"] * 3
+    sid = source(store)
+    store.apply_snapshot(sid, records)
+    page = store.media()
+    assert page["total"] == 1
+    work_id = page["items"][0]["id"]
+    assert page["items"][0]["title"] == "The Mandalorian"
+    detail = store.detail(work_id)
+    assert {e["metadata"]["barcode"] for e in detail["editions"]} == {"9001", "9002", "9003"}
+    assert len(detail["editions"]) == 3
+    seasons = store.seasons(work_id)
+    assert [s["season"] for s in seasons] == [1, 2, 3]
+    assert all(s["owned_physical"] and s["physical_edition_count"] == 1
+               and s["episode_count"] == 0 for s in seasons)
+    assert store.season_poster(work_id, 2) == ["https://example.com/season2.jpg"]
+    store.apply_snapshot(sid, parse_clz(xml))
+    assert store.media()["total"] == 1
+    assert len(store.detail(work_id)["editions"]) == 3
