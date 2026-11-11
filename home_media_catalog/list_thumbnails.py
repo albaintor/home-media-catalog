@@ -141,10 +141,10 @@ class ListThumbnails:
             # If candidate posters failed to load (including a network timeout),
             # serve a temporary placeholder but do not persist it as an immutable
             # cover for this revision. A later request can recover the artwork.
-            missing_download = any(
-                candidates and image is None
-                for candidates, image in zip(source["posters"], images, strict=False)
-            )
+            # A member with no poster metadata is also incomplete: a later
+            # sync can supply its poster without changing collection membership.
+            # Do not freeze a placeholder as the final revisioned image.
+            missing_download = any(image is None for image in images)
             if not missing_download:
                 await asyncio.to_thread(self._save, list_id, revision, result)
             return result
