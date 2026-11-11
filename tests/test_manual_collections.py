@@ -113,3 +113,30 @@ def test_manual_collections_are_in_portable_backups(store):
     )
     assert restored["item_count"] == 2
     assert restored["is_manual"] is True
+
+
+def test_sort_by_original_title_with_localized_fallback(store, client, admin):
+    """Sorting by translated titles and original titles must produce different orders."""
+    source = store.save_source({"name": "Title test", "type": "clz"})["id"]
+    store.apply_snapshot(source, [
+        Record("title-alpha", "movie", "Alpha", original_title="Zulu"),
+        Record("title-beta", "movie", "Beta", original_title="Alpha"),
+        Record("title-gamma", "movie", "Gamma"),
+    ])
+    by_localized = store.media(sort="title", order="asc", limit=10)
+    by_original = store.media(sort="original_title", order="asc", limit=10)
+    assert [item["title"] for item in by_localized["items"]] == [
+        "Alpha", "Beta", "Gamma"
+    ]
+    assert [item["title"] for item in by_original["items"]] == [
+        "Beta", "Gamma", "Alpha"
+    ]
+    response = client.get(
+        "/api/v1/media",
+        params={"sort": "original_title", "order": "asc"},
+        headers=admin,
+    )
+    assert response.status_code == 200, response.text
+    assert [item["title"] for item in response.json()["items"]] == [
+        "Beta", "Gamma", "Alpha"
+    ]
