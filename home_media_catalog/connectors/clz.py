@@ -150,15 +150,18 @@ def parse_clz(data: bytes) -> list[Record]:
                 continue
         # CLZ season discs are separate physical editions of a single series.
         # Never use the shared series IMDb ID to infer a season number.
-        series_title = text(node, "series/displayname")
+        explicit_series = text(node, "series/displayname")
         season_match = re.search(
             r"(?:^|[\s:—-])(?:season|saison)\s*0*(\d{1,3})\b",
             title, flags=re.IGNORECASE,
         )
-        physical_season = (
-            int(season_match.group(1))
-            if is_tv and series_title and season_match else None
+        physical_season = int(season_match.group(1)) if is_tv and season_match else None
+        series_title = explicit_series or (
+            title[:season_match.start()].rstrip(" :-—").strip()
+            if physical_season is not None else ""
         )
+        if not series_title:
+            physical_season = None
         record = Record(
             external_key=key,
             kind="tvshow" if is_tv else "movie",

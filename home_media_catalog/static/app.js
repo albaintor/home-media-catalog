@@ -806,7 +806,8 @@ function playbackSeriesMarkup(item) {
 async function loadPlaybackSeriesSeasons(seriesID) {
   if(state.role!=='admin')return;
   try {
-    const seasons=await api('media/'+encodeURIComponent(seriesID)+'/seasons');
+    const seasons=(await api('media/'+encodeURIComponent(seriesID)+'/seasons'))
+      .filter(season=>season.episode_count>0);
     if(state.playbackSeriesId!==seriesID||!$('play-dialog').open||!$('play-season'))return;
     const picker=$('play-season');
     const previous=state.playbackSeriesSeason;
@@ -1334,9 +1335,13 @@ function collectionMosaicItems(items) {
       String(a.id||'').localeCompare(String(b.id||''));
   }).slice(0,4);
 }
-function collectionArtwork(items, fallbackArtwork=null) {
+function collectionArtwork(items, fallbackArtwork=null, expectedCount=null) {
   const selected=collectionMosaicItems(items);
-  if((!selected.length||!selected.some(item=>item.artwork?.poster))&&fallbackArtwork) {
+  // Use the revisioned server mosaic if a paginated grid lacks the latest
+  // members: a two-item cached page must not depict a three-item collection.
+  const incomplete=Number.isInteger(expectedCount)&&
+    selected.length<Math.min(4,expectedCount);
+  if((incomplete||!selected.length||!selected.some(item=>item.artwork?.poster))&&fallbackArtwork) {
     return `<span class="collection-artwork single server-artwork" aria-hidden="true"><span class="collection-artwork-empty">▦</span><img src="${esc(url(fallbackArtwork))}" alt="" loading="lazy"></span>`;
   }
   if(!selected.length)return '<span class="collection-artwork-placeholder" aria-hidden="true">▦</span>';
@@ -1360,12 +1365,12 @@ function renderCards(items, append=false) {
       root.className='collection-grid';
       root.innerHTML=groups.map(group=>group.items.length===1&&!group.manual
         ? card(group.items[0])
-        : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.itemCount??group.items.length} titres">${collectionArtwork(group.items,group.artwork)}<strong>${esc(group.title)}</strong><span>${group.itemCount??group.items.length} titres</span></button>`).join('');
+        : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.itemCount??group.items.length} titres">${collectionArtwork(group.items,group.artwork,group.itemCount)}<strong>${esc(group.title)}</strong><span>${group.itemCount??group.items.length} titres</span></button>`).join('');
       attachImageFallbacks(root);
       return;
     }
     const group=groups.find(group=>group.id===state.openCollection);
-    backdrop.innerHTML=group?(group.items.length||group.artwork?collectionArtwork(group.items,group.artwork):''):'';
+    backdrop.innerHTML=group?(group.items.length||group.artwork?collectionArtwork(group.items,group.artwork,group.itemCount):''):'';
     attachImageFallbacks(backdrop);
     $('collection-current').textContent=group?.title||'';
     const editable=!!group?.manual&&state.role==='admin';
@@ -2299,10 +2304,13 @@ async function loadSeasons(id,selectedSeason=null) {
   $('season-list').innerHTML=seasons.length?seasons.map(season=>{
     const label=season.season===0?'Spéciaux':`Saison ${season.season}`;
     const artwork=season.poster||seriesPoster;
-    return `<div class="season-entry"><button type="button" class="season-button" data-season="${season.season}" aria-expanded="${selectedSeason===season.season}" aria-label="${esc(label)}, ${season.episode_count} épisodes, ${season.watched_count} vus${season.watched_count>0&&season.watched_count<season.episode_count?', partiellement vu':''}">
+    const physical=season.owned_physical?
+      'Édition physique'+(season.physical_edition_count>1?'s':'')+' · '+season.physical_edition_count+
+      (season.physical_formats?.length?' · '+season.physical_formats.join(', '):''):'';
+    return `<div class="season-entry"><button type="button" class="season-button" data-season="${season.season}" aria-expanded="${selectedSeason===season.season}" aria-label="${esc(label)}, ${esc(physical||season.episode_count+' épisodes')}">
       <span class="season-cover">${artwork?`<img loading="lazy" src="${esc(url(artwork))}" alt="">`:'<span aria-hidden="true">▦</span>'}${season.watched_count>0?`<span class="season-watched-flag ${season.watched_count<season.episode_count?'partial':'complete'}" title="${season.watched_count<season.episode_count?'Partiellement vu':'Vu'} : ${season.watched_count}/${season.episode_count} épisodes" aria-label="${season.watched_count<season.episode_count?'Partiellement vu':'Vu'} : ${season.watched_count}/${season.episode_count} épisodes">${season.watched_count<season.episode_count?'◐':'✓'}</span>`:''}</span>
       <span class="season-label">${esc(label)}</span>
-      <span class="season-count">${season.episode_count} épisodes · ${season.watched_count} vus</span>
+      <span class="season-count">${physical?esc(physical)+(season.episode_count?' · ':''):''}${season.episode_count?season.episode_count+' épisodes · '+season.watched_count+' vus':''}</span>
     </button></div>`;
   }).join(''):'Aucune saison importée pour cette série.';
   attachImageFallbacks($('season-list'));
@@ -2314,6 +2322,11 @@ async function loadSeasonEpisodes(season,offset=0,scrollToEpisodes=false) {
   const parent=detail.id;
   const node=$('episode-list');
   node.dataset.season=String(season);
+  const physical=state.seasons?.find(s=>s.season===season);
+  if(physical?.owned_physical&&!physical.episode_count) {
+    node.innerHTML='<p class="hint">Saison présente dans la collection physique (CLZ). Aucun épisode numérique importé.</p>';
+    return;
+  }
   if(!offset)node.innerHTML='<p class="hint">Chargement des épisodes…</p>';
   try{
     const page=await api(`media/${encodeURIComponent(parent)}/seasons/${season}/episodes?limit=100&offset=${offset}`);
