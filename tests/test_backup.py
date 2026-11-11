@@ -65,6 +65,57 @@ def test_export_import_round_trip_and_thumbnail_revision(client, admin):
     assert any(item["id"] == work_id for item in store.media(q="Example")["items"])
 
 
+def test_backup_restores_edition_resume_and_person_roles_and_accepts_old_v2(client, admin):
+    """Keep newly added catalogue state without breaking historical JSON archives."""
+    store, _, work_id, _ = _library(client)
+    with store.connect() as conn:
+        edition = conn.execute(
+            "SELECT id FROM records WHERE work_id=?", (work_id,)
+        ).fetchone()["id"]
+        conn.execute(
+            "INSERT INTO playback_resume "
+            "(work_id,edition_id,position_seconds,total_seconds,updated_at) "
+            "VALUES(?,?,?,?,?)",
+            (work_id, edition, 123.5, 600.0, "2026-11-11T12:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO work_person_roles(work_id,name_fold,category) VALUES(?,?,?)",
+            (work_id, "example actor", "actor"),
+        )
+
+    exported = client.get("/api/v1/backup", headers=admin)
+    assert exported.status_code == 200
+    document = exported.json()
+    assert document["tables"]["playback_resume"]
+    assert document["tables"]["work_person_roles"]
+    assert document["tables"]["playback_resume"][0]["position_seconds"] == 123.5
+
+    with store.connect() as conn:
+        conn.execute("DELETE FROM playback_resume")
+        conn.execute("DELETE FROM work_person_roles WHERE work_id=?", (work_id,))
+
+    restored = client.post("/api/v1/backup", headers=admin, json=document)
+    assert restored.status_code == 200, restored.text
+    with store.connect() as conn:
+        resume = conn.execute(
+            "SELECT position_seconds,total_seconds FROM playback_resume WHERE work_id=?",
+            (work_id,),
+        ).fetchone()
+        roles = conn.execute(
+            "SELECT name_fold,category FROM work_person_roles WHERE work_id=?",
+            (work_id,),
+        ).fetchall()
+    assert resume["position_seconds"] == 123.5
+    assert resume["total_seconds"] == 600.0
+    assert ("example actor", "actor") in [(row["name_fold"], row["category"]) for row in roles]
+
+    older = deepcopy(document)
+    older["tables"].pop("playback_resume")
+    older["tables"].pop("work_person_roles")
+    legacy_import = client.post("/api/v1/backup", headers=admin, json=older)
+    assert legacy_import.status_code == 200, legacy_import.text
+
+
 def test_invalid_backup_is_rejected_without_partial_import(client, admin):
     store, _, work_id, _ = _library(client)
     original = client.get("/api/v1/backup", headers=admin).json()
