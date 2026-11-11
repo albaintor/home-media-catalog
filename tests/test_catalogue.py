@@ -857,3 +857,35 @@ def test_reset_content_requires_confirmation_for_api(client, admin):
     response = client.post(endpoint, headers=headers)
     assert response.status_code == 200
     assert response.json()["status"] == "content_reset"
+
+
+def test_fast_scroll_title_uses_server_sort_title_and_both_directions(store):
+    """An imported sort title can differ from the poster's displayed title."""
+    sid = source(store)
+    store.apply_snapshot(
+        sid,
+        [
+            Record("a", "movie", "Alpha"),
+            Record("m", "movie", "The Matrix", sort_title="Matrix, The"),
+            Record("n1", "movie", "Nerve"),
+            Record("n2", "movie", "Nope"),
+            Record("z", "movie", "Zootopia"),
+        ],
+    )
+    expected = {
+        "asc": {"A": 0, "M": 1, "N": 2, "Z": 4},
+        "desc": {"Z": 0, "N": 1, "M": 3, "A": 4},
+    }
+    for direction, letters in expected.items():
+        ordered = store.media(sort="title", order=direction, limit=20)["items"]
+        for letter, position in letters.items():
+            page = store.media(
+                sort="title", order=direction, limit=1,
+                fast_scroll_target=letter,
+            )
+            assert page["target_offset"] == position
+            assert ordered[position]["id"] == (
+                store.media(
+                    sort="title", order=direction, offset=position, limit=1
+                )["items"][0]["id"]
+            )
