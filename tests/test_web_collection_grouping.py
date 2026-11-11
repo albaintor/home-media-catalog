@@ -167,3 +167,43 @@ for (const merge of [false,true]) {
 }
 """
     subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_collection_cover_prefers_server_revision_and_orders_fallback_by_year():
+    """The grid uses a persisted full collection mosaic instead of partial pages."""
+    source = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const src = fs.readFileSync(process.argv[1], 'utf8');
+const helpers = src.slice(src.indexOf('const nonSagaCollections'),
+    src.indexOf('let filtersRestored=false'));
+const funcs = src.slice(src.indexOf('function collectionMetric('),
+    src.indexOf('function renderCards('));
+const state = {
+  mergeEquivalentCollections:false, order:'asc', collections:[],
+  manualCollections:[], internalCollectionsOnly:false,
+  indexedCollections:[{
+    id:'collection-1',name:'Chronology',item_count:3,is_manual:false,
+    artwork:'/api/v1/collections/collection-1/thumbnails/7.jpg?layout=4'
+  }]
+};
+const $ = () => ({value:'title'});
+const api = Function('state','$','displayLocale','esc','url',
+  helpers+'\n'+funcs+'\nreturn {collectionGroups,collectionMosaicItems,collectionArtwork};'
+)(state,$,()=> 'fr',x=>x,x=>x);
+const media = [
+ {id:'new',title:'New',year:2020,collections:['Chronology'],artwork:{poster:'new.jpg'}},
+ {id:'old',title:'Old',year:1980,collections:['Chronology'],artwork:{poster:'old.jpg'}},
+ {id:'mid',title:'Middle',year:2005,collections:['Chronology'],artwork:{poster:'mid.jpg'}}
+];
+const group = api.collectionGroups(media).find(c=>c.title==='Chronology');
+assert.equal(group.itemCount,3);
+assert.equal(group.artwork,state.indexedCollections[0].artwork);
+assert.deepEqual(api.collectionMosaicItems(media).map(m=>m.year),[1980,2005,2020]);
+const markup=api.collectionArtwork(group.items,group.artwork,group.itemCount);
+assert.ok(markup.includes('/thumbnails/7.jpg?layout=4'));
+assert.ok(!markup.includes('new.jpg'));
+assert.ok(!markup.includes('old.jpg'));
+"""
+    subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
