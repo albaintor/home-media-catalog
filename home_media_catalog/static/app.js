@@ -29,6 +29,15 @@ const physicalCollectionKey = name => collectionFold(name).replace(/[\s_-]+/g,''
 const isSagaCollection = name => !!String(name||'').trim() &&
   !nonSagaCollections.has(physicalCollectionKey(name));
 const collectionName = title => String(title||'').replace(/\s*[-–—]\s*saga\s*$/i,'').trim() || String(title||'');
+// The same normalization is used by the picker, API query and displayed groups.
+// A numbered alias is only merged if its unsuffixed name also exists.
+function collectionSelectionKey(raw) {
+  const name=collectionName(raw),match=/^(.*?)\s+\(([2-9]\d*)\)$/.exec(name);
+  if(!match)return collectionFold(name);
+  const all=[...(state.facets?.collections||[]),...(state.manualCollections||[]).map(c=>c.name)];
+  return all.some(other=>collectionFold(collectionName(other))===collectionFold(match[1]))
+    ? collectionFold(match[1]) : collectionFold(name);
+}
 function normalizedSagaName(raw, availableNames) {
   const name=state.mergeEquivalentCollections?collectionName(raw):String(raw||'').trim();
   // Strip a duplicate suffix only when the base collection also exists.
@@ -103,28 +112,25 @@ function renderCollectionPicker() {
     .map(name=>({value:name,label:collectionName(name),internal:false}));
   const unique=new Map();
   for(const choice of [...manual,...(state.internalCollectionsOnly?[]:external)]) {
-    const key=collectionFold(collectionName(choice.label));
+    const key=collectionSelectionKey(choice.label);
     if(!key)continue;
     const old=unique.get(key);
     if(!old||choice.internal&&!old.internal)unique.set(key,choice);
   }
   state.collectionChoices=[...unique.values()].sort((a,b)=>
     a.label.localeCompare(b.label,displayLocale(),{sensitivity:'base',numeric:true}));
-  const keys=new Set(state.collectionChoices.map(c=>collectionFold(collectionName(c.value))));
-  state.collections=[...new Map(state.collections
-    .filter(v=>keys.has(collectionFold(collectionName(v))))
-    .map(v=>[collectionFold(collectionName(v)),v])).values()].slice(0,40);
-  const selected=new Set(state.collections.map(v=>collectionFold(collectionName(v))));
+  // Do not discard restored choices before the collection index has arrived.
+  const selected=new Set(state.collections.map(collectionSelectionKey));
   const q=collectionFold($('collection-filter-search').value);
   const visible=state.collectionChoices.filter(c=>!q||collectionFold(c.label).includes(q));
   $('collection-choices').innerHTML=visible.map(c=>{
-    const active=selected.has(collectionFold(collectionName(c.value)));
+    const active=selected.has(collectionSelectionKey(c.value));
     return `<button type="button" class="multi-choice" data-collection-choice="${esc(c.value)}" aria-pressed="${active}"><span aria-hidden="true">${active?'✓':'○'}</span>${esc(c.label)}</button>`;
   }).join('')||'<span class="hint">Aucune collection trouvée.</span>';
   $('collection-internal-only').checked=state.internalCollectionsOnly;
   $('collection-summary').textContent=state.collections.length
     ? state.collections.length===1 ? state.collectionChoices.find(c=>
-      selected.has(collectionFold(collectionName(c.value))))?.label||state.collections[0]
+      selected.has(collectionSelectionKey(c.value)))?.label||state.collections[0]
       : `${state.collections.length} sélectionnées`
     : state.internalCollectionsOnly?'Collections internes':'Toutes les collections';
   $('collection-clear').hidden=!state.collections.length;
@@ -1134,11 +1140,11 @@ function currentParams(offset=0) {
   const params=new URLSearchParams({limit:state.groupBy==='collection'?200:state.limit,offset,sort:$('sort').value,order:state.order});
   for (const [id,name] of [['search','q'],['kind','kind']]) if ($(id).value) params.set(name,$(id).value);
   // Selecting a canonical saga name includes its source-specific aliases.
-  const wanted=new Set(state.collections.map(name=>collectionFold(collectionName(name))));
+  const wanted=new Set(state.collections.map(collectionSelectionKey));
   const candidates=state.internalCollectionsOnly
     ? state.manualCollections.map(c=>c.name)
     : [...(state.facets?.collections||[]),...state.manualCollections.map(c=>c.name)];
-  const names=wanted.size?[...new Set(candidates.filter(name=>wanted.has(collectionFold(collectionName(name)))))] : [];
+  const names=wanted.size?[...new Set(candidates.filter(name=>wanted.has(collectionSelectionKey(name))))] : [];
   for(const name of names.slice(0,40))params.append('collection',name);
   for(const name of multiNames)for(const value of state.multi[name])params.append(name,value);
   for (const value of state.formats) params.append('format',value);
@@ -1245,8 +1251,8 @@ function collectionGroups(items) {
     .map(name=>state.mergeEquivalentCollections?collectionName(name):String(name||'').trim())
     .map(collectionFold));
   const groups=new Map();
-  const chosen=new Set(state.collections.map(name=>collectionFold(collectionName(name))));
-  const isChosen=name=>!chosen.size||chosen.has(collectionFold(collectionName(name)));
+  const chosen=new Set(state.collections.map(collectionSelectionKey));
+  const isChosen=name=>!chosen.size||chosen.has(collectionSelectionKey(name));
   const manualGroups=new Map((state.manualCollections||[]).filter(c=>c.is_manual&&isChosen(c.name)).map(c=>
     [c.id,{id:c.id,title:c.name,items:[],itemCount:c.item_count||0,seen:new Set(),provenance:new Map(),manual:true,artwork:c.artwork}]));
   for(const media of items) {
@@ -1431,7 +1437,7 @@ async function loadMedia({append=false}={}) {
     state.hasMore=page.has_more&&page.items.length>0;
     $('result-count').textContent=`${page.total.toLocaleString(displayLocale())} résultat${page.total>1?'s':''}${state.personSearch?.tmdbId?' · TMDB #'+state.personSearch.tmdbId+' (crédits non identifiés inclus)':state.personSearch?.imdbId?' · IMDb '+state.personSearch.imdbId+' (crédits non identifiés inclus)':''}${state.recent?' · ajoutés depuis 30 jours':''}`;
     const visibleManual=state.manualCollections.some(c=>!state.collections.length||
-      state.collections.some(name=>collectionFold(collectionName(name))===collectionFold(collectionName(c.name))));
+      state.collections.some(name=>collectionSelectionKey(name)===collectionSelectionKey(c.name)));
     if (!append&&!page.items.length&&!(state.groupBy==='collection'&&visibleManual)) {
       const empty=!state.facets?.sources.length || state.facets.sources.every(s=>!s.item_count);
       $('results').innerHTML=`<div class="empty-state"><span class="empty-icon" aria-hidden="true">▦</span><h2>${empty?'Votre bibliothèque commence ici.':'Aucun titre ne correspond.'}</h2><p>${empty?'Connectez la base Kodi ou importez un export CLZ Movies.':'Modifiez les filtres ou essayez un autre mot.'}</p>${state.role==='admin'&&empty?'<button class="primary" data-action="connections">Ajouter une source →</button>':'<button class="secondary" data-action="reset">Effacer les filtres</button>'}</div>`;
@@ -3973,9 +3979,9 @@ $('collection-choices').addEventListener('click',event=>{
   const target=event.target.closest('[data-collection-choice]');
   if(!target)return;
   const value=target.dataset.collectionChoice;
-  const folded=collectionFold(collectionName(value));
-  if(state.collections.some(name=>collectionFold(collectionName(name))===folded))
-    state.collections=state.collections.filter(name=>collectionFold(collectionName(name))!==folded);
+  const folded=collectionSelectionKey(value);
+  if(state.collections.some(name=>collectionSelectionKey(name)===folded))
+    state.collections=state.collections.filter(name=>collectionSelectionKey(name)!==folded);
   else if(state.collections.length<40)state.collections.push(value);
   state.openCollection=null;
   renderCollectionPicker();
