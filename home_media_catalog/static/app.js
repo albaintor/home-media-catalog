@@ -905,6 +905,13 @@ async function openMediaActions(trigger) {
     <button type="button" data-quick-action="trailer">▷ Bande-annonce YouTube</button>
     ${admin&&(item.source_types||[]).includes('internal')?'<button type="button" data-quick-action="remove-internal" class="error-text">Supprimer une édition interne…</button>':''}
     ${admin?'<details class="media-actions-lists"><summary>＋ Ajouter à une liste <span aria-hidden="true">›</span></summary><div class="media-actions-list-choices"><button type="button" data-quick-action="new-list">＋ Nouvelle liste</button><p class="hint">Chargement des listes…</p></div></details>':''}`;
+  if(admin&&['movie','tvshow'].includes(item.kind)&&!(item.manual_collection_ids||[]).length) {
+    menu.insertAdjacentHTML('beforeend',
+      '<details class="media-actions-lists"><summary>＋ Ajouter à une collection <span aria-hidden="true">›</span></summary><div class="media-actions-list-choices">'+
+      '<button type="button" data-quick-action="new-manual">＋ Nouvelle collection</button>'+
+      state.manualCollections.map(c=>'<button type="button" data-quick-manual="'+esc(c.id)+'">'+esc(c.name)+'</button>').join('')+
+      '</div></details>');
+  }
   menu.showPopover();
   trigger.setAttribute('aria-expanded','true');
   positionMediaActions(trigger);
@@ -1038,14 +1045,16 @@ $('media-actions-popover').addEventListener('toggle',event=>{
 document.addEventListener('click',async event=>{
   const trigger=event.target.closest('[data-media-actions]');
   if(trigger){await openMediaActions(trigger);return;}
-  const entry=event.target.closest('#media-actions-popover [data-quick-action], #media-actions-popover [data-quick-list]');
+  const entry=event.target.closest('#media-actions-popover [data-quick-action], #media-actions-popover [data-quick-list], #media-actions-popover [data-quick-manual]');
   if(!entry)return;
   event.stopPropagation();
   const id=$('media-actions-popover').dataset.mediaId;
   if(!id)return;
-  const action=entry.dataset.quickAction, listId=entry.dataset.quickList;
+  const action=entry.dataset.quickAction, listId=entry.dataset.quickList,manualID=entry.dataset.quickManual;
   closeMediaActions();
   if(listId){await quickAddToList(id,listId);return;}
+  if(manualID){await quickAddToManual(id,manualID);return;}
+  if(action==='new-manual'){await createManualCollection(id);return;}
   if(action==='details'){await openDetail(id);return;}
   if(action==='watch'){await quickWatch(id,entry.dataset.watched==='true');return;}
   if(action==='new-list'){await quickCreateList(id);return;}
@@ -1251,6 +1260,9 @@ function renderCards(items, append=false) {
   const grouped=state.groupBy==='collection';
   const opened=grouped&&state.openCollection!==null;
   $('collection-navigation').hidden=!opened;
+  const backdrop=$('collection-backdrop');
+  backdrop.hidden=!opened;
+  if(!opened)backdrop.replaceChildren();
   if(grouped) {
     const groups=collectionGroups(state.items);
     if(!opened) {
@@ -1262,6 +1274,8 @@ function renderCards(items, append=false) {
       return;
     }
     const group=groups.find(group=>group.id===state.openCollection);
+    backdrop.innerHTML=group?.items.length?collectionArtwork(group.items):'';
+    attachImageFallbacks(backdrop);
     $('collection-current').textContent=group?.title||'';
     const editable=!!group?.manual&&state.role==='admin';
     $('manual-collection-actions').hidden=!editable;
