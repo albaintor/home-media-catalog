@@ -66,6 +66,7 @@ state.multi={source_type:[],genre:[],watch_status:[]};
 state.groupBy=preferences.groupBy==='collection'?'collection':'';
 state.openCollection=null;
 state.manualCollections=[];
+state.popupManualCollection=null;
 state.manualEditing=false;
 state.manualSelected=new Set();
 state.manualSearchSeq=0;
@@ -1172,9 +1173,6 @@ function collectionGroups(items) {
   const groups=new Map();
   const manualGroups=new Map((state.manualCollections||[]).filter(c=>c.is_manual).map(c=>
     [c.id,{id:c.id,title:c.name,items:[],seen:new Set(),provenance:new Map(),manual:true}]));
-  const showEmptyManual=!$('kind').value&&!$('search').value&&!state.multi.genre.length&&
-    !state.multi.watch_status.length&&!state.multi.source_type.length&&!state.formats.length&&
-    !$('collection').value&&!state.recent;
   for(const media of items) {
     const manualIDs=media.manual_collection_ids||[];
     if(manualIDs.length) {
@@ -1210,7 +1208,7 @@ function collectionGroups(items) {
   }
   const ascending=state.order==='asc',sort=$('sort').value;
   const namedGroups=[
-    ...[...manualGroups.values()].filter(group=>showEmptyManual||group.items.length),
+    ...manualGroups.values(),
     ...mergeCollectionGroupsByMembers(groups).filter(group=>group.id)
   ];
   // A one-film collection is rendered as a direct media card. Suppress it
@@ -1331,7 +1329,8 @@ async function loadMedia({append=false}={}) {
   updateLoadingState();
   updateFilterState();
   try {
-    if(!append&&state.groupBy==='collection') {
+    if(!append) {
+      // Both the collection grid and media context menus need internal groups.
       state.manualCollections=(await api('collections',{signal:state.controller.signal}))
         .filter(c=>c.is_manual);
     }
