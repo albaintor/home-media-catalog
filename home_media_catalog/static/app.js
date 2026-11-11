@@ -16,7 +16,7 @@ function writeStorage(key,value) { try { localStorage.setItem(key,value); } catc
 let preferences;
 try { preferences=JSON.parse(readStorage(preferenceKey)) || {}; } catch { preferences={}; }
 if(typeof preferences!=='object'||Array.isArray(preferences)) preferences={};
-const filterIds = ['search','kind','collection','sort'];
+const filterIds = ['search','kind','sort'];
 const multiNames = ['source_type','genre','watch_status'];
 const multiLegacyIds = {source_type:'source-type',genre:'genre',watch_status:'watch-status'};
 // Imported collection names can represent a medium rather than a film saga.
@@ -66,6 +66,9 @@ state.multi={source_type:[],genre:[],watch_status:[]};
 state.groupBy=preferences.collectionDefaultsVersion===2?(preferences.groupBy==='collection'?'collection':''):'collection';
 state.openCollection=null;
 state.manualCollections=[];
+state.collections=Array.isArray(preferences.collections)?preferences.collections.filter(v=>typeof v==='string').slice(0,40):[];
+state.internalCollectionsOnly=preferences.internalCollectionsOnly===true;
+state.collectionChoices=[];
 state.popupManualCollection=null;
 state.manualEditing=false;
 state.manualSelected=new Set();
@@ -92,9 +95,43 @@ function renderMultiFilters() {
     $(multiLegacyIds[name]+'-summary').textContent=summary;
   }
 }
+function renderCollectionPicker() {
+  // One choice per canonical name. Internal collections take precedence when
+  // imported sources contain the same name or numbered/saga aliases.
+  const manual=(state.manualCollections||[]).map(c=>({value:c.name,label:c.name,internal:true}));
+  const external=(state.facets?.collections||[]).filter(isSagaCollection)
+    .map(name=>({value:name,label:collectionName(name),internal:false}));
+  const unique=new Map();
+  for(const choice of [...manual,...(state.internalCollectionsOnly?[]:external)]) {
+    const key=collectionFold(collectionName(choice.label));
+    if(!key)continue;
+    const old=unique.get(key);
+    if(!old||choice.internal&&!old.internal)unique.set(key,choice);
+  }
+  state.collectionChoices=[...unique.values()].sort((a,b)=>
+    a.label.localeCompare(b.label,displayLocale(),{sensitivity:'base',numeric:true}));
+  const keys=new Set(state.collectionChoices.map(c=>collectionFold(collectionName(c.value))));
+  state.collections=[...new Map(state.collections
+    .filter(v=>keys.has(collectionFold(collectionName(v))))
+    .map(v=>[collectionFold(collectionName(v)),v])).values()].slice(0,40);
+  const selected=new Set(state.collections.map(v=>collectionFold(collectionName(v))));
+  const q=collectionFold($('collection-filter-search').value);
+  const visible=state.collectionChoices.filter(c=>!q||collectionFold(c.label).includes(q));
+  $('collection-choices').innerHTML=visible.map(c=>{
+    const active=selected.has(collectionFold(collectionName(c.value)));
+    return `<button type="button" class="multi-choice" data-collection-choice="${esc(c.value)}" aria-pressed="${active}"><span aria-hidden="true">${active?'✓':'○'}</span>${esc(c.label)}</button>`;
+  }).join('')||'<span class="hint">Aucune collection trouvée.</span>';
+  $('collection-internal-only').checked=state.internalCollectionsOnly;
+  $('collection-summary').textContent=state.collections.length
+    ? state.collections.length===1 ? state.collectionChoices.find(c=>
+      selected.has(collectionFold(collectionName(c.value))))?.label||state.collections[0]
+      : `${state.collections.length} sélectionnées`
+    : state.internalCollectionsOnly?'Collections internes':'Toutes les collections';
+  $('collection-clear').hidden=!state.collections.length;
+}
 function savePreferences() {
   if(!filtersRestored)return;
-  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,mergeEquivalentCollections:state.mergeEquivalentCollections,collectionDefaultsVersion:2,formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
+  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,mergeEquivalentCollections:state.mergeEquivalentCollections,collectionDefaultsVersion:2,collections:state.collections,internalCollectionsOnly:state.internalCollectionsOnly,formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
 }
 function updateSearchClearButton() {
   $('clear-search').hidden=!$('search').value&&!state.personSearch;
@@ -127,10 +164,14 @@ function restoreFilters() {
       ? saved.filter(value=>typeof value==='string').slice(0,40)
       : typeof legacy==='string'&&legacy?[legacy]:[];
   }
+  if(!Array.isArray(preferences.collections)&&typeof preferences.filters?.collection==='string'&&preferences.filters.collection)
+    state.collections=[preferences.filters.collection];
+  $('collection-internal-only').checked=state.internalCollectionsOnly;
   $('group-by').value=state.groupBy;
   $('merge-collections').checked=state.mergeEquivalentCollections;
   $('merge-collections-label').hidden=state.groupBy!=='collection';
   renderMultiFilters();
+  renderCollectionPicker();
   const previousFormat=preferences.filters?.format;
   const savedFormats=Array.isArray(preferences.formats)?preferences.formats:
     typeof previousFormat==='string'&&previousFormat?[previousFormat]:[];
@@ -1091,7 +1132,14 @@ document.addEventListener('scroll',event=>{
 function attachImageFallbacks(root) { root.querySelectorAll('img').forEach(img=>{img.addEventListener('error',()=>img.classList.add('failed'),{once:true});}); }
 function currentParams(offset=0) {
   const params=new URLSearchParams({limit:state.groupBy==='collection'?200:state.limit,offset,sort:$('sort').value,order:state.order});
-  for (const [id,name] of [['search','q'],['kind','kind'],['collection','collection']]) if ($(id).value) params.set(name,$(id).value);
+  for (const [id,name] of [['search','q'],['kind','kind']]) if ($(id).value) params.set(name,$(id).value);
+  // Selecting a canonical saga name includes its source-specific aliases.
+  const wanted=new Set(state.collections.map(name=>collectionFold(collectionName(name))));
+  const candidates=state.internalCollectionsOnly
+    ? state.manualCollections.map(c=>c.name)
+    : [...(state.facets?.collections||[]),...state.manualCollections.map(c=>c.name)];
+  const names=wanted.size?[...new Set(candidates.filter(name=>wanted.has(collectionFold(collectionName(name)))))] : [];
+  for(const name of names.slice(0,40))params.append('collection',name);
   for(const name of multiNames)for(const value of state.multi[name])params.append(name,value);
   for (const value of state.formats) params.append('format',value);
   if(state.personSearch) {
@@ -1111,7 +1159,7 @@ function currentParams(offset=0) {
   return params;
 }
 function updateFilterState() {
-  const count=['search','kind','collection'].filter(id=>$(id).value).length
+  const count=['search','kind'].filter(id=>$(id).value).length + state.collections.length + Number(state.internalCollectionsOnly)
     + multiNames.reduce((total,name)=>total+state.multi[name].length,0)
     + state.formats.length + Number(state.recent) + Number(state.deepSearch) + Number(!!state.groupBy);
   $('filter-count').textContent=count || '';
@@ -1197,8 +1245,10 @@ function collectionGroups(items) {
     .map(name=>state.mergeEquivalentCollections?collectionName(name):String(name||'').trim())
     .map(collectionFold));
   const groups=new Map();
-  const manualGroups=new Map((state.manualCollections||[]).filter(c=>c.is_manual).map(c=>
-    [c.id,{id:c.id,title:c.name,items:[],seen:new Set(),provenance:new Map(),manual:true,artwork:c.artwork}]));
+  const chosen=new Set(state.collections.map(name=>collectionFold(collectionName(name))));
+  const isChosen=name=>!chosen.size||chosen.has(collectionFold(collectionName(name)));
+  const manualGroups=new Map((state.manualCollections||[]).filter(c=>c.is_manual&&isChosen(c.name)).map(c=>
+    [c.id,{id:c.id,title:c.name,items:[],itemCount:c.item_count||0,seen:new Set(),provenance:new Map(),manual:true,artwork:c.artwork}]));
   for(const media of items) {
     const manualIDs=media.manual_collection_ids||[];
     if(manualIDs.length) {
@@ -1210,7 +1260,8 @@ function collectionGroups(items) {
       }
       continue;
     }
-    const matched=(media.collections||[]).filter(isSagaCollection);
+    if(state.internalCollectionsOnly)continue;
+    const matched=(media.collections||[]).filter(name=>isSagaCollection(name)&&isChosen(name));
     const names=new Set();
     for(const raw of matched) {
       const name=normalizedSagaName(raw,available);
@@ -1226,7 +1277,7 @@ function collectionGroups(items) {
       for(const sourceID of trusted)if(typeof sourceID==='string'&&sourceID)
         group.provenance.get(media.id).add(sourceID);
     }
-    if(!names.size) {
+    if(!names.size && !chosen.size && !state.internalCollectionsOnly) {
       if(!groups.has(''))groups.set('',{id:'',title:'Autres titres',items:[],seen:new Set(),provenance:new Map()});
       const other=groups.get('');
       if(!other.seen.has(media.id)){other.seen.add(media.id);other.items.push(media);}
@@ -1249,7 +1300,7 @@ function collectionGroups(items) {
   // physical-only CLZ records (e.g. "Blu-Ray") display each film directly.
   // Reconcile against final visible groups so no work disappears during merges.
   const represented=new Set(visibleNamedGroups.flatMap(group=>group.items.map(item=>item.id)));
-  const individualMedia=items.filter(item=>!represented.has(item.id))
+  const individualMedia=(state.internalCollectionsOnly||chosen.size?[]:items).filter(item=>!represented.has(item.id))
     .map(item=>({id:'standalone:'+item.id,title:item.title,items:[item],standalone:true}));
   const visibleGroups=[...visibleNamedGroups,...individualMedia];
   for(const group of visibleGroups)
@@ -1292,7 +1343,7 @@ function renderCards(items, append=false) {
       root.className='collection-grid';
       root.innerHTML=groups.map(group=>group.items.length===1&&!group.manual
         ? card(group.items[0])
-        : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.items.length} titres">${collectionArtwork(group.items,group.artwork)}<strong>${esc(group.title)}</strong><span>${group.items.length} titres</span></button>`).join('');
+        : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.itemCount??group.items.length} titres">${collectionArtwork(group.items,group.artwork)}<strong>${esc(group.title)}</strong><span>${group.itemCount??group.items.length} titres</span></button>`).join('');
       attachImageFallbacks(root);
       return;
     }
@@ -1370,6 +1421,7 @@ async function loadMedia({append=false}={}) {
       // Both the collection grid and media context menus need internal groups.
       state.manualCollections=(await api('collections',{signal:state.controller.signal}))
         .filter(c=>c.is_manual);
+      renderCollectionPicker();
     }
     const page=await api(`media?${currentParams(offset)}`,{signal:state.controller.signal});
     if (seq!==state.seq) return;
@@ -1378,7 +1430,9 @@ async function loadMedia({append=false}={}) {
     state.items.push(...added); state.total=page.total; state.nextOffset=offset+page.items.length;
     state.hasMore=page.has_more&&page.items.length>0;
     $('result-count').textContent=`${page.total.toLocaleString(displayLocale())} résultat${page.total>1?'s':''}${state.personSearch?.tmdbId?' · TMDB #'+state.personSearch.tmdbId+' (crédits non identifiés inclus)':state.personSearch?.imdbId?' · IMDb '+state.personSearch.imdbId+' (crédits non identifiés inclus)':''}${state.recent?' · ajoutés depuis 30 jours':''}`;
-    if (!append&&!page.items.length&&!(state.groupBy==='collection'&&state.manualCollections.length)) {
+    const visibleManual=state.manualCollections.some(c=>!state.collections.length||
+      state.collections.some(name=>collectionFold(collectionName(name))===collectionFold(collectionName(c.name))));
+    if (!append&&!page.items.length&&!(state.groupBy==='collection'&&visibleManual)) {
       const empty=!state.facets?.sources.length || state.facets.sources.every(s=>!s.item_count);
       $('results').innerHTML=`<div class="empty-state"><span class="empty-icon" aria-hidden="true">▦</span><h2>${empty?'Votre bibliothèque commence ici.':'Aucun titre ne correspond.'}</h2><p>${empty?'Connectez la base Kodi ou importez un export CLZ Movies.':'Modifiez les filtres ou essayez un autre mot.'}</p>${state.role==='admin'&&empty?'<button class="primary" data-action="connections">Ajouter une source →</button>':'<button class="secondary" data-action="reset">Effacer les filtres</button>'}</div>`;
     } else renderCards(state.groupBy==='collection'?state.items:added,append);
@@ -1397,7 +1451,7 @@ async function loadMedia({append=false}={}) {
 }
 function fillSelect(id, values, label) {
   const selected=$(id).value;
-  $(id).innerHTML=`<option value="">${label}</option>`+values.filter(v=>id!=='collection'||isSagaCollection(v)||(state.manualCollections||[]).some(c=>c.name===v)).map(v=>`<option value="${esc(v)}">${esc(id==='collection'?collectionName(v):v)}</option>`).join('');
+  $(id).innerHTML=`<option value="">${label}</option>`+values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
   if (values.includes(selected)) $(id).value=selected;
 }
 // Playback recents are replicated by the existing local-first history API.
@@ -1573,7 +1627,7 @@ async function refresh() {
   $('scan-all-kodi').hidden=state.role!=='admin'||!players.length;
   state.tmdbAvailable=status.tmdb_available===true;
   $('server-version').textContent='Serveur '+(status.version||'—')+(status.data_model_version?' · Modèle '+status.data_model_version:'');
-  fillSelect('collection',facets.collections,'Toutes les collections');
+  renderCollectionPicker();
   renderMultiFilters();
   if(filtersRestored){
     const available=new Set(facets.formats.map(canonicalFormat));
@@ -1777,7 +1831,8 @@ function searchLocalPerson(name,tmdbId='',imdbId='') {
     imdbId:/^nm[0-9]+$/.test(imdbId)?imdbId:null
   };
   if($('detail-dialog').open)$('detail-dialog').close();
-  for(const id of ['kind','collection']) $(id).value='';
+  $('kind').value='';
+  state.collections=[];state.internalCollectionsOnly=false;renderCollectionPicker();
   for(const name of multiNames)state.multi[name]=[];
   renderMultiFilters();
   state.formats=[];
@@ -1796,10 +1851,12 @@ function searchLocalPerson(name,tmdbId='',imdbId='') {
 }
 function reset() {
   state.personSearch=null;
-  ['search','kind','collection'].forEach(id=>$(id).value='');
+  ['search','kind'].forEach(id=>$(id).value='');
+  state.collections=[];state.internalCollectionsOnly=false;renderCollectionPicker();
   for(const name of multiNames)state.multi[name]=[];
-  state.groupBy='';state.openCollection=null;$('group-by').value='';
-  $('merge-collections-label').hidden=true;
+  state.groupBy='collection';state.openCollection=null;$('group-by').value='collection';
+  state.mergeEquivalentCollections=true;$('merge-collections').checked=true;
+  $('merge-collections-label').hidden=false;
   renderMultiFilters();
   state.formats=[];state.deepSearch=false;$('deep-search').checked=false;
   updateFormatSelections();state.recent=false;updateSearchClearButton();loadMedia();
@@ -3904,7 +3961,30 @@ $('toggle-search-scope').addEventListener('blur',event=>{
   if(event.relatedTarget===$('search'))return;
   endSearchScopeInteraction();
 });
-['kind','collection','sort'].forEach(id=>$(id).addEventListener('change',()=>{loadMedia();}));
+['kind','sort'].forEach(id=>$(id).addEventListener('change',()=>{loadMedia();}));
+$('collection-internal-only').addEventListener('change',()=>{
+  state.internalCollectionsOnly=$('collection-internal-only').checked;
+  state.openCollection=null;
+  renderCollectionPicker();
+  loadMedia();
+});
+$('collection-filter-search').addEventListener('input',renderCollectionPicker);
+$('collection-choices').addEventListener('click',event=>{
+  const target=event.target.closest('[data-collection-choice]');
+  if(!target)return;
+  const value=target.dataset.collectionChoice;
+  const folded=collectionFold(collectionName(value));
+  if(state.collections.some(name=>collectionFold(collectionName(name))===folded))
+    state.collections=state.collections.filter(name=>collectionFold(collectionName(name))!==folded);
+  else if(state.collections.length<40)state.collections.push(value);
+  state.openCollection=null;
+  renderCollectionPicker();
+  loadMedia();
+});
+$('collection-clear').addEventListener('click',()=>{
+  state.collections=[];state.openCollection=null;
+  renderCollectionPicker();loadMedia();
+});
 $('group-by').addEventListener('change',()=>{
   state.groupBy=$('group-by').value;state.openCollection=null;
   $('merge-collections-label').hidden=state.groupBy!=='collection';
