@@ -110,7 +110,9 @@ function endSearchScopeInteraction() {
   state.searchInteractionActive=false;
   state.searchScopeOverride=null;
   updateSearchScopeLink();
-  if(wasOverridden)loadMedia();
+  // Defer refresh until after the click that dismissed search has propagated;
+  // otherwise clearing the results synchronously swallows a media-card click.
+  if(wasOverridden)setTimeout(()=>loadMedia(),0);
 }
 function restoreFilters() {
   if(filtersRestored)return;
