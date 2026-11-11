@@ -2391,7 +2391,14 @@ class Store:
             target_offset = None
             if fast_scroll_target and sort == "title":
                 target_key = fold(fast_scroll_target.strip())
-                comparison = "<" if order == "asc" else ">"
+                if order == "desc" and len(target_key) == 1 and "a" <= target_key <= "z":
+                    # Descending wants the FIRST entry whose initial is the
+                    # requested letter, not the entry after that letter's block.
+                    # All preceding titles start at or beyond the NEXT letter.
+                    target_key = chr(ord(target_key) + 1)
+                    comparison = ">="
+                else:
+                    comparison = "<" if order == "asc" else ">"
                 target_where = where + (" AND " if where else " WHERE ")
                 target_where += f"w.sort_title {comparison} ?"
                 preceding = conn.execute(
