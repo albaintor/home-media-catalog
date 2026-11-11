@@ -2941,7 +2941,7 @@ class Store:
                     single_items.get(sole_id) if item["item_count"] == 1 else None
                 )
                 item["artwork"] = (
-                    f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg?layout=2"
+                    f"/api/v1/collections/{item['id']}/thumbnails/{item['revision']}.jpg?layout=3"
                     if item["id"] != "uncategorized" and item["item_count"] else None
                 )
             return result
@@ -3056,7 +3056,8 @@ class Store:
                 return None
             posters = [json.loads(row["poster"] or "[]") for row in conn.execute(
                 "SELECT w.poster FROM collection_items ci JOIN works w ON w.id=ci.work_id "
-                "WHERE ci.collection_id=? ORDER BY w.year,w.sort_title,w.id LIMIT 4",
+                "WHERE ci.collection_id=? ORDER BY "
+                "(w.poster IS NULL OR w.poster = '[]'),w.year,w.sort_title,w.id LIMIT 4",
                 (collection_id,),
             )]
             return {"revision": found["revision"], "posters": posters}
