@@ -32,9 +32,9 @@ def _regions(count: int, width: int = WIDTH, height: int = HEIGHT) -> list[tuple
         left = (width - GAP) // 2
         top = (height - GAP) // 2
         return [
-            (0, 0, left, height),
+            (0, 0, left, top),
             (left + GAP, 0, width - left - GAP, top),
-            (left + GAP, top + GAP, width - left - GAP, height - top - GAP),
+            ((width - left) // 2, top + GAP, left, height - top - GAP),
         ]
     left, top = (width - GAP) // 2, (height - GAP) // 2
     return [
@@ -93,7 +93,7 @@ class ListThumbnails:
     def _path(self, list_id: str, revision: int) -> Path:
         # A list is always retrieved by ID from the database before this path
         # is built; avoid trusting URL segments as filesystem path components.
-        return self.directory / f"{list_id}-{revision}.jpg"
+        return self.directory / f"{list_id}-{revision}-layout2.jpg"
 
     def thumbnail_input(self, list_id: str):
         return self.store.list_thumbnail_input(list_id)
