@@ -465,6 +465,7 @@ class MediaPage(BaseModel):
     limit: int
     offset: int
     has_more: bool
+    target_offset: int | None = None
 
 
 class ListPage(MediaPage):
