@@ -2102,12 +2102,85 @@ async function copyMediaTitle() {
   if(copied)toast('Titre copié.');
   else localizedPrompt('Copiez le titre',title);
 }
+
+function manualMembershipMarkup(item) {
+  if(!['movie','tvshow'].includes(item.kind))return '';
+  const assigned=new Set(item.manual_collection_ids||[]);
+  const groups=state.manualCollections.filter(c=>assigned.has(c.id));
+  const members=groups.length
+    ?groups.map(c=>'<button type="button" class="secondary" data-open-manual="'+esc(c.id)+'">'+esc(c.name)+'</button>').join('')
+    :assigned.size
+      ?'<span class="hint">'+esc((item.collections||[]).join(', '))+'</span>'
+      :state.role==='admin'
+        ?'<button type="button" class="secondary" id="detail-add-manual">＋ Ajouter à une collection</button>'
+        :'';
+  const imported=!assigned.size?(item.collections||[]).filter(isSagaCollection):[];
+  return '<div class="manual-membership"><strong>Collections</strong><div class="manual-membership-choices">'+members+'</div>'+
+    (imported.length?'<p class="hint">Collections importées : '+esc(imported.join(' · '))+'</p>':'')+'</div>';
+}
+
+async function openManualCollectionPopup(collectionID) {
+  try {
+    const collection=state.manualCollections.find(c=>c.id===collectionID);
+    if(!collection)throw new Error('Collection interne inconnue.');
+    const members=[];
+    for(let offset=0;offset<5000;offset+=200) {
+      const params=new URLSearchParams({collection_id:collectionID,sort:'title',order:'asc',limit:'200',offset:String(offset)});
+      const page=await api('media?'+params);
+      members.push(...page.items);
+      if(!page.has_more)break;
+    }
+    state.popupManualCollection=collectionID;
+    $('manual-view-title').textContent=collection.name;
+    $('manual-view-count').textContent=members.length+' titre(s)';
+    $('manual-view-artwork').innerHTML=collectionArtwork(members);
+    $('manual-view-items').innerHTML=members.map(item=>
+      '<button type="button" data-manual-view-media="'+esc(item.id)+'">'+esc(item.title)+
+      ' <small>'+(item.kind==='tvshow'?'Série':'Film')+'</small></button>'
+    ).join('')||'<p class="hint">Collection vide.</p>';
+    attachImageFallbacks($('manual-view-artwork'));
+    showDialog('manual-view-dialog');
+  }catch(error){toast(error.message);}
+}
+function openManualChoice(mediaID) {
+  if(state.role!=='admin')return;
+  $('manual-choice-dialog').dataset.mediaId=mediaID;
+  $('manual-choice-items').innerHTML=
+    '<button type="button" class="secondary" data-manual-new>＋ Nouvelle collection</button>'+
+    state.manualCollections.map(c=>
+      '<button type="button" class="secondary" data-manual-choice="'+esc(c.id)+'">'+esc(c.name)+'</button>').join('');
+  showDialog('manual-choice-dialog');
+}
+async function quickAddToManual(mediaID,collectionID) {
+  if(state.role!=='admin')return;
+  try {
+    await api('collections/'+encodeURIComponent(collectionID)+'/items',{
+      method:'POST',body:JSON.stringify({media_ids:[mediaID]})
+    });
+    await loadMedia();
+    if(state.detail?.id===mediaID&&$('detail-dialog').open) {
+      renderDetail(await api('media/'+encodeURIComponent(mediaID)));
+    }
+    toast('Titre ajouté à la collection.');
+  }catch(error){toast(error.message);}
+}
+async function openFullManualCollection(id) {
+  if($('manual-view-dialog').open)$('manual-view-dialog').close();
+  if($('detail-dialog').open)$('detail-dialog').close();
+  if(state.openCollection===id)return;
+  state.openCollection=null;
+  state.groupBy='collection';
+  $('group-by').value='collection';
+  $('merge-collections-label').hidden=false;
+  await loadMedia();
+  enterCollection(id);
+}
 function renderDetail(item) {
   closeEpisodeContextMenu();
   const previousScroll=state.detail?.id===item.id?$('detail-dialog').scrollTop:0;
   hideRatingPopover();
   state.detail=item;
-  $('detail-content').innerHTML=`${metadataAction(item)}<div class="detail-layout"><div class="detail-poster"><button type="button" id="open-artwork-gallery" class="detail-poster-trigger" title="${esc(tr('Agrandir les images du média'))}" aria-label="${esc(tr('Agrandir les images du média'))}" ${mediaArtworkImages(item).length?'':'disabled'}>${poster(item,true)}</button></div><div class="detail-intro"><p class="eyebrow">${esc(kindLabels[item.kind])}</p><div class="detail-heading"><h2><button type="button" id="copy-media-title" class="detail-copy-title" title="${esc(tr('Copier le titre'))}" aria-label="${esc(tr('Copier le titre'))}">${esc(item.title)}</button></h2>${item.original_title&&item.original_title!==item.title?`<p class="original-title">${esc(item.original_title)}</p>`:''}</div><div class="detail-info">${item.year?`<span>${item.year}</span>`:''}${item.runtime_minutes?`<span>${item.runtime_minutes} min</span>`:''}${item.rating?`<span class="score" title="Note publique : ${Number(item.rating).toFixed(1)}/10">★ ${Number(item.rating).toFixed(1)}</span>`:''}</div>${detailActions(item)}<div class="format-badges" aria-label="Formats disponibles selon les éditions">${detailFormatBadges(item)}</div> ${resumeProgress(item)}<div class="detail-meta-row">${watchMarkup(item)}${seriesProgressMarkup(item)}<div class="card-meta">${badges(item)}</div></div>${!item.source_types.includes('kodi')?'<p class="hint">Cette fiche provient uniquement de collections importées. Aucun fichier Kodi ne lui est actuellement associé dans le catalogue.</p>':''}<button id="add-to-list" class="secondary" ${state.role==='admin'?'':'disabled title="Un accès administrateur est nécessaire pour modifier les listes."'}>+ Ajouter à une liste</button>${item.lists?.length?`<p class="hint">Listes : ${item.lists.map(l=>`<button class="text-button" data-open-list="${esc(l.id)}">${esc(l.name)} ↗</button>`).join(' · ')}</p>`:''}</div><div class="detail-body">${item.kind==='episode'&&item.parent_id?`<button class="text-button" type="button" data-return-to-series="${esc(item.parent_id)}" data-return-season="${item.season??0}">← Série · Saison ${item.season??0} · Épisode ${item.episode??0}</button>`:''}<div class="genre-chips">${item.genres.map(g=>`<button data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div><p class="synopsis">${esc(item.plot||'Synopsis non renseigné.')}</p>${detailDatesMarkup(item)}${item.kind==='tvshow'?'<section class="detail-section"><p class="section-label">SAISONS</p><div id="season-list" class="season-links">Chargement…</div><div id="episode-list" class="episode-links"></div></section>':''}${castMarkup(item.people||item.cast)}<section class="detail-section"><p class="section-label">FICHIERS & ÉDITIONS · ${item.editions.length}</p>${item.editions.map(editionMarkup).join('')}${state.role==='admin'&&item.kind==='movie'?'<button id="diagnose-kodi" class="secondary" type="button">Vérifier la présence dans la vidéothèque</button><div id="kodi-diagnostic" class="metadata-status" role="status" aria-live="polite" hidden></div>':''}</section>${state.role==='admin'&&item.editions.some(e=>e.source_type==='internal')?
+  $('detail-content').innerHTML=`${metadataAction(item)}<div class="detail-layout"><div class="detail-poster"><button type="button" id="open-artwork-gallery" class="detail-poster-trigger" title="${esc(tr('Agrandir les images du média'))}" aria-label="${esc(tr('Agrandir les images du média'))}" ${mediaArtworkImages(item).length?'':'disabled'}>${poster(item,true)}</button></div><div class="detail-intro"><p class="eyebrow">${esc(kindLabels[item.kind])}</p><div class="detail-heading"><h2><button type="button" id="copy-media-title" class="detail-copy-title" title="${esc(tr('Copier le titre'))}" aria-label="${esc(tr('Copier le titre'))}">${esc(item.title)}</button></h2>${item.original_title&&item.original_title!==item.title?`<p class="original-title">${esc(item.original_title)}</p>`:''}</div><div class="detail-info">${item.year?`<span>${item.year}</span>`:''}${item.runtime_minutes?`<span>${item.runtime_minutes} min</span>`:''}${item.rating?`<span class="score" title="Note publique : ${Number(item.rating).toFixed(1)}/10">★ ${Number(item.rating).toFixed(1)}</span>`:''}</div>${detailActions(item)}<div class="format-badges" aria-label="Formats disponibles selon les éditions">${detailFormatBadges(item)}</div> ${resumeProgress(item)}<div class="detail-meta-row">${watchMarkup(item)}${seriesProgressMarkup(item)}<div class="card-meta">${badges(item)}</div></div>${!item.source_types.includes('kodi')?'<p class="hint">Cette fiche provient uniquement de collections importées. Aucun fichier Kodi ne lui est actuellement associé dans le catalogue.</p>':''}<button id="add-to-list" class="secondary" ${state.role==='admin'?'':'disabled title="Un accès administrateur est nécessaire pour modifier les listes."'}>+ Ajouter à une liste</button>${item.lists?.length?`<p class="hint">Listes : ${item.lists.map(l=>`<button class="text-button" data-open-list="${esc(l.id)}">${esc(l.name)} ↗</button>`).join(' · ')}</p>`:''}${manualMembershipMarkup(item)}</div><div class="detail-body">${item.kind==='episode'&&item.parent_id?`<button class="text-button" type="button" data-return-to-series="${esc(item.parent_id)}" data-return-season="${item.season??0}">← Série · Saison ${item.season??0} · Épisode ${item.episode??0}</button>`:''}<div class="genre-chips">${item.genres.map(g=>`<button data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div><p class="synopsis">${esc(item.plot||'Synopsis non renseigné.')}</p>${detailDatesMarkup(item)}${item.kind==='tvshow'?'<section class="detail-section"><p class="section-label">SAISONS</p><div id="season-list" class="season-links">Chargement…</div><div id="episode-list" class="episode-links"></div></section>':''}${castMarkup(item.people||item.cast)}<section class="detail-section"><p class="section-label">FICHIERS & ÉDITIONS · ${item.editions.length}</p>${item.editions.map(editionMarkup).join('')}${state.role==='admin'&&item.kind==='movie'?'<button id="diagnose-kodi" class="secondary" type="button">Vérifier la présence dans la vidéothèque</button><div id="kodi-diagnostic" class="metadata-status" role="status" aria-live="polite" hidden></div>':''}</section>${state.role==='admin'&&item.editions.some(e=>e.source_type==='internal')?
   '<section class="detail-section internal-delete-section"><button id="remove-internal-edition" class="secondary" type="button">Supprimer une édition du catalogue interne…</button></section>':''}${tmdbAttribution(item)}</div></div>`;
   attachImageFallbacks($('detail-content'));syncPersonalControls();$('detail-dialog').scrollTop=previousScroll;
 }
