@@ -750,6 +750,14 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .multi-choice:hover,.multi-choice:focus-visible{background:var(--surface)}
 .multi-choice[aria-pressed=true]{color:var(--accent);background:#bcdb8014}
 .multi-choice>span{width:16px;flex:none}
+.collection-picker-content{border-top:1px solid var(--border);padding:9px;display:flex;flex-direction:column;gap:8px}
+.collection-internal-option{display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer}
+.collection-internal-option input{width:17px;height:17px;min-height:17px;margin:0;accent-color:var(--accent)}
+#collection-filter-search{width:100%;min-width:0;min-height:34px;margin:0;padding:6px 8px;font-size:12px}
+.collection-choices{border:0;padding:0;max-height:290px}
+.collection-filter .multi-choice{width:100%}
+#collection-clear{align-self:flex-start;font-size:12px;padding:4px 0}
+
 .collection-navigation{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:2px 0 16px}
 .collection-navigation[hidden]{display:none!important}
 .collection-navigation strong{font-size:16px}
