@@ -63,14 +63,16 @@ function updateFormatSelections() {
 
 const state = {csrf:null,role:'read',view:savedView==='list'?'list':'grid',order:preferences.order==='asc'?'asc':'desc',limit:60,recent:preferences.recent===true,formats:[],deepSearch:preferences.deepSearch===true,facets:null,players:[],tmdbAvailable:false,jobs:[],activityPollBusy:false,activityWasRunning:false,personalUpdateState:null,personalRemoteFailure:false,personalPollBusy:false,personalSaveCount:0,seq:0,controller:null,detail:null,detailSeq:0,personalSeq:0,personalPending:new Set(),quickPending:new Set(),enrichingIds:new Set(),personSearch:null,seasons:[],playbackDraft:null,playbackMediaId:null,listId:typeof preferences.listId==='string'?preferences.listId:null,listItems:[],listRevision:0,listSort:['position','title','year','date_added','rating','user_rating'].includes(preferences.listSort)?preferences.listSort:'position',listOrder:preferences.listOrder==='desc'?'desc':'asc',listTotal:0,listSeq:0,items:[],ids:new Set(),nextOffset:0,total:0,hasMore:false,loading:false,loadError:false};
 state.multi={source_type:[],genre:[],watch_status:[]};
-state.groupBy=preferences.groupBy==='collection'?'collection':'';
+state.groupBy=preferences.collectionDefaultsVersion===2?(preferences.groupBy==='collection'?'collection':''):'collection';
 state.openCollection=null;
 state.manualCollections=[];
 state.popupManualCollection=null;
 state.manualEditing=false;
 state.manualSelected=new Set();
 state.manualSearchSeq=0;
-state.mergeEquivalentCollections=preferences.mergeEquivalentCollections!==false;
+state.mergeEquivalentCollections=preferences.collectionDefaultsVersion===2?preferences.mergeEquivalentCollections!==false:true;
+state.searchScopeOverride=null;
+state.searchInteractionActive=false;
 
 function multiOptions(name) {
   if(name==='watch_status')return [['unwatched','Non vus'],['in_progress','En cours'],['watched','Vus'],['unknown','Non renseigné']];
@@ -92,10 +94,23 @@ function renderMultiFilters() {
 }
 function savePreferences() {
   if(!filtersRestored)return;
-  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,mergeEquivalentCollections:state.mergeEquivalentCollections,formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
+  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,mergeEquivalentCollections:state.mergeEquivalentCollections,collectionDefaultsVersion:2,formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
 }
 function updateSearchClearButton() {
   $('clear-search').hidden=!$('search').value&&!state.personSearch;
+}
+function updateSearchScopeLink() {
+  const active=state.searchInteractionActive && !!$('search').value.trim() && !state.personSearch;
+  $('catalogue-search-scope').hidden=!active;
+  if(active) $('toggle-search-scope').textContent=(state.searchScopeOverride??state.deepSearch)
+    ? 'Search titles only' : 'Also search synopses, genres, cast and other metadata';
+}
+function endSearchScopeInteraction() {
+  const wasOverridden=state.searchScopeOverride!==null;
+  state.searchInteractionActive=false;
+  state.searchScopeOverride=null;
+  updateSearchScopeLink();
+  if(wasOverridden)loadMedia();
 }
 function restoreFilters() {
   if(filtersRestored)return;
@@ -1089,7 +1104,7 @@ function currentParams(offset=0) {
       params.set('deep_search','true');
     }
   }
-  if(state.deepSearch) params.set('deep_search','true');
+  if(state.searchScopeOverride??state.deepSearch) params.set('deep_search','true');
   if (state.recent) params.set('recent_days','30');
   return params;
 }
@@ -3848,6 +3863,9 @@ $('reset-filters').addEventListener('click',reset);
 let searchTimer;
 $('search').addEventListener('input',()=>{
   state.personSearch=null;
+  state.searchInteractionActive=true;
+  state.searchScopeOverride=null;
+  updateSearchScopeLink();
   updateSearchClearButton();
   savePreferences();
   clearTimeout(searchTimer);
@@ -3856,10 +3874,30 @@ $('search').addEventListener('input',()=>{
 $('clear-search').addEventListener('click',()=>{
   clearTimeout(searchTimer);
   state.personSearch=null;
+  state.searchScopeOverride=null;
+  updateSearchScopeLink();
   $('search').value='';
   updateSearchClearButton();
   loadMedia();
   $('search').focus({preventScroll:true});
+});
+$('search').addEventListener('focus',()=>{
+  state.searchInteractionActive=true;
+  updateSearchScopeLink();
+});
+$('search').addEventListener('blur',event=>{
+  if(event.relatedTarget===$('toggle-search-scope'))return;
+  endSearchScopeInteraction();
+});
+$('toggle-search-scope').addEventListener('click',()=>{
+  state.searchInteractionActive=true;
+  state.searchScopeOverride=!(state.searchScopeOverride??state.deepSearch);
+  updateSearchScopeLink();
+  loadMedia();
+});
+$('toggle-search-scope').addEventListener('blur',event=>{
+  if(event.relatedTarget===$('search'))return;
+  endSearchScopeInteraction();
 });
 ['kind','collection','sort'].forEach(id=>$(id).addEventListener('change',()=>{loadMedia();}));
 $('group-by').addEventListener('change',()=>{
@@ -3995,7 +4033,12 @@ document.addEventListener('click',event=>{
   else state.multi[name]=[...selected,value];
   renderMultiFilters();loadMedia();
 });
-$('deep-search').addEventListener('change',()=>{state.deepSearch=$('deep-search').checked;loadMedia();});
+$('deep-search').addEventListener('change',()=>{
+  state.deepSearch=$('deep-search').checked;
+  state.searchScopeOverride=null;
+  updateSearchScopeLink();
+  loadMedia();
+});
 $('sort-order').addEventListener('click',()=>{state.order=state.order==='asc'?'desc':'asc';$('sort-order').textContent=state.order==='asc'?'↑ Croissant':'↓ Décroissant';loadMedia();});
 $('load-more').addEventListener('click',()=>loadMedia({append:state.items.length>0}));
 document.addEventListener('keydown',event=>{if(event.key==='/'&&!['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName)&&!$('app').hidden&&!document.querySelector('dialog[open]')){event.preventDefault();$('search').focus();}});
