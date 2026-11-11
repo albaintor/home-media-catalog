@@ -840,6 +840,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         order: Literal["asc", "desc"] = "desc",
         limit: int = Query(60, ge=1, le=200),
         offset: int = Query(0, ge=0),
+        fast_scroll_target: str | None = Query(None, max_length=10),
     ):
         return store.media(
             q=q,
@@ -863,6 +864,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             order=order,
             limit=limit,
             offset=offset,
+            fast_scroll_target=fast_scroll_target,
         )
 
     @app.get(
