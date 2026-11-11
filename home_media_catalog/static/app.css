@@ -818,3 +818,30 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
   background:transparent;color:inherit;border:1px solid rgba(128,128,128,.25);border-radius:8px;cursor:pointer; }
 .manual-picker-row strong { flex:1; }
 .manual-picker-row[disabled] { opacity:.55;cursor:default; }
+
+/* A soft mosaic sits behind collection content like a media detail backdrop. */
+.collection-backdrop {
+  position:relative;z-index:0;height:230px;margin:0 0 -200px;
+  overflow:hidden;pointer-events:none;opacity:.38;
+  -webkit-mask-image:linear-gradient(to bottom,#000 0%,#0009 40%,transparent 100%);
+  mask-image:linear-gradient(to bottom,#000 0%,#0009 40%,transparent 100%);
+}
+.collection-backdrop .collection-artwork {
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  grid-template-rows:1fr;gap:3px;width:100%;height:100%;
+  aspect-ratio:auto;border-radius:0;filter:blur(3px);transform:scale(1.03);
+}
+.collection-backdrop .collection-artwork img{height:100%;object-fit:cover}
+.collection-backdrop + .collection-navigation {position:relative;z-index:1}
+.manual-membership{display:grid;gap:9px;margin-top:15px}
+.manual-membership-choices{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.manual-membership-choices button{font-size:12px;min-height:35px;padding:7px 10px}
+.manual-choice-items,.manual-view-items{display:grid;gap:8px;max-height:50vh;overflow-y:auto;margin:12px 0 18px}
+.manual-choice-items button,.manual-view-items button{text-align:left;width:100%}
+.manual-view-dialog{max-width:640px}
+.manual-view-artwork{height:155px;overflow:hidden;border-radius:10px;margin:16px 0}
+.manual-view-artwork .collection-artwork{width:100%;height:100%;aspect-ratio:auto;grid-template-rows:1fr;grid-template-columns:repeat(4,1fr)}
+.manual-view-artwork .collection-artwork img{object-fit:cover}
+.manual-view-items button{display:flex;justify-content:space-between;gap:12px;align-items:center}
+.manual-view-items small{color:var(--muted)}
+@media(max-width:700px){.collection-backdrop{height:170px;margin-bottom:-140px}.manual-view-artwork{height:120px}}
