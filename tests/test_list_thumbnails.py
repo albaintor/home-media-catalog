@@ -149,7 +149,7 @@ def test_manual_collection_thumbnail_recovers_after_temporary_artwork_failure(cl
     store.add_manual_collection_items(collection["id"], [media_id])
     indexed = next(item for item in store.collection_index() if item["id"] == collection["id"])
     thumbnail_url = indexed["artwork"]
-    assert thumbnail_url.endswith("?layout=3")
+    assert thumbnail_url.endswith("?layout=4")
 
     with patch.object(thumbnails.artwork, "get", new_callable=AsyncMock) as getter:
         getter.side_effect = ArtworkError("Artwork temporarily unavailable")
@@ -161,7 +161,7 @@ def test_manual_collection_thumbnail_recovers_after_temporary_artwork_failure(cl
         getter.return_value = (colored_poster((195, 40, 45)), "image/png")
         recovered = client.get(thumbnail_url, headers=admin)
         assert recovered.status_code == 200
-        assert list(thumbnails.directory.glob(f"{collection['id']}-*-layout3.jpg"))
+        assert list(thumbnails.directory.glob(f"{collection['id']}-*-layout4.jpg"))
         with Image.open(io.BytesIO(recovered.content)) as image:
             assert image.getpixel((20, 20))[0] > 120
 
