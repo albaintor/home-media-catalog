@@ -194,6 +194,9 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .catalogue-search{display:flex;min-width:0;margin-bottom:14px}
 .catalogue-search .search-box{min-width:0;width:100%}
 .catalogue-search .search-box input{min-width:0;width:100%;flex:1}
+.catalogue-search-scope{margin:-8px 0 12px;padding-left:0}
+.catalogue-search-scope[hidden]{display:none}
+.catalogue-search-scope .text-button{font-size:12px;text-align:left;color:var(--accent);padding:5px 2px}
 
 /* Accessible language selector in the login page and app header. */
 .language-control{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
