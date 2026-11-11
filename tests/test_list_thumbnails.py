@@ -31,6 +31,34 @@ def test_mosaic_layouts_one_to_four_and_empty():
                 assert image.getpixel((0, 0)) != (0, 0, 0)
 
 
+def test_mosaic_tiles_have_correct_positions_for_one_to_four_images():
+    colors = [(218, 24, 30), (27, 188, 35), (25, 54, 219), (232, 187, 27)]
+    originals = [colored_poster(color) for color in colors]
+
+    def matches(image, x, y, color):
+        actual = image.getpixel((x, y))
+        assert all(abs(actual[i] - color[i]) < 28 for i in range(3))
+
+    for width, height in ((WIDTH, HEIGHT), (300, 450)):
+        for count in (1, 2, 3, 4, 5):
+            data = compose(originals[:count], width=width, height=height)
+            with Image.open(io.BytesIO(data)) as image:
+                matches(image, width // 4, height // 4, colors[0])
+                if count == 1:
+                    matches(image, width // 2, height * 3 // 4, colors[0])
+                if count >= 2:
+                    matches(image, width * 3 // 4, height // 4, colors[1])
+                if count == 2:
+                    matches(image, width * 3 // 4, height * 3 // 4, colors[1])
+                if count == 3:
+                    matches(image, width // 2, height * 3 // 4, colors[2])
+                    matches(image, width // 8, height * 3 // 4, (25,33,46))
+                    matches(image, width * 7 // 8, height * 3 // 4, (25,33,46))
+                if count >= 4:
+                    matches(image, width // 4, height * 3 // 4, colors[2])
+                    matches(image, width * 3 // 4, height * 3 // 4, colors[3])
+
+
 def test_mosaic_is_saved_and_replaced_at_list_revision(client, admin):
     store = client.app.state.store
     thumbnails = client.app.state.list_thumbnails
@@ -55,7 +83,7 @@ def test_mosaic_is_saved_and_replaced_at_list_revision(client, admin):
         assert created.status_code == 201
         lid = created.json()["id"]
         original = created.json()["thumbnail"]
-        assert original.endswith("/thumbnails/0.jpg")
+        assert original.endswith("/thumbnails/0.jpg?layout=2")
         assert client.get(original).status_code == 401
         first = client.get(original, headers=admin)
         assert first.status_code == 200
@@ -100,7 +128,7 @@ def test_legacy_lists_lazily_materialize_thumbnail_on_first_request(client, admi
     created = store.save_list({"name": "Existing", "description": ""})
     lid = created["id"]
     url = created["thumbnail"]
-    path = client.app.state.list_thumbnails.directory / f"{lid}-0.jpg"
+    path = client.app.state.list_thumbnails.directory / f"{lid}-0-layout2.jpg"
     assert not path.exists()
     assert client.get(url, headers=admin).status_code == 200
     assert path.is_file()
