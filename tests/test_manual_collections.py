@@ -141,3 +141,38 @@ def test_sort_by_original_title_with_localized_fallback(client, admin):
     assert [item["title"] for item in response.json()["items"]] == [
         "Beta", "Gamma", "Alpha"
     ]
+
+
+def test_existing_sqlite_collection_index_is_upgraded_without_losing_data(tmp_path):
+    """Pre-manual-collections NAS databases gain is_manual without dropping rows."""
+    import sqlite3
+
+    from home_media_catalog.store import Store
+
+    path = tmp_path / "catalogue.db"
+    with sqlite3.connect(path) as connection:
+        connection.executescript("""
+            CREATE TABLE collections (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL UNIQUE,
+                merge_key TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1
+            );
+            INSERT INTO collections(id,name,normalized_name,merge_key,revision)
+            VALUES('collection-existing','Existing saga','existing saga','existing saga',9);
+        """)
+    catalogue = Store(path)
+    catalogue.initialize()
+    with catalogue.connect() as connection:
+        row = connection.execute(
+            "SELECT id,name,revision,is_manual FROM collections WHERE id='collection-existing'"
+        ).fetchone()
+        assert row["name"] == "Existing saga"
+        assert row["revision"] == 9
+        assert row["is_manual"] == 0
+    # Repeated initialization must be idempotent; beta tester upgrades
+    # cannot repeatedly alter existing databases.
+    catalogue.initialize()
+    with catalogue.connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM collections WHERE id='collection-existing'"
+        ).fetchone()[0] == 1
