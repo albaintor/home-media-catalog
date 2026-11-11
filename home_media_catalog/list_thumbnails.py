@@ -138,7 +138,15 @@ class ListThumbnails:
             current = await asyncio.to_thread(self.thumbnail_input, list_id)
             if current is None or current["revision"] != revision:
                 return None
-            await asyncio.to_thread(self._save, list_id, revision, result)
+            # If candidate posters failed to load (including a network timeout),
+            # serve a temporary placeholder but do not persist it as an immutable
+            # cover for this revision. A later request can recover the artwork.
+            missing_download = any(
+                candidates and image is None
+                for candidates, image in zip(source["posters"], images, strict=False)
+            )
+            if not missing_download:
+                await asyncio.to_thread(self._save, list_id, revision, result)
             return result
 
     async def warm(self, list_id: str) -> None:
@@ -179,6 +187,10 @@ class CollectionThumbnails(ListThumbnails):
     def __init__(self, store, artwork, data_dir: Path):
         super().__init__(store, artwork, data_dir)
         self.directory = data_dir / "collection-thumbnails"
+
+    def _path(self, list_id: str, revision: int) -> Path:
+        # Invalidate covers cached with the old, potentially empty layout.
+        return self.directory / f"{list_id}-{revision}-layout3.jpg"
 
     def thumbnail_input(self, collection_id: str):
         return self.store.collection_thumbnail_input(collection_id)
