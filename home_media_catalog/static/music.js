@@ -137,8 +137,16 @@ function playlistAlbums(tracks) {
   }).slice(0,4).map(track => ({id:track.album_id}));
 }
 
-function artistMosaic(albums) {
-  const selected = albums.slice(0,4);
+// Artists show album covers from oldest to newest; genres and playlists keep
+// their existing ordering (including each playlist's manually defined order).
+function artistMosaic(albums, chronological=false) {
+  const ordered = chronological ? [...albums].sort((a,b)=>{
+    const yearA=Number(a.year)>0?Number(a.year):Number.POSITIVE_INFINITY;
+    const yearB=Number(b.year)>0?Number(b.year):Number.POSITIVE_INFINITY;
+    return yearA-yearB||String(a.title||'').localeCompare(String(b.title||''))||
+      String(a.id||'').localeCompare(String(b.id||''));
+  }) : albums;
+  const selected = ordered.slice(0,4);
   if (!selected.length) return '<span class="music-cover-placeholder">♫</span>';
   const cells = selected.map(album => `<img alt="" loading="lazy" decoding="async" src="${url(`api/v1/music/albums/${encodeURIComponent(album.id)}/artwork/thumb`)}" onerror="this.style.visibility='hidden'">`);
   const layout = ['','single','double','triple','mosaic'][selected.length];
@@ -166,17 +174,17 @@ function observeMosaicCards(root) {
         const element = entry.target;
         const [kind,id] = mosaicKey(element), key = kind + '|' + id;
         const cached = state.artistAlbums.get(key);
-        if (cached) { element.innerHTML = artistMosaic(cached); continue; }
+        if (cached) { element.innerHTML = artistMosaic(cached,kind==='artist'); continue; }
         mosaicAlbums(kind,id).then(albums => {
           state.artistAlbums.set(key,albums);
-          if (element.isConnected && mosaicKey(element).join('|') === key) element.innerHTML = artistMosaic(albums);
+          if (element.isConnected && mosaicKey(element).join('|') === key) element.innerHTML = artistMosaic(albums,kind==='artist');
         }).catch(() => { /* retain placeholder when artwork is unavailable */ });
       }
     }, {rootMargin:'200px'});
   }
   for (const element of root.querySelectorAll('[data-mosaic-artist],[data-mosaic-genre],[data-mosaic-playlist]')) {
     const [kind,id] = mosaicKey(element), cached = state.artistAlbums.get(kind + '|' + id);
-    if (cached) element.innerHTML = artistMosaic(cached);
+    if (cached) element.innerHTML = artistMosaic(cached,kind==='artist');
     else state.artistObserver.observe(element);
   }
 }
@@ -214,7 +222,7 @@ async function showAlbum(id) {
 
 async function showArtist(id) {
   const artist = await api(`music/artists/${encodeURIComponent(id)}`);
-  $('music-detail').innerHTML = `<div class="music-detail-head"><span class="music-cover music-artist-mosaic">${artistMosaic(artist.albums || [])}</span><div>
+  $('music-detail').innerHTML = `<div class="music-detail-head"><span class="music-cover music-artist-mosaic">${artistMosaic(artist.albums || [], true)}</span><div>
     <p class="eyebrow">${esc(tr('ARTISTE'))}</p><h2>${esc(artist.name)}</h2><p class="muted">${esc(artist.genres.join(', '))}</p>
     ${artist.biography ? `<p class="synopsis">${esc(artist.biography)}</p>` : ''}</div></div>
     <div class="detail-section"><p class="section-label">${esc(tr('ALBUMS'))} · ${artist.albums.length}</p><div class="music-grid">${artist.albums.map(albumCard).join('')}</div></div>
