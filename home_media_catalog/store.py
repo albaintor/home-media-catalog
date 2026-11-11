@@ -2389,7 +2389,7 @@ class Store:
             # Count matching rows before the requested section using the same
             # filter and SQL collation; avoid a non-monotonic client binary search.
             target_offset = None
-            if fast_scroll_target and sort == "title":
+            if fast_scroll_target and sort in ("title", "original_title"):
                 target_key = fold(fast_scroll_target.strip())
                 if order == "desc" and len(target_key) == 1 and "a" <= target_key <= "z":
                     # Descending wants the FIRST entry whose initial is the
@@ -2400,7 +2400,7 @@ class Store:
                 else:
                     comparison = "<" if order == "asc" else ">"
                 target_where = where + (" AND " if where else " WHERE ")
-                target_where += f"w.sort_title {comparison} ?"
+                target_where += f"({sort_expression}) {comparison} ?"
                 preceding = conn.execute(
                     "SELECT COUNT(*) FROM works w" + target_where,
                     (*params, target_key),
