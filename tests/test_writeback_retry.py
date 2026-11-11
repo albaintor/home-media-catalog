@@ -38,6 +38,62 @@ def prepare_movie(client, admin, *, two_sources=False):
     return source, movie_id
 
 
+def test_writeback_audit_keeps_ten_events_without_losing_pending(client, admin):
+    sid, mid = prepare_movie(client, admin)
+    store = client.app.state.store
+    detail = store.detail(mid)
+    store.stage_writebacks(
+        mid, detail, {"watched": True}, [store.source(sid, private=True)]
+    )
+    assert store.writeback_pending_count() == 1
+
+    result = {
+        "source_id": sid,
+        "source_name": "Kodi NAS",
+        "source_type": "kodi",
+        "status": "updated",
+        "method": "jsonrpc",
+        "attempts": [],
+        "message": None,
+    }
+    for index in range(15):
+        store.record_writebacks(mid, {"user_rating": index}, [result])
+
+    with store.connect() as conn:
+        audit_rows = conn.execute(
+            "SELECT fields FROM writeback_audit ORDER BY created_at DESC,rowid DESC"
+        ).fetchall()
+    assert len(audit_rows) == 10
+    assert len(store.writeback_history(work_id=mid)) == 10
+    status = client.get("/api/v1/writebacks/status", headers=admin).json()
+    assert status["pending_count"] == 1
+    assert status["pending"][0]["changes"] == {"watched": True}
+    assert len(status["recent"]) <= 10
+
+
+def test_writeback_audit_pruned_on_startup(client, admin):
+    sid, mid = prepare_movie(client, admin)
+    store = client.app.state.store
+    with store.connect() as conn:
+        for index in range(13):
+            conn.execute(
+                "INSERT INTO writeback_audit "
+                "(id,work_id,source_id,source_name,source_type,created_at,status,"
+                "method,attempts,fields,message) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    f"legacy-{index}", mid, sid, "Kodi NAS", "kodi",
+                    "2026-11-11T12:00:00+00:00", "updated", "jsonrpc",
+                    "[]", "[]", None,
+                ),
+            )
+    store.initialize()
+    with store.connect() as conn:
+        ids = [row["id"] for row in conn.execute(
+            "SELECT id FROM writeback_audit ORDER BY created_at DESC,rowid DESC"
+        )]
+    assert ids == [f"legacy-{index}" for index in range(12, 2, -1)]
+
+
 def test_error_queues_explicit_edit_and_manual_replay_with_icon(client, admin):
     sid, mid = prepare_movie(client, admin)
     with patch(
