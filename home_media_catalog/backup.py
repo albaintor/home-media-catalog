@@ -28,6 +28,11 @@ TABLES = (
 # Collection index tables include manually managed groups; older backups omit them.
 COLLECTION_TABLES = ("collections", "collection_items")
 
+# New catalogue relations are optional on import for compatibility with
+# previously exported schema-v2 backups. Unlike transient playback settings,
+# per-edition resume positions and role indexes must survive a restore.
+OPTIONAL_CATALOGUE_TABLES = ("playback_resume", "work_person_roles")
+
 # Music tables (added later). Older backups without them remain importable.
 MUSIC_TABLES = (
     "music_artists",
@@ -56,7 +61,7 @@ def export_backup(store) -> dict:
     with store.connect() as conn:
         conn.execute("BEGIN")
         tables = {}
-        for table in TABLES + COLLECTION_TABLES + MUSIC_TABLES:
+        for table in TABLES + COLLECTION_TABLES + OPTIONAL_CATALOGUE_TABLES + MUSIC_TABLES:
             rows = [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
             if table in ("sources", "players"):
                 for row in rows:
@@ -84,13 +89,14 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
     tables = document.get("tables")
     if (
         not isinstance(tables, dict)
-        or set(tables) - set(MUSIC_TABLES) - set(COLLECTION_TABLES) != set(TABLES)
+        or set(tables) - set(MUSIC_TABLES) - set(COLLECTION_TABLES) - set(OPTIONAL_CATALOGUE_TABLES) != set(TABLES)
         or ("collection_items" in tables) != ("collections" in tables)
     ):
         raise ValueError("Backup is missing required catalogue tables.")
     restored = (
         TABLES
         + tuple(t for t in COLLECTION_TABLES if t in tables)
+        + tuple(t for t in OPTIONAL_CATALOGUE_TABLES if t in tables)
         + tuple(t for t in MUSIC_TABLES if t in tables)
     )
     if any(
@@ -151,6 +157,8 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
                 "personal",
                 "enrichment",
                 "identifiers",
+                "playback_resume",
+                "work_person_roles",
                 "work_person_ids",
                 "work_person_names",
                 "records",
@@ -190,6 +198,39 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
                     conn.execute(
                         f"INSERT INTO {table} ({','.join(names)}) VALUES ({marks})",
                         [row[name] for name in names],
+                    )
+
+            # Older schema-v2 backups predate the role-aware search index.
+            # Rebuild it from original editions and enrichments instead of
+            # silently losing role-based people search after a restore.
+            if "work_person_roles" not in restored:
+                from .store import person_roles
+
+                for original in conn.execute("SELECT work_id,payload FROM records"):
+                    payload = json.loads(original["payload"])
+                    metadata = payload.get("metadata") or {}
+                    if not isinstance(metadata, dict):
+                        continue
+                    for field in ("people", "cast"):
+                        conn.executemany(
+                            "INSERT OR IGNORE INTO work_person_roles VALUES(?,?,?)",
+                            person_roles(original["work_id"], metadata.get(field)),
+                        )
+                    director = metadata.get("director") or ""
+                    if isinstance(director, str):
+                        conn.executemany(
+                            "INSERT OR IGNORE INTO work_person_roles VALUES(?,?,?)",
+                            (
+                                (original["work_id"], fold(name.strip()), "director")
+                                for name in director.split(" / ")
+                                if name.strip()
+                            ),
+                        )
+                for original in conn.execute("SELECT work_id,payload FROM enrichment"):
+                    payload = json.loads(original["payload"])
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO work_person_roles VALUES(?,?,?)",
+                        person_roles(original["work_id"], payload.get("people")),
                     )
 
             # Thumbnail revision must differ even when restoring the same list ID.
