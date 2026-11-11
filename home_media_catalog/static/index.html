@@ -139,7 +139,7 @@
         </section>
       </details>
       <div class="results-heading"><span id="result-count" aria-live="polite"></span><button id="reset-filters" class="text-button" hidden>Effacer les filtres</button></div>
-      <div id="collection-navigation" class="collection-navigation" hidden><button id="collection-back" type="button" class="secondary">← Toutes les collections</button><strong id="collection-current"></strong><span class="manual-collection-actions" id="manual-collection-actions" hidden><button id="manual-edit-button" class="secondary" type="button">Modifier</button><button id="manual-add-items-button" class="secondary" type="button">＋ Ajouter</button><button id="manual-remove-selected-button" class="secondary" type="button" hidden>Retirer la sélection</button><button id="manual-delete-button" class="secondary" type="button">Supprimer la collection</button></span></div>
+      <div id="collection-backdrop" class="collection-backdrop" hidden aria-hidden="true"></div><div id="collection-navigation" class="collection-navigation" hidden><button id="collection-back" type="button" class="secondary">← Toutes les collections</button><strong id="collection-current"></strong><span class="manual-collection-actions" id="manual-collection-actions" hidden><button id="manual-edit-button" class="secondary" type="button">Modifier</button><button id="manual-add-items-button" class="secondary" type="button">＋ Ajouter</button><button id="manual-remove-selected-button" class="secondary" type="button" hidden>Retirer la sélection</button><button id="manual-delete-button" class="secondary" type="button">Supprimer la collection</button></span></div>
       <div id="error-banner" class="error-banner" role="alert" hidden></div>
       <section id="results" class="poster-grid" aria-label="Résultats du catalogue" aria-busy="false"></section>
       <div id="pagination" class="pagination catalogue-loading" hidden><span id="page-info" aria-live="polite"></span><p id="load-more-status" role="status"></p><button id="load-more" class="secondary" type="button" aria-controls="results">Charger la suite</button><div id="load-more-trigger" aria-hidden="true"></div></div>
@@ -166,6 +166,20 @@
         <section id="music-sources" hidden></section>
       </section>
   </main>
+  <dialog id="manual-choice-dialog" class="small-dialog manual-choice-dialog" aria-labelledby="manual-choice-title">
+    <button type="button" class="dialog-close" data-close="manual-choice-dialog" aria-label="Fermer">×</button>
+    <h2 id="manual-choice-title">Ajouter à une collection</h2>
+    <div id="manual-choice-items" class="manual-choice-items"></div>
+    <button type="button" class="secondary" data-close="manual-choice-dialog">Annuler</button>
+  </dialog>
+  <dialog id="manual-view-dialog" class="small-dialog manual-view-dialog" aria-labelledby="manual-view-title">
+    <button type="button" class="dialog-close" data-close="manual-view-dialog" aria-label="Fermer">×</button>
+    <h2 id="manual-view-title">Collection</h2>
+    <div id="manual-view-artwork" class="manual-view-artwork" aria-hidden="true"></div>
+    <p id="manual-view-count" class="hint"></p>
+    <div id="manual-view-items" class="manual-view-items"></div>
+    <button id="manual-view-open" type="button" class="secondary">Ouvrir dans le catalogue</button>
+  </dialog>
   <dialog id="manual-picker-dialog" class="small-dialog manual-picker-dialog" aria-labelledby="manual-picker-title">
     <button class="dialog-close" data-close="manual-picker-dialog" aria-label="Fermer">×</button>
     <h2 id="manual-picker-title">Ajouter à la collection</h2>
