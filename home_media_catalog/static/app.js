@@ -1323,8 +1323,19 @@ function collectionGroups(items) {
     return ascending?title:-title;
   });
 }
+// Mosaic slots always show the oldest movies/series first, irrespective of
+// the sort selected for browsing the collection. Missing years come last.
+function collectionMosaicItems(items) {
+  return [...(items||[])].sort((a,b)=>{
+    const yearA=Number(a.year)>0?Number(a.year):Number.POSITIVE_INFINITY;
+    const yearB=Number(b.year)>0?Number(b.year):Number.POSITIVE_INFINITY;
+    return yearA-yearB||
+      String(a.title||'').localeCompare(String(b.title||''),displayLocale(),{numeric:true})||
+      String(a.id||'').localeCompare(String(b.id||''));
+  }).slice(0,4);
+}
 function collectionArtwork(items, fallbackArtwork=null) {
-  const selected=(items||[]).slice(0,4);
+  const selected=collectionMosaicItems(items);
   if((!selected.length||!selected.some(item=>item.artwork?.poster))&&fallbackArtwork) {
     return `<span class="collection-artwork single server-artwork" aria-hidden="true"><span class="collection-artwork-empty">▦</span><img src="${esc(url(fallbackArtwork))}" alt="" loading="lazy"></span>`;
   }
