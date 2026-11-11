@@ -164,3 +164,65 @@ def test_manual_collection_thumbnail_recovers_after_temporary_artwork_failure(cl
         assert list(thumbnails.directory.glob(f"{collection['id']}-*-layout3.jpg"))
         with Image.open(io.BytesIO(recovered.content)) as image:
             assert image.getpixel((20, 20))[0] > 120
+
+
+def test_internal_collection_mosaic_rebuilds_on_add_and_remove(client, admin):
+    """A 2-film mosaic must become four tiles, then three, at new revisions."""
+    store = client.app.state.store
+    thumbnails = client.app.state.collection_thumbnails
+    source = store.save_source({"name": "Kodi", "type": "kodi"})
+    colors = {
+        "alpha": (210, 20, 30),
+        "beta": (25, 200, 45),
+        "gamma": (25, 55, 220),
+        "delta": (225, 180, 25),
+    }
+    store.apply_snapshot(source["id"], [
+        Record(f"movie:{key}", "movie", key.title(),
+               poster=[f"https://example.org/{key}.jpg"])
+        for key in colors
+    ])
+    ids = {media["title"].lower(): media["id"] for media in store.media()["items"]}
+    collection = store.save_manual_collection("Scream")
+    collection_id = collection["id"]
+
+    async def poster(candidates):
+        name = candidates[0].split("/")[-1].split(".")[0]
+        return colored_poster(colors[name]), "image/png"
+
+    def snapshot():
+        return next(row for row in store.collection_index() if row["id"] == collection_id)
+
+    def color_at(payload, x, y):
+        with Image.open(io.BytesIO(payload)) as image:
+            return image.getpixel((x, y))
+
+    with patch.object(thumbnails.artwork, "get", new_callable=AsyncMock) as getter:
+        getter.side_effect = poster
+        add_two = client.post(f"/api/v1/collections/{collection_id}/items",
+                              json={"media_ids": [ids["alpha"], ids["beta"]]}, headers=admin)
+        assert add_two.status_code == 200
+        cover_two = snapshot()["artwork"]
+        data_two = client.get(cover_two, headers=admin).content
+        assert color_at(data_two, 70, 350)[0] > 150  # Alpha fills the left column
+
+        add_more = client.post(f"/api/v1/collections/{collection_id}/items",
+                               json={"media_ids": [ids["gamma"], ids["delta"]]}, headers=admin)
+        assert add_more.status_code == 200
+        cover_four = snapshot()["artwork"]
+        assert cover_four != cover_two
+        assert client.get(cover_two, headers=admin).status_code == 404
+        data_four = client.get(cover_four, headers=admin).content
+        assert color_at(data_four, 70, 340)[0] > 150  # Delta, bottom-left
+        assert len(list(thumbnails.directory.glob(f"{collection_id}-*.jpg"))) == 1
+
+        removed = client.delete(f"/api/v1/collections/{collection_id}/items/{ids['alpha']}",
+                                headers=admin)
+        assert removed.status_code == 204
+        cover_three = snapshot()["artwork"]
+        assert cover_three not in {cover_two, cover_four}
+        assert client.get(cover_four, headers=admin).status_code == 404
+        data_three = client.get(cover_three, headers=admin).content
+        with Image.open(io.BytesIO(data_three)) as image:
+            assert image.size == (300, 450)
+        assert len(list(thumbnails.directory.glob(f"{collection_id}-*.jpg"))) == 1
