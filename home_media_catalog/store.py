@@ -2345,6 +2345,7 @@ class Store:
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         fields = {
             "title": "sort_title",
+            "original_title": "original_title",
             "date_added": "date_added",
             "year": "year",
             "rating": "rating",
@@ -2359,14 +2360,19 @@ class Store:
             or offset < 0
         ):
             raise ValueError("Invalid pagination or sort option.")
-        column = fields[sort]
+        # The original title is not always populated: retain the localized
+        # title as fallback while ordering case-insensitively.
+        sort_expression = (
+            "COALESCE(NULLIF(w.original_title, ''), w.title) COLLATE NOCASE"
+            if sort == "original_title" else f"w.{fields[sort]}"
+        )
         with self.connect() as conn:
             conn.execute("BEGIN")  # count and page see the same snapshot
             total = conn.execute("SELECT COUNT(*) FROM works w" + where, params).fetchone()[0]
             rows = conn.execute(
                 "SELECT w.* FROM works w"
                 + where
-                + f" ORDER BY w.{column} IS NULL,w.{column} {order},w.id ASC LIMIT ? OFFSET ?",
+                + f" ORDER BY ({sort_expression}) IS NULL,{sort_expression} {order},w.id ASC LIMIT ? OFFSET ?",
                 (*params, limit, offset),
             ).fetchall()
             items = self._summaries_with_sources(conn, rows)
