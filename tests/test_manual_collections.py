@@ -115,8 +115,9 @@ def test_manual_collections_are_in_portable_backups(store):
     assert restored["is_manual"] is True
 
 
-def test_sort_by_original_title_with_localized_fallback(store, client, admin):
+def test_sort_by_original_title_with_localized_fallback(client, admin):
     """Sorting by translated titles and original titles must produce different orders."""
+    store = client.app.state.store
     source = store.save_source({"name": "Title test", "type": "clz"})["id"]
     store.apply_snapshot(source, [
         Record("title-alpha", "movie", "Alpha", original_title="Zulu"),
