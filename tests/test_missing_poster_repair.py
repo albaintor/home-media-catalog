@@ -102,3 +102,85 @@ def test_poster_repair_keeps_existing_provider_artwork(store):
     assert store.artwork(media_id, "poster") == [
         "https://image.tmdb.org/t/p/w500/original.jpg"
     ]
+
+
+def test_visible_poster_request_repairs_missing_clz_artwork(tmp_path, monkeypatch):
+    """Web/iOS lazy tiles must recover a poster even if summary artwork is null."""
+    from fastapi.testclient import TestClient
+
+    from home_media_catalog.app import create_app
+    from home_media_catalog.settings import Settings
+
+    app = create_app(Settings(
+        data_dir=tmp_path, api_token="unit-test-admin-token-with-at-least-24-characters",
+        tmdb_api_token="test-tmdb-token",
+    ))
+    app.state.store.initialize()
+    _, _, media_id = seed_without_artwork(app.state.store)
+    assert app.state.store.detail(media_id)["artwork"]["poster"] is None
+
+    async def lookup(detail, token):
+        assert detail["identifiers"]["imdb"] == ["tt5463162"]
+        assert token == "test-tmdb-token"
+        return "https://image.tmdb.org/t/p/w500/deadpool2.jpg"
+
+    async def artwork(candidates, *, persist=True):
+        assert candidates[0].endswith("deadpool2.jpg")
+        return poster_bytes(), "image/jpeg"
+
+    monkeypatch.setattr("home_media_catalog.app.resolve_tmdb_poster", lookup)
+    monkeypatch.setattr(app.state.artwork, "get", artwork)
+    with TestClient(app) as test:
+        response = test.get(
+            f"/api/v1/media/{media_id}/artwork/poster",
+            headers={"Authorization": "Bearer unit-test-admin-token-with-at-least-24-characters"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.content == poster_bytes()
+        assert app.state.store.detail(media_id)["artwork"]["poster"] is not None
+
+
+def test_bad_clz_url_replaced_without_reimport(tmp_path, monkeypatch):
+    """A nonempty but unreachable CLZ URL is NOT a valid downloaded poster."""
+    from fastapi.testclient import TestClient
+
+    from home_media_catalog.app import create_app
+    from home_media_catalog.artwork import ArtworkError
+    from home_media_catalog.settings import Settings
+
+    app = create_app(Settings(
+        data_dir=tmp_path, api_token="unit-test-admin-token-with-at-least-24-characters",
+        tmdb_api_token="test-tmdb-token",
+    ))
+    store = app.state.store
+    store.initialize()
+    source = store.save_source({"name": "CLZ bad cover", "type": "clz"})["id"]
+    record = Record(
+        "deadpool-2", "movie", "Deadpool 2", year=2018,
+        identifiers={"imdb": "tt5463162"}, collections=["Deadpool"],
+        poster=["https://broken.example/cover.jpg"],
+    )
+    store.apply_snapshot(source, [record])
+    media_id = store.media()["items"][0]["id"]
+    assert media_id not in store.missing_poster_ids()
+
+    async def lookup(detail, token):
+        assert detail["identifiers"]["imdb"] == ["tt5463162"]
+        return "https://image.tmdb.org/t/p/w500/deadpool2.jpg"
+
+    async def artwork(candidates, *, persist=True):
+        if candidates[0].startswith("https://broken.example/"):
+            raise ArtworkError("CLZ artwork unreachable")
+        return poster_bytes(), "image/jpeg"
+
+    monkeypatch.setattr("home_media_catalog.app.resolve_tmdb_poster", lookup)
+    monkeypatch.setattr(app.state.artwork, "get", artwork)
+    with TestClient(app) as test:
+        response = test.get(
+            f"/api/v1/media/{media_id}/artwork/poster",
+            headers={"Authorization": "Bearer unit-test-admin-token-with-at-least-24-characters"},
+        )
+        assert response.status_code == 200, response.text
+        assert store.artwork(media_id, "poster")[0].endswith("deadpool2.jpg")
+        store.apply_snapshot(source, [record])
+        assert store.artwork(media_id, "poster")[0].endswith("deadpool2.jpg")
