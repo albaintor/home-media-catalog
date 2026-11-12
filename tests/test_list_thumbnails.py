@@ -24,12 +24,13 @@ def test_mosaic_layouts_one_to_four_and_empty():
         result = compose(originals[:n])
         with Image.open(io.BytesIO(result)) as image:
             assert image.size == (WIDTH, HEIGHT)
-            assert image.format == "JPEG"
+            assert image.format == "PNG"
+            assert image.mode == "RGBA"
             if n:
                 actual = image.getpixel((12, 12))
                 assert all(abs(actual[i] - colors[0][i]) < 28 for i in range(3))
             else:
-                assert image.getpixel((0, 0)) != (0, 0, 0)
+                assert image.getpixel((0, 0))[3] == 0
 
 
 def test_mosaic_tiles_have_correct_positions_for_one_to_four_images():
@@ -48,13 +49,14 @@ def test_mosaic_tiles_have_correct_positions_for_one_to_four_images():
                 if count == 1:
                     matches(image, width // 2, height * 3 // 4, colors[0])
                 if count >= 2:
+                    assert image.getpixel((width // 2, height // 2))[3] == 0
                     matches(image, width * 3 // 4, height // 4, colors[1])
                 if count == 2:
                     matches(image, width * 3 // 4, height * 3 // 4, colors[1])
                 if count == 3:
                     matches(image, width // 2, height * 3 // 4, colors[2])
-                    matches(image, width // 8, height * 3 // 4, (25,33,46))
-                    matches(image, width * 7 // 8, height * 3 // 4, (25,33,46))
+                    assert image.getpixel((width // 8, height * 3 // 4))[3] == 0
+                    assert image.getpixel((width * 7 // 8, height * 3 // 4))[3] == 0
                 if count >= 4:
                     matches(image, width // 4, height * 3 // 4, colors[2])
                     matches(image, width * 3 // 4, height * 3 // 4, colors[3])
@@ -84,11 +86,11 @@ def test_mosaic_is_saved_and_replaced_at_list_revision(client, admin):
         assert created.status_code == 201
         lid = created.json()["id"]
         original = created.json()["thumbnail"]
-        assert original.endswith("/thumbnails/0.jpg?layout=2")
+        assert original.endswith("/thumbnails/0.png?layout=3")
         assert client.get(original).status_code == 401
         first = client.get(original, headers=admin)
         assert first.status_code == 200
-        assert first.headers["content-type"] == "image/jpeg"
+        assert first.headers["content-type"] == "image/png"
         assert "immutable" in first.headers["cache-control"]
         with patch(
             "home_media_catalog.list_thumbnails.compose", side_effect=AssertionError("cached")
@@ -106,7 +108,7 @@ def test_mosaic_is_saved_and_replaced_at_list_revision(client, admin):
         added = client.get("/api/v1/lists", headers=admin).json()[0]
         assert added["thumbnail"] != original
         assert client.get(original, headers=admin).status_code == 404
-        assert len(list(thumbnails.directory.glob(f"{lid}-*.jpg"))) == 1
+        assert len(list(thumbnails.directory.glob(f"{lid}-*.png"))) == 1
 
         assert (
             client.post(
@@ -118,10 +120,10 @@ def test_mosaic_is_saved_and_replaced_at_list_revision(client, admin):
         )
         changed = client.get("/api/v1/lists", headers=admin).json()[0]
         assert changed["thumbnail"] != added["thumbnail"]
-        assert len(list(thumbnails.directory.glob(f"{lid}-*.jpg"))) == 1
+        assert len(list(thumbnails.directory.glob(f"{lid}-*.png"))) == 1
         assert client.get(changed["thumbnail"], headers=admin).status_code == 200
         assert client.delete(f"/api/v1/lists/{lid}", headers=admin).status_code == 204
-        assert list(thumbnails.directory.glob(f"{lid}-*.jpg")) == []
+        assert list(thumbnails.directory.glob(f"{lid}-*.png")) == []
 
 
 def test_legacy_lists_lazily_materialize_thumbnail_on_first_request(client, admin):
@@ -129,7 +131,7 @@ def test_legacy_lists_lazily_materialize_thumbnail_on_first_request(client, admi
     created = store.save_list({"name": "Existing", "description": ""})
     lid = created["id"]
     url = created["thumbnail"]
-    path = client.app.state.list_thumbnails.directory / f"{lid}-0-layout2.jpg"
+    path = client.app.state.list_thumbnails.directory / f"{lid}-0-layout3.png"
     assert not path.exists()
     assert client.get(url, headers=admin).status_code == 200
     assert path.is_file()
@@ -149,19 +151,19 @@ def test_manual_collection_thumbnail_recovers_after_temporary_artwork_failure(cl
     store.add_manual_collection_items(collection["id"], [media_id])
     indexed = next(item for item in store.collection_index() if item["id"] == collection["id"])
     thumbnail_url = indexed["artwork"]
-    assert thumbnail_url.endswith("?layout=4")
+    assert thumbnail_url.endswith("?layout=5")
 
     with patch.object(thumbnails.artwork, "get", new_callable=AsyncMock) as getter:
         getter.side_effect = ArtworkError("Artwork temporarily unavailable")
         assert client.get(thumbnail_url, headers=admin).status_code == 200
         # Do not persist a blank mosaic for the lifetime of this revision.
-        assert not list(thumbnails.directory.glob(f"{collection['id']}-*.jpg"))
+        assert not list(thumbnails.directory.glob(f"{collection['id']}-*.png"))
 
         getter.side_effect = None
         getter.return_value = (colored_poster((195, 40, 45)), "image/png")
         recovered = client.get(thumbnail_url, headers=admin)
         assert recovered.status_code == 200
-        assert list(thumbnails.directory.glob(f"{collection['id']}-*-layout4.jpg"))
+        assert list(thumbnails.directory.glob(f"{collection['id']}-*-layout5.png"))
         with Image.open(io.BytesIO(recovered.content)) as image:
             assert image.getpixel((20, 20))[0] > 120
 
@@ -214,7 +216,7 @@ def test_internal_collection_mosaic_rebuilds_on_add_and_remove(client, admin):
         assert client.get(cover_two, headers=admin).status_code == 404
         data_four = client.get(cover_four, headers=admin).content
         assert color_at(data_four, 70, 340)[0] > 150  # Delta, bottom-left
-        assert len(list(thumbnails.directory.glob(f"{collection_id}-*.jpg"))) == 1
+        assert len(list(thumbnails.directory.glob(f"{collection_id}-*.png"))) == 1
 
         removed = client.delete(f"/api/v1/collections/{collection_id}/items/{ids['alpha']}",
                                 headers=admin)
@@ -225,4 +227,4 @@ def test_internal_collection_mosaic_rebuilds_on_add_and_remove(client, admin):
         data_three = client.get(cover_three, headers=admin).content
         with Image.open(io.BytesIO(data_three)) as image:
             assert image.size == (300, 450)
-        assert len(list(thumbnails.directory.glob(f"{collection_id}-*.jpg"))) == 1
+        assert len(list(thumbnails.directory.glob(f"{collection_id}-*.png"))) == 1
