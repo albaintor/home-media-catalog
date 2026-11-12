@@ -3408,6 +3408,56 @@ class Store:
             "sources": self.sources(),
         }
 
+    def tmdb_enrichment_candidates(self) -> list[str]:
+        """Missing rich TMDB credits/trailers for physical catalogues.
+
+        Poster-only recovery is deliberately not considered full enrichment.
+        This works for both scanned internal media and CLZ/My Movies/Filmotech
+        editions; multiple physical copies yield only one canonical work ID.
+        """
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT w.id,e.payload FROM works w "
+                "JOIN records r ON r.work_id=w.id "
+                "JOIN sources s ON s.id=r.source_id "
+                "LEFT JOIN enrichment e ON e.work_id=w.id "
+                "WHERE w.kind IN ('movie','tvshow') "
+                "AND s.type IN ('internal','clz','mymovies','filmotech') "
+                "AND EXISTS (SELECT 1 FROM identifiers i WHERE i.work_id=w.id "
+                "AND i.namespace IN ('tmdb','imdb')) "
+                "ORDER BY w.id"
+            ).fetchall()
+        return [
+            row["id"] for row in rows
+            if not row["payload"] or not all(
+                field in json.loads(row["payload"]) for field in ("people", "trailers")
+            )
+        ]
+
+    def tmdb_retry_state(self) -> dict[str, Any]:
+        """Persistent queue checkpoints, including a provider-wide 429 cooldown."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM catalogue_meta WHERE key='tmdb_enrichment_retry_v1'"
+            ).fetchone()
+        if row:
+            try:
+                state = json.loads(row["value"])
+                if isinstance(state, dict):
+                    return state
+            except (ValueError, TypeError):
+                pass
+        return {"retry_at": None, "last_error": None, "skipped": {}}
+
+    def save_tmdb_retry_state(self, state: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO catalogue_meta(key,value) VALUES"
+                "('tmdb_enrichment_retry_v1',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (encode(state),),
+            )
+
     def new_job(self, source_id: str, operation: str = "kodi_sync") -> dict[str, Any]:
         if operation not in {
             "kodi_sync",
