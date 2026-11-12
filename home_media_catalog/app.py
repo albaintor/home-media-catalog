@@ -57,7 +57,10 @@ from .backup import MAX_BACKUP_BYTES, export_backup, import_backup
 from .compatibility import mobile_compatibility
 from .connectors.base import ConnectorError
 from .connectors.kodi import KodiConnector
-from .enrichment import enrich_tmdb, enrich_tmdb_season_guide, probe_tmdb, resolve_tmdb_poster
+from .enrichment import (
+    TmdbRateLimited, enrich_tmdb, enrich_tmdb_season_guide,
+    probe_tmdb, resolve_tmdb_poster,
+)
 from .internal_catalog import (
     find_tmdb,
     lookup_disc_barcode,
@@ -174,6 +177,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # is immediate and non-blocking; unchanged documents cost no API calls.
         start_ai_index(immediate=True)
         start_artwork_repair()
+        nonlocal tmdb_worker_task
+        tmdb_worker_task = asyncio.create_task(periodic_tmdb_enrichment())
         # Network outages, transient TMDB throttling and late imports must not
         # leave a poster permanently missing until a container restart.
         nonlocal artwork_repair_timer
@@ -190,6 +195,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if discovery:
                 await asyncio.to_thread(discovery.stop)
             await sync.close()
+            if tmdb_worker_task and not tmdb_worker_task.done():
+                tmdb_worker_task.cancel()
+                try:
+                    await tmdb_worker_task
+                except asyncio.CancelledError:
+                    pass
             if artwork_repair_timer and not artwork_repair_timer.done():
                 artwork_repair_timer.cancel()
                 try:
@@ -231,6 +242,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     collection_thumbnails = CollectionThumbnails(store, app.state.artwork, settings.data_dir)
     app.state.collection_thumbnails = collection_thumbnails
     enrichment_lock = asyncio.Lock()
+    tmdb_worker_task: asyncio.Task | None = None
+    tmdb_wakeup = asyncio.Event()
+    tmdb_worker_status = {"running": False, "last_media_id": None,
+                          "last_completed": None, "last_error": None}
     artwork_repair_task: asyncio.Task | None = None
     artwork_repair_timer: asyncio.Task | None = None
     artwork_repair_pending = False
@@ -481,6 +496,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "mobile_compatibility": mobile_compatibility(),
             **store.status(),
             "tmdb_available": bool(settings.tmdb_api_token.strip()),
+            "tmdb_enrichment": {
+                "pending": len(store.tmdb_enrichment_candidates())
+                if settings.tmdb_api_token.strip() else 0,
+                "running": tmdb_worker_status["running"],
+                "last_completed": tmdb_worker_status["last_completed"],
+                "last_media_id": tmdb_worker_status["last_media_id"],
+                **store.tmdb_retry_state(),
+            },
         }
 
     def ai_index_status():
@@ -645,9 +668,102 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if settings.tmdb_api_token.strip():
                 start_artwork_repair()
 
+    async def periodic_tmdb_enrichment() -> None:
+        """Idempotent, resumable background enrichment of physical works.
+
+        A saved 429 cooldown survives container restarts. The worker operates
+        on the canonical work, never on a disc/edition, and never re-fetches
+        completed credits/trailers during a CLZ or My Movies reimport.
+        """
+        while True:
+            try:
+                if settings.tmdb_api_token.strip():
+                    saved = await asyncio.to_thread(store.tmdb_retry_state)
+                    skips = saved.get("skipped") or {}
+                    now_at = datetime.now(UTC)
+                    resume_at = saved.get("retry_at")
+                    try:
+                        blocked_until = datetime.fromisoformat(resume_at) if resume_at else None
+                        if blocked_until and blocked_until.tzinfo is None:
+                            blocked_until = blocked_until.replace(tzinfo=UTC)
+                    except (TypeError, ValueError):
+                        blocked_until = None
+                    if blocked_until is None or blocked_until <= now_at:
+                        pending = await asyncio.to_thread(store.tmdb_enrichment_candidates)
+                        eligible = []
+                        for work_id in pending:
+                            until = skips.get(work_id)
+                            try:
+                                skip_date = datetime.fromisoformat(until) if until else None
+                                if skip_date and skip_date.tzinfo is None:
+                                    skip_date = skip_date.replace(tzinfo=UTC)
+                            except (TypeError, ValueError):
+                                skip_date = None
+                            if not skip_date or skip_date <= now_at:
+                                eligible.append(work_id)
+                        # Drop obsolete cooldowns when a work was successfully
+                        # enriched or removed; this also bounds SQLite metadata.
+                        skips = {work_id: expires for work_id, expires in skips.items()
+                                 if work_id in pending}
+                        saved["skipped"] = skips
+                        tmdb_worker_status["running"] = bool(eligible)
+                        limited = False
+                        for media_id in eligible[:20]:
+                            async with enrichment_lock:
+                                detail = await asyncio.to_thread(store.detail, media_id)
+                                if not detail or detail.get("enriched_at"):
+                                    continue
+                                tmdb_worker_status["last_media_id"] = media_id
+                                try:
+                                    payload = await enrich_tmdb(
+                                        detail, settings.tmdb_api_token)
+                                    await asyncio.to_thread(
+                                        store.save_enrichment, media_id, payload)
+                                    tmdb_worker_status["last_completed"] = (
+                                        datetime.now(UTC).isoformat())
+                                    tmdb_worker_status["last_error"] = None
+                                    skips.pop(media_id, None)
+                                except TmdbRateLimited as exc:
+                                    saved["retry_at"] = (
+                                        datetime.now(UTC) +
+                                        timedelta(seconds=exc.retry_after)
+                                    ).isoformat()
+                                    saved["last_error"] = str(exc)
+                                    tmdb_worker_status["last_error"] = str(exc)
+                                    limited = True
+                                    break
+                                except ConnectorError as exc:
+                                    # A missing mapping or a temporary API
+                                    # outage must not hammer TMDB every minute.
+                                    skips[media_id] = (
+                                        datetime.now(UTC) + timedelta(hours=24)
+                                    ).isoformat()
+                                    tmdb_worker_status["last_error"] = str(exc)
+                            await asyncio.to_thread(store.save_tmdb_retry_state, saved)
+                        tmdb_worker_status["running"] = False
+                        if not limited:
+                            saved["retry_at"] = None
+                            saved["last_error"] = None
+                        await asyncio.to_thread(store.save_tmdb_retry_state, saved)
+                        if len(eligible) > 20 and not limited:
+                            await asyncio.sleep(1.0)
+                            continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOG.exception("Deferred TMDB enrichment pass failed")
+                tmdb_worker_status["running"] = False
+            try:
+                await asyncio.wait_for(tmdb_wakeup.wait(), timeout=60.0)
+            except TimeoutError:
+                pass
+            finally:
+                tmdb_wakeup.clear()
+
     def on_catalog_changed() -> None:
         start_ai_index()
         start_artwork_repair()
+        tmdb_wakeup.set()
 
     sync.on_catalog_changed = on_catalog_changed
 
@@ -1029,9 +1145,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             saved = await asyncio.to_thread(store.save_internal_media, edition)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        # The index scheduler calls asyncio.create_task: invoke it on the
-        # request event loop, never in FastAPI's synchronous worker thread.
+        # Index and metadata workers operate on the canonical work; a second
+        # scanned physical edition reuses the same cached TMDB metadata.
         start_ai_index()
+        tmdb_wakeup.set()
         return saved
 
     @app.delete(
@@ -1757,6 +1874,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 and (detail["kind"] != "tvshow" or detail.get("season_posters_cached"))
             ):
                 return {**detail, "tmdb_available": bool(settings.tmdb_api_token.strip())}
+            retry_state = await asyncio.to_thread(store.tmdb_retry_state)
+            retry_at = retry_state.get("retry_at")
+            if retry_at:
+                try:
+                    if datetime.fromisoformat(retry_at) > datetime.now(UTC):
+                        raise HTTPException(429, "Limitation TMDB : reprise automatique différée.")
+                except (ValueError, TypeError):
+                    pass
             try:
                 payload = await enrich_tmdb(detail, settings.tmdb_api_token)
                 if isinstance(payload.get("poster"), str) and payload["poster"] and not detail.get("artwork", {}).get("poster"):
@@ -1764,6 +1889,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         await app.state.artwork.get([payload["poster"]])
                     except ArtworkError:
                         payload.pop("poster", None)  # Retry on the next enrichment.
+            except TmdbRateLimited as exc:
+                retry_state["retry_at"] = (
+                    datetime.now(UTC) + timedelta(seconds=exc.retry_after)
+                ).isoformat()
+                retry_state["last_error"] = str(exc)
+                await asyncio.to_thread(store.save_tmdb_retry_state, retry_state)
+                raise HTTPException(429, str(exc)) from exc
             except ConnectorError as exc:
                 raise HTTPException(502, str(exc)) from exc
             if not await asyncio.to_thread(store.save_enrichment, media_id, payload):
