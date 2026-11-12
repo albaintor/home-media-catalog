@@ -1598,12 +1598,13 @@ class Store:
                 person_names(work_id, json.loads(enrichment[0]).get("people")),
             )
         posters = list(dict.fromkeys(v for p, _ in entries for v in p.get("poster", [])))
-        # Repair artwork is stored independently of imported source records so
-        # CLZ/Kodi reimports cannot erase a recovered poster. Source posters win.
-        if not posters and enrichment:
+        # A validated TMDB repair must also supersede a broken CLZ/Kodi
+        # reference. Keep source URLs as fallbacks, not as the primary poster.
+        # Repairs survive source reimports without mutating source records.
+        if enrichment:
             repaired = json.loads(enrichment["payload"]).get("poster")
             if isinstance(repaired, str) and repaired:
-                posters = [repaired]
+                posters = [repaired, *(p for p in posters if p != repaired)]
         fanarts = list(dict.fromkeys(v for p, _ in entries for v in p.get("fanart", [])))
         values = {
             "kind": primary["kind"],
@@ -2809,8 +2810,10 @@ class Store:
                 )],
             }
 
-    def save_poster_artwork(self, work_id: str, reference: str) -> bool:
-        """Persist a repaired poster and revision all affected mosaics/lists."""
+    def save_poster_artwork(
+        self, work_id: str, reference: str, *, replace_broken: bool = False
+    ) -> bool:
+        """Persist a validated poster, optionally replacing an unreachable source reference."""
         if not (reference.startswith("https://image.tmdb.org/t/p/w500/")
                 or re.fullmatch(r"hmc-poster://[0-9a-f]{64}", reference)):
             raise ValueError("Invalid repaired poster reference.")
@@ -2819,12 +2822,14 @@ class Store:
             row = conn.execute("SELECT poster FROM works WHERE id=?", (work_id,)).fetchone()
             if row is None:
                 raise KeyError(work_id)
-            if json.loads(row["poster"] or "[]"):
-                return False  # Concurrent source synchronization already supplied a poster.
             old = conn.execute(
                 "SELECT payload FROM enrichment WHERE work_id=?", (work_id,)
             ).fetchone()
             payload = json.loads(old["payload"]) if old else {}
+            if payload.get("poster") == reference:
+                return False
+            if json.loads(row["poster"] or "[]") and not replace_broken:
+                return False  # Preserve an accessible source poster.
             payload["poster"] = reference
             conn.execute(
                 "INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?) "
