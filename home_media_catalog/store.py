@@ -1443,6 +1443,37 @@ class Store:
                 "AND collection_id IN (SELECT id FROM collections WHERE is_manual=1)",
                 (keep, drop),
             )
+            # Enrichment belongs to the canonical work, not to an imported
+            # physical edition. A title/identifier reconciliation must preserve
+            # cached credits, trailers, poster repairs and physical season guides.
+            # Only reach this point after both works have compatible identifiers.
+            retained = conn.execute(
+                "SELECT payload,updated_at FROM enrichment WHERE work_id=?", (keep,)
+            ).fetchone()
+            removed = conn.execute(
+                "SELECT payload,updated_at FROM enrichment WHERE work_id=?", (drop,)
+            ).fetchone()
+            if removed:
+                merged_enrichment = json.loads(removed["payload"])
+                if retained:
+                    survivor = json.loads(retained["payload"])
+                    for field, value in survivor.items():
+                        if value not in (None, [], {}, "") or field not in merged_enrichment:
+                            merged_enrichment[field] = value
+                    # The canonical row may contain only a repaired poster.
+                    # Empty credits/trailers must not shadow actual TMDB metadata.
+                    for field in ("people", "trailers", "season_guides", "season_posters"):
+                        if not merged_enrichment.get(field) and json.loads(removed["payload"]).get(field):
+                            merged_enrichment[field] = json.loads(removed["payload"])[field]
+                timestamp = max(
+                    (retained["updated_at"] if retained else "", removed["updated_at"])
+                )
+                conn.execute(
+                    "INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?) "
+                    "ON CONFLICT(work_id) DO UPDATE SET payload=excluded.payload,"
+                    "updated_at=excluded.updated_at",
+                    (keep, encode(merged_enrichment), timestamp),
+                )
             conn.execute("UPDATE records SET work_id=? WHERE work_id=?", (keep, drop))
             conn.execute("DELETE FROM identifiers WHERE work_id=?", (drop,))
             conn.execute("DELETE FROM works_fts WHERE work_id=?", (drop,))
@@ -2835,7 +2866,11 @@ class Store:
             "trailers": trailers,
             "personal": dict(personal) if personal else {},
             "lists": self._lists(conn, work_id),
-            "enriched_at": cached["updated_at"] if cached else None,
+            # Poster-only repair is NOT a complete TMDB metadata enrichment.
+            # Otherwise a repaired cover suppresses credits and trailers for
+            # 30 days on both the web and paired iOS clients.
+            "enriched_at": cached["updated_at"] if cached and
+                "people" in enriched and "trailers" in enriched else None,
             "season_posters_cached": "season_posters" in enriched,
         }
 
