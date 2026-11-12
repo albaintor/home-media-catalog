@@ -2834,6 +2834,10 @@ class Store:
             )
             self._rebuild(conn, work_id)
             conn.execute(
+                "UPDATE collections SET revision=revision+1 WHERE is_manual=1 AND id IN "
+                "(SELECT collection_id FROM collection_items WHERE work_id=?)", (work_id,),
+            )
+            conn.execute(
                 "UPDATE lists SET revision=revision+1 WHERE id IN "
                 "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,),
             )
@@ -2867,6 +2871,10 @@ class Store:
             if missing_before and json.loads(conn.execute(
                 "SELECT poster FROM works WHERE id=?", (work_id,)
             ).fetchone()["poster"] or "[]"):
+                conn.execute(
+                    "UPDATE collections SET revision=revision+1 WHERE is_manual=1 AND id IN "
+                    "(SELECT collection_id FROM collection_items WHERE work_id=?)", (work_id,)
+                )
                 conn.execute(
                     "UPDATE lists SET revision=revision+1 WHERE id IN "
                     "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,)
