@@ -249,12 +249,15 @@ If no connection can **even start** a scan, synchronization of the existing Mari
 ## Persistent List Thumbnails
 
 Each list exposes an authenticated `thumbnail` URL:
-`/api/v1/lists/{id}/thumbnails/{revision}.jpg`. The server stores
-the 360 × 216 px JPEG in `DATA_DIR/list-thumbnails/`. Subsequent reads
-do not regenerate the image, and the client can cache the versioned URL.
-The mosaic shows the **first four items in manual order**: a 2×2 layout (4),
-one large tile plus two smaller ones (3), two columns (2), full frame (1),
-or a neutral placeholder (0).
+`/api/v1/lists/{id}/thumbnails/{revision}.png?layout=3`. The server stores
+a transparent 360 × 216 px PNG in `DATA_DIR/list-thumbnails/`. Collection
+covers use `/api/v1/collections/{id}/thumbnails/{revision}.png?layout=5`
+(300 × 450 px). Previous `.jpg` routes remain compatible but return PNG data.
+The layout version changes the cache key, so old opaque mosaics cannot be reused.
+The mosaic shows the **first four items in manual order** for lists and in
+chronological release order for collections: a 2×2 layout (4), two tiles above
+and a third centered below (3), two columns (2), or full frame (1). Empty
+regions and artwork gaps are transparent.
 
 Creating, editing, deleting, inserting into, removing from, or reordering
 a list triggers generation of its new thumbnail in the background after
