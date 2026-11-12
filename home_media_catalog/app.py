@@ -768,6 +768,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     sync.on_catalog_changed = on_catalog_changed
 
     @app.get(
+        API + "/catalogue/enrichment/revisions",
+        tags=["Enrichment"],
+        dependencies=[Depends(authenticated)],
+    )
+    def catalogue_enrichment_revisions():
+        """Small metadata-only change index for iOS local-first replication."""
+        return {"items": store.tmdb_enrichment_revisions()}
+
+    @app.get(
         API + "/catalogue/artwork/changes",
         tags=["Catalogue"],
         dependencies=[Depends(authenticated)],
