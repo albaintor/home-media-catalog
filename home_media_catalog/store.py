@@ -2823,6 +2823,9 @@ class Store:
             conn.execute("BEGIN IMMEDIATE")
             if not conn.execute("SELECT 1 FROM works WHERE id=?", (work_id,)).fetchone():
                 return False
+            missing_before = not json.loads(conn.execute(
+                "SELECT poster FROM works WHERE id=?", (work_id,)
+            ).fetchone()["poster"] or "[]")
             previous = conn.execute(
                 "SELECT payload FROM enrichment WHERE work_id=?", (work_id,)
             ).fetchone()
@@ -2836,6 +2839,13 @@ class Store:
                 (work_id, encode(payload), now()),
             )
             self._rebuild(conn, work_id)
+            if missing_before and json.loads(conn.execute(
+                "SELECT poster FROM works WHERE id=?", (work_id,)
+            ).fetchone()["poster"] or "[]"):
+                conn.execute(
+                    "UPDATE lists SET revision=revision+1 WHERE id IN "
+                    "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,)
+                )
         return True
 
     @staticmethod
