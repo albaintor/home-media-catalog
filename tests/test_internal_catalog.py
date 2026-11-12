@@ -296,22 +296,15 @@ def test_season_parser_rejects_boxsets_and_unrelated_titles():
     assert parse("The Mandalorian (complete series)")[0] is None
 
 
-def test_internal_tv_season_endpoint_auto_fills_artwork(client, admin):
-    from unittest.mock import AsyncMock, patch
-
+def test_internal_tv_season_rest_infers_season_from_disc_label(client, admin):
     data = {
         "id": str(uuid4()), "kind": "tvshow", "title": "The Mandalorian",
         "year": 2019, "tmdb_id": "82856", "format": "Blu-ray",
         "physical_title": "The Mandalorian Season 3",
+        "season_poster_path": "/s3.jpg", "physical_episode_count": 8,
     }
-    fake_info = {"season": 3, "poster_path": "/s3.jpg", "episode_count": 8}
-    with patch("home_media_catalog.app.tmdb_physical_season",
-               new_callable=AsyncMock, return_value=fake_info) as lookup:
-        # The token is available in this fixture only if configured.
-        client.app.state.settings.tmdb_api_token = "tmdb-test-token"
-        response = client.post("/api/v1/internal/items", json=data, headers=admin)
-        assert response.status_code == 201, response.text
-        lookup.assert_awaited_once_with("82856", 3, "tmdb-test-token")
+    response = client.post("/api/v1/internal/items", json=data, headers=admin)
+    assert response.status_code == 201, response.text
     work_id = response.json()["id"]
     detail = client.get("/api/v1/media/" + work_id, headers=admin).json()
     edition = next(e for e in detail["editions"] if e["source_type"] == "internal")
@@ -320,3 +313,19 @@ def test_internal_tv_season_endpoint_auto_fills_artwork(client, admin):
     assert client.get(f"/api/v1/media/{work_id}/seasons", headers=admin).json()[0][
         "physical_episode_count"
     ] == 8
+
+
+def test_tmdb_season_artwork_lookup_uses_season_not_show(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def connection(_token):
+        async def get(path, **kwargs):
+            assert path == "tv/82856/season/3"
+            assert kwargs == {"language": "fr-FR"}
+            return {"poster_path": "/s3.jpg", "episodes": [{"episode_number": i} for i in range(8)]}
+        yield get
+
+    monkeypatch.setattr(internal_catalog, "tmdb_connection", connection)
+    metadata = asyncio.run(internal_catalog.tmdb_physical_season("82856", 3, "token"))
+    assert metadata == {"season": 3, "poster_path": "/s3.jpg", "episode_count": 8}
