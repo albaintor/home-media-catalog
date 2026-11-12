@@ -2776,6 +2776,18 @@ class Store:
                 (limit,),
             )]
 
+    def artwork_dependents(self, work_id: str) -> dict[str, list[str]]:
+        """Mosaics containing this work, including manually maintained groups."""
+        with self.connect() as conn:
+            return {
+                "collections": [r[0] for r in conn.execute(
+                    "SELECT collection_id FROM collection_items WHERE work_id=?", (work_id,)
+                )],
+                "lists": [r[0] for r in conn.execute(
+                    "SELECT list_id FROM list_items WHERE work_id=?", (work_id,)
+                )],
+            }
+
     def save_poster_artwork(self, work_id: str, reference: str) -> bool:
         """Persist a repaired poster and revision all affected mosaics/lists."""
         if not (reference.startswith("https://image.tmdb.org/t/p/w500/")
