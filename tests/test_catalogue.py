@@ -925,3 +925,45 @@ def test_clz_physical_seasons_keep_separate_editions(store):
     store.apply_snapshot(sid, parse_clz(xml))
     assert store.media()["total"] == 1
     assert len(store.detail(work_id)["editions"]) == 3
+
+
+def test_clz_unnumbered_first_season_with_episode_list(store):
+    """Hawkeye's single physical season must remain visible after a reimport."""
+    episode_nodes = "<episode><seenit boolvalue='0'>No</seenit></episode>" * 6
+    xml = (
+        "<collectorz><data><movieinfo><movielist><movie>"
+        "<hash>hawkeye-disc</hash><title>Hawkeye</title>"
+        "<series><displayname>Hawkeye</displayname></series>"
+        "<istvseries boolvalue='1'>Yes</istvseries>"
+        "<imdbnr>10160804</imdbnr>"
+        f"<episodes>{episode_nodes}</episodes>"
+        "</movie></movielist></movieinfo></data></collectorz>"
+    ).encode()
+    record = parse_clz(xml)[0]
+    assert record.kind == "tvshow"
+    assert record.title == "Hawkeye"
+    assert record.metadata["physical_season"] == 1
+    assert record.metadata["physical_episode_count"] == 6
+    sid = source(store)
+    store.apply_snapshot(sid, [record])
+    work_id = store.media(q="Hawkeye")["items"][0]["id"]
+    seasons = store.seasons(work_id)
+    assert len(seasons) == 1
+    assert seasons[0]["season"] == 1
+    assert seasons[0]["physical_episode_count"] == 6
+    assert seasons[0]["owned_physical"] is True
+    store.apply_snapshot(sid, parse_clz(xml))
+    assert store.seasons(work_id)[0]["physical_episode_count"] == 6
+
+
+def test_clz_unnumbered_complete_series_is_not_assigned_season_one():
+    xml = (
+        "<collectorz><data><movieinfo><movielist><movie>"
+        "<hash>complete</hash><title>Example Complete Series</title>"
+        "<istvseries boolvalue='1'>Yes</istvseries>"
+        "<episodes><episode/><episode/></episodes>"
+        "</movie></movielist></movieinfo></data></collectorz>"
+    ).encode()
+    record = parse_clz(xml)[0]
+    assert record.metadata["physical_season"] is None
+    assert record.metadata["physical_episode_count"] == 0
