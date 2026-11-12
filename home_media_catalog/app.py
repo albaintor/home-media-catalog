@@ -58,8 +58,11 @@ from .compatibility import mobile_compatibility
 from .connectors.base import ConnectorError
 from .connectors.kodi import KodiConnector
 from .enrichment import (
-    TmdbRateLimited, enrich_tmdb, enrich_tmdb_season_guide,
-    probe_tmdb, resolve_tmdb_poster,
+    TmdbRateLimited,
+    enrich_tmdb,
+    enrich_tmdb_season_guide,
+    probe_tmdb,
+    resolve_tmdb_poster,
 )
 from .internal_catalog import (
     find_tmdb,
