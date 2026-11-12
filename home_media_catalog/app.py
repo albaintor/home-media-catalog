@@ -1590,7 +1590,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return {**detail, "tmdb_available": bool(settings.tmdb_api_token.strip())}
             try:
                 payload = await enrich_tmdb(detail, settings.tmdb_api_token)
-                if payload.get("poster") and not detail.get("artwork", {}).get("poster"):
+                if isinstance(payload.get("poster"), str) and payload["poster"] and not detail.get("artwork", {}).get("poster"):
                     try:
                         await app.state.artwork.get([payload["poster"]])
                     except ArtworkError:
