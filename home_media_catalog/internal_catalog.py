@@ -263,3 +263,51 @@ async def lookup_disc_barcode(value: str) -> dict:
         _CACHE.clear()
     _CACHE[value] = (now_time + (3600 if answer["found"] else 300), answer)
     return answer
+
+
+# Only explicit season labels are considered. A barcode identifies a release,
+# never a season on its own; box sets such as "Seasons 1-3" remain unassigned.
+_SEASON_LABEL = re.compile(
+    r"(?i)(?:^|[\s:–—-]+)(?:season|saison|staffel|temporada|s)\s*[:.]?\s*0*(\d{1,3})"
+    r"\b(?!\s*[-–]\s*\d)"
+)
+_DISC_SUFFIX = re.compile(
+    r"(?i)\b(?:blu[- ]?ray(?:\s*3d)?|ultra\s*hd|dvd|4k|uhd|"
+    r"complete\s+edition|édition\s+complète|collector(?:'s)?\s+edition)\b"
+)
+
+
+def physical_season_in_title(title: str) -> tuple[int | None, str]:
+    """Extract explicit season and optional series title from a disc label."""
+    if not title:
+        return None, ""
+    # Do not convert a multi-season box set to a single owned season.
+    if re.search(
+        r"(?i)\b(?:seasons|saisons|season|saison)\s+\d{1,3}\s*[-–/&+]\s*\d{1,3}",
+        title,
+    ):
+        return None, ""
+    matches = list(_SEASON_LABEL.finditer(title))
+    if len(matches) != 1:
+        return None, ""
+    season = int(matches[0].group(1))
+    base = title[:matches[0].start()].strip(" :-–—,()[]")
+    base = _DISC_SUFFIX.sub("", base).strip(" :-–—,()[]")
+    return season, base
+
+
+async def tmdb_physical_season(tmdb_id: str, season: int, token: str) -> dict:
+    """Fetch provider-backed season art and episode count, never a show poster."""
+    if not re.fullmatch(r"[0-9]{1,24}", tmdb_id) or not 0 <= season <= 10000:
+        raise ValueError("Invalid TMDB season identifier.")
+    async with tmdb_connection(token) as get:
+        data = await get(f"tv/{tmdb_id}/season/{season}", language="fr-FR")
+    path = data.get("poster_path")
+    if not isinstance(path, str) or not re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", path):
+        path = None
+    episodes = data.get("episodes")
+    return {
+        "season": season,
+        "poster_path": path,
+        "episode_count": len(episodes) if isinstance(episodes, list) else None,
+    }
