@@ -91,6 +91,17 @@ def test_search_prefers_exact_collection_name_over_partial_matches():
     assert [g["title"] for g in groups] == ["Scream"]
 
 
+def test_internal_name_match_suppresses_imported_duplicate():
+    groups = _grouped("scream", items=[
+        {"id": "a", "title": "Scream", "collections": ["Scream"]},
+        {"id": "b", "title": "Scream 2", "manual_collection_ids": ["manual-scream"]},
+    ], indexed=[
+        _manual("manual-scream", "Scream"),
+        _external("external-scream", "Scream"),
+    ])
+    assert [g["id"] for g in groups] == ["manual-scream"]
+
+
 def test_no_name_match_only_shows_groups_containing_matching_media():
     groups = _grouped(
         "alien",
