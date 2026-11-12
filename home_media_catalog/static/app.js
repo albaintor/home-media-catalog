@@ -1318,8 +1318,11 @@ function collectionGroups(items) {
     namedGroups.filter(group=>group.items.length>1)
       .flatMap(group=>group.items.map(media=>media.id))
   );
+  const matchingManualNames=new Set([...manualGroups.values()].map(c=>collectionSelectionKey(c.title)));
   const visibleNamedGroups=namedGroups.filter(group=>
     (!hasNameMatches||preferredNames.has(collectionSelectionKey(group.title)))&&
+    // A searched internal collection supersedes its imported namesake.
+    (!search||group.manual||!matchingManualNames.has(collectionSelectionKey(group.title)))&&
     (group.manual||group.items.length!==1||!containedInLargerCollection.has(group.items[0].id)));
   // A collection-name search must also find indexed collections whose
   // individual member titles do not contain the search term. Their mosaic
