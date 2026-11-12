@@ -1,5 +1,6 @@
 """Optional TMDB credits, portraits and trailers, matched only by known IDs."""
 
+import asyncio
 import re
 from contextlib import asynccontextmanager
 
@@ -25,9 +26,22 @@ async def tmdb_connection(token: str):
         ) as client:
 
             async def get(path, **params):
-                response = await client.get(path, params=params)
-                response.raise_for_status()
-                return response.json()
+                # Serialize TMDB traffic at the call site (the API enrichment
+                # lock already serializes media) and honour upstream throttling.
+                # A bounded retry never causes a reimport to re-fetch metadata.
+                for attempt in range(5):
+                    await asyncio.sleep(0.25)
+                    response = await client.get(path, params=params)
+                    if response.status_code in (429, 500, 502, 503, 504) and attempt < 4:
+                        retry_after = response.headers.get("Retry-After", "")
+                        try:
+                            pause = float(retry_after)
+                        except ValueError:
+                            pause = 2 ** attempt
+                        await asyncio.sleep(min(60.0, max(1.0, pause)))
+                        continue
+                    response.raise_for_status()
+                    return response.json()
 
             yield get
     except httpx.HTTPStatusError as exc:
