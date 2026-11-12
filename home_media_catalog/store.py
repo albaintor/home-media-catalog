@@ -979,12 +979,27 @@ class Store:
         The UUID belongs to the edition, never the TMDB work. Retrying the same
         POST is a no-op; physical editions of one film share a catalogue work.
         """
-        from .internal_catalog import valid_barcode
+        from .internal_catalog import physical_season_in_title, valid_barcode
 
         barcode = data.get("barcode")
         if barcode and not valid_barcode(barcode):
             raise ValueError("Invalid barcode check digit.")
         external_key = data["id"].lower()
+        kind = data.get("kind", "movie")
+        title = data["title"].strip()
+        physical_title = (data.get("physical_title") or title).strip()
+        physical_season = data.get("physical_season")
+        if kind == "tvshow":
+            inferred, _ = physical_season_in_title(physical_title)
+            if physical_season is None:
+                physical_season = inferred
+            if physical_season is None:
+                physical_season, _ = physical_season_in_title(title)
+            if physical_season is not None:
+                # An edition title must not create a second TV-show identity.
+                _, canonical = physical_season_in_title(title)
+                if canonical:
+                    title = canonical
         with self.connect() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO sources(id,name,type,enabled,config) VALUES(?,?,?,?,?)",
@@ -1005,8 +1020,8 @@ class Store:
                 )
                 record = Record(
                     external_key=external_key,
-                    kind=data.get("kind", "movie"),
-                    title=data["title"].strip(),
+                    kind=kind,
+                    title=title,
                     identifiers=ids,
                     original_title=data.get("original_title"),
                     year=data.get("year"),
@@ -1015,7 +1030,16 @@ class Store:
                     formats=[data["format"]] if data.get("format") else [],
                     date_added=now(),
                     poster=poster,
-                    metadata={"barcode": barcode, "internal": True},
+                    metadata={
+                        "barcode": barcode, "internal": True,
+                        **({
+                            "physical_season": physical_season,
+                            "physical_title": physical_title or title,
+                            "physical_year": data.get("physical_year"),
+                            "physical_episode_count": data.get("physical_episode_count") or 0,
+                            "season_poster_path": data.get("season_poster_path"),
+                        } if kind == "tvshow" and physical_season is not None else {}),
+                    },
                 )
                 work_id, _ = self._match_work(
                     conn, record, source_type="internal"
@@ -2463,8 +2487,8 @@ class Store:
             }
             physical_posters = set()
             for row in conn.execute(
-                "SELECT r.payload FROM records r JOIN sources s ON s.id=r.source_id "
-                "WHERE r.work_id=? AND s.type='clz'", (parent_id,),
+                "SELECT r.payload,s.type FROM records r JOIN sources s ON s.id=r.source_id "
+                "WHERE r.work_id=? AND s.type IN ('clz','internal')", (parent_id,),
             ):
                 payload = json.loads(row["payload"])
                 metadata = payload.get("metadata") or {}
@@ -2488,7 +2512,11 @@ class Store:
                 ))
                 season["physical_title"] = season["physical_title"] or metadata.get("physical_title")
                 season["physical_year"] = season["physical_year"] or metadata.get("physical_year")
-                if payload.get("poster"):
+                if (row["type"] == "clz" and payload.get("poster")) or (
+                    row["type"] == "internal"
+                    and isinstance(metadata.get("season_poster_path"), str)
+                    and re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", metadata["season_poster_path"])
+                ):
                     physical_posters.add(number)
             cached = conn.execute(
                 "SELECT payload FROM enrichment WHERE work_id=?", (parent_id,)
@@ -2595,13 +2623,21 @@ class Store:
         with self.connect() as conn:
             candidates = []
             for row in conn.execute(
-                "SELECT r.payload FROM records r JOIN sources s ON s.id=r.source_id "
+                "SELECT r.payload,s.type FROM records r JOIN sources s ON s.id=r.source_id "
                 "JOIN works w ON w.id=r.work_id "
-                "WHERE w.id=? AND w.kind='tvshow' AND s.type='clz'", (parent_id,),
+                "WHERE w.id=? AND w.kind='tvshow' AND s.type IN ('clz','internal')",
+                (parent_id,),
             ):
                 payload = json.loads(row["payload"])
-                if (payload.get("metadata") or {}).get("physical_season") == season:
+                metadata = payload.get("metadata") or {}
+                if metadata.get("physical_season") != season:
+                    continue
+                if row["type"] == "clz":
                     candidates.extend(payload.get("poster") or [])
+                elif row["type"] == "internal":
+                    path = metadata.get("season_poster_path")
+                    if isinstance(path, str) and re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", path):
+                        candidates.append("https://image.tmdb.org/t/p/w342" + path)
             row = conn.execute(
                 "SELECT e.payload FROM enrichment e JOIN works w ON w.id=e.work_id"
                 " WHERE w.id=? AND w.kind='tvshow'", (parent_id,),
