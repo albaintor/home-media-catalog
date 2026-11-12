@@ -130,6 +130,13 @@ CREATE TABLE IF NOT EXISTS enrichment (
  work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
  payload TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+-- Monotonic artwork-change cursor; other iOS devices can refresh a
+-- handful of posters without downloading the entire catalogue.
+CREATE TABLE IF NOT EXISTS artwork_changes (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ work_id TEXT NOT NULL,
+ updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS playback_locations (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
  target TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -2765,6 +2772,20 @@ class Store:
             self._rebuild(conn, work_id)
         return True
 
+    def artwork_changes(self, after: int = 0, limit: int = 200) -> dict:
+        """Read bounded poster changes, including those made by another device."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id,work_id FROM artwork_changes WHERE id>? "
+                "ORDER BY id LIMIT ?", (max(0, after), min(200, max(1, limit)))
+            ).fetchall()
+            return {
+                "cursor": rows[-1]["id"] if rows else after,
+                "changes": [
+                    {"revision": row["id"], "media_id": row["work_id"]} for row in rows
+                ],
+            }
+
     def missing_poster_ids(self, limit: int = 5000) -> list[str]:
         """Find imported movie/series records with provider IDs but no poster."""
         with self.connect() as conn:
@@ -2816,6 +2837,10 @@ class Store:
                 "UPDATE lists SET revision=revision+1 WHERE id IN "
                 "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,),
             )
+            conn.execute(
+                "INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
+                (work_id, now()),
+            )
         return True
 
     def save_enrichment(self, work_id: str, payload: dict) -> bool:
@@ -2845,6 +2870,10 @@ class Store:
                 conn.execute(
                     "UPDATE lists SET revision=revision+1 WHERE id IN "
                     "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,)
+                )
+                conn.execute(
+                    "INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
+                    (work_id, now()),
                 )
         return True
 
