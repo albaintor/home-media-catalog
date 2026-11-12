@@ -232,3 +232,91 @@ def test_manual_edition_does_not_merge_distinct_remake_years(store):
     ))
     assert store.media(q="A Remake")["total"] == 2
     assert len(store.detail(added["id"])["editions"]) == 1
+
+
+
+def test_internal_tv_seasons_share_one_work_and_own_distinct_posters(store):
+    first_id = None
+    for number in (1, 2, 3):
+        data = {
+            "id": str(uuid4()), "kind": "tvshow", "title": "The Mandalorian",
+            "year": 2019, "tmdb_id": "82856",
+            "physical_title": f"The Mandalorian - Saison {number}",
+            "physical_episode_count": 8,
+            "season_poster_path": f"/season{number}.jpg",
+            "format": "Blu-ray",
+        }
+        added = store.save_internal_media(data)
+        if first_id is None:
+            first_id = added["id"]
+        assert added["id"] == first_id
+        assert store.season_poster(first_id, number) == [
+            f"https://image.tmdb.org/t/p/w342/season{number}.jpg"
+        ]
+
+    assert store.media(kind="tvshow")["total"] == 1
+    seasons = store.seasons(first_id)
+    assert [row["season"] for row in seasons] == [1, 2, 3]
+    assert all(row["owned_physical"] for row in seasons)
+    assert [row["physical_episode_count"] for row in seasons] == [8, 8, 8]
+    assert len(store.detail(first_id)["editions"]) == 3
+
+    # Removing one disc must not remove its siblings or its series.
+    editions = store.detail(first_id)["editions"]
+    second = next(
+        e["external_key"] for e in editions
+        if e["metadata"].get("physical_season") == 2
+    )
+    store.delete_internal_media(second)
+    assert [row["season"] for row in store.seasons(first_id)] == [1, 3]
+
+
+def test_internal_tv_season_manual_edition_title_does_not_create_duplicate(store):
+    first = store.save_internal_media({
+        "id": str(uuid4()), "kind": "tvshow",
+        "title": "A TV Series - Season 1", "year": 2020,
+        "format": "DVD",
+    })
+    second = store.save_internal_media({
+        "id": str(uuid4()), "kind": "tvshow",
+        "title": "A TV Series: Season 2", "year": 2020,
+        "format": "Blu-ray",
+    })
+    assert first["id"] == second["id"]
+    assert store.detail(first["id"])["title"] == "A TV Series"
+    assert [row["season"] for row in store.seasons(first["id"])] == [1, 2]
+
+
+def test_season_parser_rejects_boxsets_and_unrelated_titles():
+    parse = internal_catalog.physical_season_in_title
+    assert parse("The Mandalorian - Saison 03 Blu-ray")[0] == 3
+    assert parse("The Mandalorian: Season 2")[0] == 2
+    assert parse("The Mandalorian - S01")[0] == 1
+    assert parse("The Mandalorian: Seasons 1-3")[0] is None
+    assert parse("The Mandalorian (complete series)")[0] is None
+
+
+def test_internal_tv_season_endpoint_auto_fills_artwork(client, admin):
+    from unittest.mock import AsyncMock, patch
+
+    data = {
+        "id": str(uuid4()), "kind": "tvshow", "title": "The Mandalorian",
+        "year": 2019, "tmdb_id": "82856", "format": "Blu-ray",
+        "physical_title": "The Mandalorian Season 3",
+    }
+    fake_info = {"season": 3, "poster_path": "/s3.jpg", "episode_count": 8}
+    with patch("home_media_catalog.app.tmdb_physical_season",
+               new_callable=AsyncMock, return_value=fake_info) as lookup:
+        # The token is available in this fixture only if configured.
+        client.app.state.settings.tmdb_api_token = "tmdb-test-token"
+        response = client.post("/api/v1/internal/items", json=data, headers=admin)
+        assert response.status_code == 201, response.text
+        lookup.assert_awaited_once_with("82856", 3, "tmdb-test-token")
+    work_id = response.json()["id"]
+    detail = client.get("/api/v1/media/" + work_id, headers=admin).json()
+    edition = next(e for e in detail["editions"] if e["source_type"] == "internal")
+    assert edition["metadata"]["physical_season"] == 3
+    assert edition["metadata"]["season_poster_path"] == "/s3.jpg"
+    assert client.get(f"/api/v1/media/{work_id}/seasons", headers=admin).json()[0][
+        "physical_episode_count"
+    ] == 8
