@@ -618,13 +618,15 @@ function trailerThumbnailMarkup(item) {
       <span>${label}</span>
     </a>`;
   }).filter(Boolean);
-  return cards.length?`<section class="detail-section media-trailers"><p class="section-label">BANDES-ANNONCES</p><div class="media-trailer-row">${cards.join('')}</div></section>`:'';
+  return cards.length?`<section id="media-trailers" class="detail-section media-trailers"><p class="section-label">BANDES-ANNONCES</p><div class="media-trailer-row">${cards.join('')}</div></section>`:'';
 }
 function detailActions(item) {
+  const hasTrailers=(item.trailers||[]).some(link=>trailerVideoId(link));
+  const trailerButton=hasTrailers?`<button type="button" id="scroll-to-trailers" class="action-button trailer-button" aria-label="Aller aux bandes-annonces YouTube" title="Aller aux bandes-annonces YouTube">${actionIcon('youtube')}<span>Bande-annonce</span></button>`:'';
   const playable=item.kind==='tvshow'
     ? (item.source_types||[]).includes('kodi')&&Number(item.episode_count)>0
     : item.editions.some(e=>e.source_type==='kodi');
-  return `<div class="detail-actions compact-actions">${personalActions(item)}${playable?`<button id="open-playback" class="action-button play-target-button" title="Lire sur…" aria-label="Lire sur…" aria-haspopup="dialog" aria-controls="play-dialog">${actionIcon('playtarget')}<span>Lire sur…</span></button>`:''}<span id="writeback-indicators" class="writeback-indicators-container">${writebackIndicatorMarkup(item)}</span><span id="personal-status" class="visually-hidden" role="status" aria-live="polite"></span></div>`;
+  return `<div class="detail-actions compact-actions">${trailerButton}${personalActions(item)}${playable?`<button id="open-playback" class="action-button play-target-button" title="Lire sur…" aria-label="Lire sur…" aria-haspopup="dialog" aria-controls="play-dialog">${actionIcon('playtarget')}<span>Lire sur…</span></button>`:''}<span id="writeback-indicators" class="writeback-indicators-container">${writebackIndicatorMarkup(item)}</span><span id="personal-status" class="visually-hidden" role="status" aria-live="polite"></span></div>`;
 }
 function openTrailers() {
   hideRatingPopover();
@@ -4533,6 +4535,9 @@ document.addEventListener('click',event=>{
     else savePersonal({watched:state.detail.watch_status!=='watched'});
   }
   if(button.id==='open-playback')openPlayback();
+  if(button.id==='scroll-to-trailers') {
+    $('media-trailers')?.scrollIntoView({behavior:'smooth',block:'start'});
+  }
   if(button.id==='open-trailers')openTrailers();
 });
 document.addEventListener('input',event=>{if(event.target.id==='rating-slider')previewRating(Number(event.target.value));});
