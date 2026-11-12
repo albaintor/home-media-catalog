@@ -2457,6 +2457,7 @@ class Store:
                     **dict(row), "owned_physical": False,
                     "physical_edition_count": 0, "physical_formats": [],
                     "physical_title": None, "physical_year": None,
+                     "physical_episode_count": 0,
                 }
                 for row in rows
             }
@@ -2474,9 +2475,14 @@ class Store:
                     "season": number, "episode_count": 0, "watched_count": 0,
                     "owned_physical": False, "physical_edition_count": 0,
                     "physical_formats": [], "physical_title": None, "physical_year": None,
+                     "physical_episode_count": 0,
                 })
                 season["owned_physical"] = True
                 season["physical_edition_count"] += 1
+                season["physical_episode_count"] = max(
+                    season["physical_episode_count"],
+                    metadata.get("physical_episode_count") or 0,
+                )
                 season["physical_formats"] = sorted(set(
                     season["physical_formats"] + payload.get("formats", [])
                 ))
@@ -2496,6 +2502,43 @@ class Store:
                 )
             return [index[number] for number in sorted(index)]
 
+
+    def cached_season_guide(self, parent_id: str, season: int) -> list[dict] | None:
+        """Return previously fetched TMDB metadata, without creating Kodi episodes."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT e.payload FROM enrichment e JOIN works w ON w.id=e.work_id "
+                "WHERE w.id=? AND w.kind='tvshow'", (parent_id,)
+            ).fetchone()
+            if not row:
+                return None
+            guides = json.loads(row["payload"]).get("season_guides") or {}
+            value = guides.get(str(season)) if isinstance(guides, dict) else None
+            return value if isinstance(value, list) else None
+
+    def save_season_guide(self, parent_id: str, season: int, episodes: list[dict]) -> bool:
+        """Cache reference-only episodes in the enrichment record, not in works."""
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            show = conn.execute(
+                "SELECT kind FROM works WHERE id=?", (parent_id,)
+            ).fetchone()
+            if not show or show["kind"] != "tvshow":
+                return False
+            existing = conn.execute(
+                "SELECT payload FROM enrichment WHERE work_id=?", (parent_id,)
+            ).fetchone()
+            payload = json.loads(existing["payload"]) if existing else {}
+            guides = payload.get("season_guides")
+            guides = dict(guides) if isinstance(guides, dict) else {}
+            guides[str(season)] = episodes
+            payload["season_guides"] = guides
+            conn.execute(
+                "INSERT INTO enrichment VALUES(?,?,?) ON CONFLICT(work_id) "
+                "DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at",
+                (parent_id, encode(payload), now())
+            )
+        return True
 
     def set_episode_watch_status(
         self,
@@ -2865,9 +2908,13 @@ class Store:
             ).fetchone()
             # Refreshing credits must not erase an uploaded/repaired poster.
             if previous:
-                old_poster = json.loads(previous["payload"]).get("poster")
+                old_payload = json.loads(previous["payload"])
+                old_poster = old_payload.get("poster")
                 if old_poster and not payload.get("poster"):
                     payload = {**payload, "poster": old_poster}
+                # A credits/trailer refresh must not drop downloaded season guides.
+                if old_payload.get("season_guides") and "season_guides" not in payload:
+                    payload = {**payload, "season_guides": old_payload["season_guides"]}
             conn.execute(
                 "INSERT INTO enrichment VALUES(?,?,?) ON CONFLICT(work_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",
                 (work_id, encode(payload), now()),

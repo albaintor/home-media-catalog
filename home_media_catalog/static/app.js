@@ -598,17 +598,33 @@ function watchMarkup(item) {
   const label=state.role==='admin'?(view.available?`${view.label} · Marquer comme ${view.watched?'non vu':'vu'}${item.kind==='tvshow'?' tous les épisodes':''}`:'Aucun épisode importé'):`${view.label} · Accès en lecture seule`;
   return `<button id="watch-button" class="status-chip watch-button ${esc(view.status)}" aria-label="${esc(label)}" aria-pressed="${view.watched}" title="${esc(label)}" data-tooltip="${esc(label)}" ${state.role==='admin'&&view.available&&!state.personalPending.has(item.id)?'':'disabled'}>${actionIcon(view.watched?'watched':'watch')}<span class="watch-state">${esc(view.label)}</span></button>`;
 }
+function trailerVideoId(link) {
+  try {
+    const u=new URL(link);
+    if(u.protocol!=='https:'||!['www.youtube.com','youtube.com','m.youtube.com'].includes(u.hostname)||u.pathname!=='/watch')return null;
+    const id=u.searchParams.get('v');
+    return /^[A-Za-z0-9_-]{11}$/.test(id||'')?id:null;
+  }catch{return null;}
+}
+function trailerThumbnailMarkup(item) {
+  const seen=new Set();
+  const cards=(item.trailers||[]).map(link=>{
+    const id=trailerVideoId(link);
+    if(!id||seen.has(id))return '';
+    seen.add(id);
+    const label='Bande-annonce '+seen.size;
+    return `<a class="media-trailer-card" href="https://www.youtube.com/watch?v=${id}" target="_blank" rel="noopener noreferrer" aria-label="${label} : ouvrir sur YouTube">
+      <span class="media-trailer-image"><img src="https://i.ytimg.com/vi/${id}/mqdefault.jpg" loading="lazy" alt=""><span class="media-trailer-play" aria-hidden="true">▶</span></span>
+      <span>${label}</span>
+    </a>`;
+  }).filter(Boolean);
+  return cards.length?`<section class="detail-section media-trailers"><p class="section-label">BANDES-ANNONCES</p><div class="media-trailer-row">${cards.join('')}</div></section>`:'';
+}
 function detailActions(item) {
-  const trailers=[...new Set(item.trailers||[])];
-  const link=trailers[0]||'https://www.youtube.com/results?search_query='+encodeURIComponent(item.title+' '+(item.year||'')+' bande annonce');
-  const multiple=trailers.length>1;
-  const label=multiple?`Choisir une bande-annonce parmi ${trailers.length}`:trailers.length?'Voir la bande-annonce sur YouTube':'Rechercher une bande-annonce sur YouTube';
-  const attributes=multiple?'id="open-trailers" aria-haspopup="dialog" aria-controls="trailers-dialog"':`id="trailer-link" href="${esc(link)}" target="_blank" rel="noopener noreferrer"`;
-  const trailerButton=`<${multiple?'button':'a'} ${attributes} class="action-button trailer-button" aria-label="${label}" title="${label}">${actionIcon('youtube')}<span>Bande-annonce${multiple?` · ${trailers.length}`:''}</span></${multiple?'button':'a'}>`;
   const playable=item.kind==='tvshow'
     ? (item.source_types||[]).includes('kodi')&&Number(item.episode_count)>0
     : item.editions.some(e=>e.source_type==='kodi');
-  return `<div class="detail-actions compact-actions">${trailerButton}${personalActions(item)}${playable?`<button id="open-playback" class="action-button play-target-button" title="Lire sur…" aria-label="Lire sur…" aria-haspopup="dialog" aria-controls="play-dialog">${actionIcon('playtarget')}<span>Lire sur…</span></button>`:''}<span id="writeback-indicators" class="writeback-indicators-container">${writebackIndicatorMarkup(item)}</span><span id="personal-status" class="visually-hidden" role="status" aria-live="polite"></span></div>`;
+  return `<div class="detail-actions compact-actions">${personalActions(item)}${playable?`<button id="open-playback" class="action-button play-target-button" title="Lire sur…" aria-label="Lire sur…" aria-haspopup="dialog" aria-controls="play-dialog">${actionIcon('playtarget')}<span>Lire sur…</span></button>`:''}<span id="writeback-indicators" class="writeback-indicators-container">${writebackIndicatorMarkup(item)}</span><span id="personal-status" class="visually-hidden" role="status" aria-live="polite"></span></div>`;
 }
 function openTrailers() {
   hideRatingPopover();
@@ -2415,7 +2431,7 @@ function renderDetail(item) {
   const previousScroll=state.detail?.id===item.id?$('detail-dialog').scrollTop:0;
   hideRatingPopover();
   state.detail=item;
-  $('detail-content').innerHTML=`${metadataAction(item)}<div class="detail-layout"><div class="detail-poster"><button type="button" id="open-artwork-gallery" class="detail-poster-trigger" title="${esc(tr('Agrandir les images du média'))}" aria-label="${esc(tr('Agrandir les images du média'))}" ${mediaArtworkImages(item).length?'':'disabled'}>${poster(item,true)}</button></div><div class="detail-intro"><p class="eyebrow">${esc(kindLabels[item.kind])}</p><div class="detail-heading"><h2><button type="button" id="copy-media-title" class="detail-copy-title" title="${esc(tr('Copier le titre'))}" aria-label="${esc(tr('Copier le titre'))}">${esc(item.title)}</button></h2>${item.original_title&&item.original_title!==item.title?`<p class="original-title">${esc(item.original_title)}</p>`:''}</div><div class="detail-info">${item.year?`<span>${item.year}</span>`:''}${item.runtime_minutes?`<span>${item.runtime_minutes} min</span>`:''}${item.rating?`<span class="score" title="Note publique : ${Number(item.rating).toFixed(1)}/10">★ ${Number(item.rating).toFixed(1)}</span>`:''}</div>${detailActions(item)}<div class="format-badges" aria-label="Formats disponibles selon les éditions">${detailFormatBadges(item)}</div> ${resumeProgress(item)}<div class="detail-meta-row">${watchMarkup(item)}${seriesProgressMarkup(item)}<div class="card-meta">${badges(item)}</div></div>${!item.source_types.includes('kodi')?'<p class="hint">Cette fiche provient uniquement de collections importées. Aucun fichier Kodi ne lui est actuellement associé dans le catalogue.</p>':''}<button id="add-to-list" class="secondary" ${state.role==='admin'?'':'disabled title="Un accès administrateur est nécessaire pour modifier les listes."'}>+ Ajouter à une liste</button>${item.lists?.length?`<p class="hint">Listes : ${item.lists.map(l=>`<button class="text-button" data-open-list="${esc(l.id)}">${esc(l.name)} ↗</button>`).join(' · ')}</p>`:''}${manualMembershipMarkup(item)}</div><div class="detail-body">${item.kind==='episode'&&item.parent_id?`<button class="text-button" type="button" data-return-to-series="${esc(item.parent_id)}" data-return-season="${item.season??0}">← Série · Saison ${item.season??0} · Épisode ${item.episode??0}</button>`:''}<div class="genre-chips">${item.genres.map(g=>`<button data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div><p class="synopsis">${esc(item.plot||'Synopsis non renseigné.')}</p>${detailDatesMarkup(item)}${item.kind==='tvshow'?'<section class="detail-section"><p class="section-label">SAISONS</p><div id="season-list" class="season-links">Chargement…</div><div id="episode-list" class="episode-links"></div></section>':''}${castMarkup(item.people||item.cast)}<section class="detail-section"><p class="section-label">FICHIERS & ÉDITIONS · ${item.editions.length}</p>${item.editions.map(editionMarkup).join('')}${state.role==='admin'&&item.kind==='movie'?'<button id="diagnose-kodi" class="secondary" type="button">Vérifier la présence dans la vidéothèque</button><div id="kodi-diagnostic" class="metadata-status" role="status" aria-live="polite" hidden></div>':''}</section>${state.role==='admin'&&item.editions.some(e=>e.source_type==='internal')?
+  $('detail-content').innerHTML=`${metadataAction(item)}<div class="detail-layout"><div class="detail-poster"><button type="button" id="open-artwork-gallery" class="detail-poster-trigger" title="${esc(tr('Agrandir les images du média'))}" aria-label="${esc(tr('Agrandir les images du média'))}" ${mediaArtworkImages(item).length?'':'disabled'}>${poster(item,true)}</button></div><div class="detail-intro"><p class="eyebrow">${esc(kindLabels[item.kind])}</p><div class="detail-heading"><h2><button type="button" id="copy-media-title" class="detail-copy-title" title="${esc(tr('Copier le titre'))}" aria-label="${esc(tr('Copier le titre'))}">${esc(item.title)}</button></h2>${item.original_title&&item.original_title!==item.title?`<p class="original-title">${esc(item.original_title)}</p>`:''}</div><div class="detail-info">${item.year?`<span>${item.year}</span>`:''}${item.runtime_minutes?`<span>${item.runtime_minutes} min</span>`:''}${item.rating?`<span class="score" title="Note publique : ${Number(item.rating).toFixed(1)}/10">★ ${Number(item.rating).toFixed(1)}</span>`:''}</div>${detailActions(item)}<div class="format-badges" aria-label="Formats disponibles selon les éditions">${detailFormatBadges(item)}</div> ${resumeProgress(item)}<div class="detail-meta-row">${watchMarkup(item)}${seriesProgressMarkup(item)}<div class="card-meta">${badges(item)}</div></div>${!item.source_types.includes('kodi')?'<p class="hint">Cette fiche provient uniquement de collections importées. Aucun fichier Kodi ne lui est actuellement associé dans le catalogue.</p>':''}<button id="add-to-list" class="secondary" ${state.role==='admin'?'':'disabled title="Un accès administrateur est nécessaire pour modifier les listes."'}>+ Ajouter à une liste</button>${item.lists?.length?`<p class="hint">Listes : ${item.lists.map(l=>`<button class="text-button" data-open-list="${esc(l.id)}">${esc(l.name)} ↗</button>`).join(' · ')}</p>`:''}${manualMembershipMarkup(item)}</div><div class="detail-body">${item.kind==='episode'&&item.parent_id?`<button class="text-button" type="button" data-return-to-series="${esc(item.parent_id)}" data-return-season="${item.season??0}">← Série · Saison ${item.season??0} · Épisode ${item.episode??0}</button>`:''}<div class="genre-chips">${item.genres.map(g=>`<button data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div><p class="synopsis">${esc(item.plot||'Synopsis non renseigné.')}</p>${detailDatesMarkup(item)}${item.kind==='tvshow'?'<section class="detail-section"><p class="section-label">SAISONS</p><div id="season-list" class="season-links">Chargement…</div><div id="episode-list" class="episode-links"></div></section>':''}${castMarkup(item.people||item.cast)}${trailerThumbnailMarkup(item)}<section class="detail-section"><p class="section-label">FICHIERS & ÉDITIONS · ${item.editions.length}</p>${item.editions.map(editionMarkup).join('')}${state.role==='admin'&&item.kind==='movie'?'<button id="diagnose-kodi" class="secondary" type="button">Vérifier la présence dans la vidéothèque</button><div id="kodi-diagnostic" class="metadata-status" role="status" aria-live="polite" hidden></div>':''}</section>${state.role==='admin'&&item.editions.some(e=>e.source_type==='internal')?
   '<section class="detail-section internal-delete-section"><button id="remove-internal-edition" class="secondary" type="button">Supprimer une édition du catalogue interne…</button></section>':''}${tmdbAttribution(item)}</div></div>`;
   attachImageFallbacks($('detail-content'));syncPersonalControls();$('detail-dialog').scrollTop=previousScroll;
 }
@@ -2443,7 +2459,7 @@ async function loadSeasons(id,selectedSeason=null) {
     return `<div class="season-entry"><button type="button" class="season-button" data-season="${season.season}" aria-expanded="${selectedSeason===season.season}" aria-label="${esc(label)}, ${esc(physical||season.episode_count+' épisodes')}">
       <span class="season-cover">${artwork?`<img loading="lazy" src="${esc(url(artwork))}" alt="">`:'<span aria-hidden="true">▦</span>'}${season.watched_count>0?`<span class="season-watched-flag ${season.watched_count<season.episode_count?'partial':'complete'}" title="${season.watched_count<season.episode_count?'Partiellement vu':'Vu'} : ${season.watched_count}/${season.episode_count} épisodes" aria-label="${season.watched_count<season.episode_count?'Partiellement vu':'Vu'} : ${season.watched_count}/${season.episode_count} épisodes">${season.watched_count<season.episode_count?'◐':'✓'}</span>`:''}</span>
       <span class="season-label">${esc(label)}</span>
-      <span class="season-count">${physical?esc(physical)+(season.episode_count?' · ':''):''}${season.episode_count?season.episode_count+' épisodes · '+season.watched_count+' vus':''}</span>
+      <span class="season-count">${physical?esc(physical)+(season.episode_count?' · ':''):''}${season.episode_count?season.episode_count+' épisodes · '+season.watched_count+' vus':(season.physical_episode_count?season.physical_episode_count+' épisodes':'')}</span>
     </button></div>`;
   }).join(''):'Aucune saison importée pour cette série.';
   attachImageFallbacks($('season-list'));
@@ -2457,7 +2473,23 @@ async function loadSeasonEpisodes(season,offset=0,scrollToEpisodes=false) {
   node.dataset.season=String(season);
   const physical=state.seasons?.find(s=>s.season===season);
   if(physical?.owned_physical&&!physical.episode_count) {
-    node.innerHTML='<p class="hint">Saison présente dans la collection physique (CLZ). Aucun épisode numérique importé.</p>';
+    node.innerHTML='<p class="hint">Chargement du guide des épisodes (TMDB)…</p>';
+    try {
+      const items=await api('media/'+encodeURIComponent(parent)+'/seasons/'+season+'/guide');
+      if(state.detail?.id!==parent||node.dataset.season!==String(season))return;
+      node.innerHTML='<div class="selected-season-header"><p class="section-label">'+(season===0?'SPÉCIAUX':'SAISON '+season)+' · '+items.length+' ÉPISODES · ÉDITION PHYSIQUE</p></div>'+
+        '<p class="hint">Informations TMDB uniquement : aucun fichier numérique associé.</p>'+
+        (items.map(e=>`<div class="season-episode-entry season-guide-entry">
+          ${e.still?`<img class="season-guide-still" loading="lazy" src="${esc(e.still)}" alt="">`:``}
+          <span class="season-episode-number">E${String(e.episode).padStart(2,'0')}</span>
+          <span class="season-episode-description"><span class="season-episode-title">${esc(e.title)}</span>${e.plot?`<small class="episode-synopsis">${esc(e.plot)}</small>`:``}</span>
+          ${e.runtime_minutes?`<span class="season-episode-duration">${e.runtime_minutes} min</span>`:``}
+        </div>`).join('')||'<p class="hint">Aucune information disponible sur TMDB pour cette saison.</p>');
+      if(scrollToEpisodes&&$('detail-dialog').open)node.scrollIntoView({behavior:'smooth',block:'start'});
+    }catch(e){
+      if(state.detail?.id===parent&&node.dataset.season===String(season))
+        node.textContent='Guide des épisodes indisponible : '+e.message;
+    }
     return;
   }
   if(!offset)node.innerHTML='<p class="hint">Chargement des épisodes…</p>';

@@ -462,6 +462,15 @@ class SeasonSummary(BaseModel):
     physical_formats: list[str] = Field(default_factory=list)
     physical_title: str | None = None
     physical_year: int | None = None
+    physical_episode_count: int = 0
+
+
+class SeasonGuideEpisode(BaseModel):
+    episode: int
+    title: str
+    plot: str = ""
+    runtime_minutes: int | None = None
+    still: str | None = None
 
 
 class MediaPage(BaseModel):

@@ -57,7 +57,7 @@ from .backup import MAX_BACKUP_BYTES, export_backup, import_backup
 from .compatibility import mobile_compatibility
 from .connectors.base import ConnectorError
 from .connectors.kodi import KodiConnector
-from .enrichment import enrich_tmdb, probe_tmdb, resolve_tmdb_poster
+from .enrichment import enrich_tmdb, enrich_tmdb_season_guide, probe_tmdb, resolve_tmdb_poster
 from .internal_catalog import find_tmdb, lookup_disc_barcode
 from .list_thumbnails import CollectionThumbnails, ListThumbnails
 from .models import (
@@ -95,6 +95,7 @@ from .models import (
     PlayInput,
     PlayResult,
     ReplayResponse,
+    SeasonGuideEpisode,
     SeasonSummary,
     SessionInput,
     SessionView,
@@ -1186,6 +1187,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if result is None:
             raise HTTPException(404, "Unknown TV show.")
         return result
+
+    @app.get(
+        API + "/media/{media_id}/seasons/{season}/guide",
+        response_model=list[SeasonGuideEpisode],
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+    )
+    async def physical_season_guide(media_id: str, season: int):
+        """Read-only TMDB episode metadata for CLZ discs, never playback entries."""
+        if not 0 <= season <= 10000:
+            raise HTTPException(422, "Invalid season.")
+        seasons = await asyncio.to_thread(store.seasons, media_id)
+        if seasons is None:
+            raise HTTPException(404, "Unknown TV show.")
+        if not any(row["season"] == season and row["owned_physical"] for row in seasons):
+            raise HTTPException(404, "No physical edition for this season.")
+        cached = await asyncio.to_thread(store.cached_season_guide, media_id, season)
+        if cached is not None:
+            return cached
+        if not settings.tmdb_api_token.strip():
+            raise HTTPException(503, "TMDB is not configured; episode guide unavailable.")
+        async with enrichment_lock:
+            # Check again after the lock: simultaneous UI requests share the cache.
+            cached = await asyncio.to_thread(store.cached_season_guide, media_id, season)
+            if cached is not None:
+                return cached
+            detail = await asyncio.to_thread(store.detail, media_id)
+            if detail is None:
+                raise HTTPException(404, "Unknown TV show.")
+            try:
+                episodes = await enrich_tmdb_season_guide(detail, season, settings.tmdb_api_token)
+            except ConnectorError as exc:
+                raise HTTPException(502, str(exc)) from exc
+            if not await asyncio.to_thread(store.save_season_guide, media_id, season, episodes):
+                raise HTTPException(404, "TV show removed while loading guide.")
+            return episodes
 
     @app.get(
         API + "/media/{media_id}/seasons/{season}/episodes",

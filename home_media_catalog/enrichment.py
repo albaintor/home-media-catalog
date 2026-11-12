@@ -172,3 +172,50 @@ async def enrich_tmdb(detail: dict, token: str) -> dict:
         raise ConnectorError(
             "TMDB enrichment failed. Check the API token, DNS and TMDB availability."
         ) from exc
+
+
+async def enrich_tmdb_season_guide(detail: dict, season: int, token: str) -> list[dict]:
+    """Read-only episode metadata for a physical season without Kodi files.
+
+    Episode identities are not written to the catalogue, so these reference
+    entries cannot be mistaken for playable or watched Kodi episodes.
+    """
+    if detail.get("kind") != "tvshow" or not 0 <= season <= 10000:
+        raise ConnectorError("A valid TV season is required.")
+    ids = detail.get("identifiers") or {}
+    tmdb = ids.get("tmdb") or []
+    imdb = ids.get("imdb") or []
+    async with tmdb_connection(token) as get:
+        if len(tmdb) == 1 and isinstance(tmdb[0], str) and re.fullmatch(r"[0-9]{1,24}", tmdb[0]):
+            identifier = tmdb[0]
+        elif len(imdb) == 1 and isinstance(imdb[0], str) and re.fullmatch(r"tt[0-9]{5,12}", imdb[0]):
+            found = await get("find/" + imdb[0], external_source="imdb_id")
+            matches = found.get("tv_results") or []
+            if len(matches) != 1:
+                raise ConnectorError("TMDB ne trouve pas cette série avec son identifiant IMDb.")
+            identifier = str(matches[0]["id"])
+        else:
+            raise ConnectorError("Identifiant TMDB ou IMDb unique requis pour cette série.")
+        data = await get(f"tv/{identifier}/season/{season}", language="fr-FR")
+    result = []
+    for episode in data.get("episodes") or []:
+        if not isinstance(episode, dict):
+            continue
+        number = episode.get("episode_number")
+        if type(number) is not int or not 0 <= number <= 10000:
+            continue
+        still = episode.get("still_path")
+        still_url = (
+            "https://image.tmdb.org/t/p/w300" + still
+            if isinstance(still, str) and re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", still)
+            else None
+        )
+        runtime = episode.get("runtime")
+        result.append({
+            "episode": number,
+            "title": str(episode.get("name") or f"Épisode {number}")[:500],
+            "plot": str(episode.get("overview") or "")[:5000],
+            "runtime_minutes": runtime if type(runtime) is int and 0 < runtime < 10000 else None,
+            "still": still_url,
+        })
+    return sorted(result, key=lambda item: item["episode"])

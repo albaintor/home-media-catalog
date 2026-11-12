@@ -231,6 +231,7 @@ def parse_clz(data: bytes) -> list[Record]:
                 "series_title": series_title or None,
                 "physical_season": physical_season,
                 "physical_title": title if physical_season is not None else None,
+                "physical_episode_count": len(node.findall("episodes/episode")) if physical_season is not None else 0,
                 "physical_year": (
                     integer(text(node, "releasedate/year/displayname"))
                     if physical_season is not None else None
