@@ -1583,7 +1583,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if (
                 not refresh
                 and updated
-                and detail.get("artwork", {}).get("poster")
                 and datetime.fromisoformat(updated) > datetime.now(UTC) - timedelta(days=30)
                 and (detail["kind"] != "tvshow" or detail.get("season_posters_cached"))
             ):
