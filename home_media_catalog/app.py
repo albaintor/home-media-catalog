@@ -256,6 +256,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "unmatched": 0, "last_error": None, "last_media_id": None,
         "last_run_started": None, "last_run_finished": None,
     }
+    def tmdb_cooldown_active() -> bool:
+        retry_at = store.tmdb_retry_state().get("retry_at")
+        if retry_at:
+            try:
+                return datetime.fromisoformat(retry_at) > datetime.now(UTC)
+            except (TypeError, ValueError):
+                pass
+        return False
+
+    async def note_tmdb_rate_limit(exc: TmdbRateLimited) -> None:
+        previous = await asyncio.to_thread(store.tmdb_retry_state)
+        new_retry_at = datetime.now(UTC) + timedelta(seconds=exc.retry_after)
+        old_retry_at = previous.get("retry_at")
+        if old_retry_at:
+            try:
+                new_retry_at = max(new_retry_at, datetime.fromisoformat(old_retry_at))
+            except (TypeError, ValueError):
+                pass
+        previous["retry_at"] = new_retry_at.isoformat()
+        previous["last_error"] = str(exc)
+        await asyncio.to_thread(store.save_tmdb_retry_state, previous)
+
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -572,7 +594,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         A failed CLZ source URL must not prevent TMDB recovery; server and iOS
         can request the same authenticated image endpoint.
         """
-        if not settings.tmdb_api_token.strip():
+        if not settings.tmdb_api_token.strip() or tmdb_cooldown_active():
             return None
         if poster_on_demand_retry_after.get(media_id, 0) > time.monotonic():
             return None
@@ -596,6 +618,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return data, mime
         except asyncio.CancelledError:
             raise
+        except TmdbRateLimited as exc:
+            await note_tmdb_rate_limit(exc)
+            poster_on_demand_retry_after[media_id] = (
+                time.monotonic() + exc.retry_after)
+            return None
         except (ConnectorError, ArtworkError, OSError, ValueError) as exc:
             poster_on_demand_retry_after[media_id] = time.monotonic() + 300
             _LOG.warning("Targeted poster repair for %s failed: %s", media_id, exc)
@@ -612,6 +639,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             ids = await asyncio.to_thread(store.missing_poster_ids)
             for media_id in ids:
+                if tmdb_cooldown_active():
+                    break
                 await asyncio.sleep(0.35)  # Bounded TMDB traffic; never parallelize bulk find calls.
                 try:
                     async with enrichment_lock:
@@ -634,6 +663,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         await warm_poster_dependents(media_id)
                 except asyncio.CancelledError:
                     raise
+                except TmdbRateLimited as exc:
+                    await note_tmdb_rate_limit(exc)
+                    artwork_repair_status["failed"] += 1
+                    artwork_repair_status["last_media_id"] = media_id
+                    artwork_repair_status["last_error"] = str(exc)
+                    break
                 except Exception as exc:
                     artwork_repair_status["failed"] += 1
                     artwork_repair_status["last_media_id"] = media_id
@@ -655,7 +690,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def start_artwork_repair() -> None:
         nonlocal artwork_repair_task, artwork_repair_pending
-        if not settings.tmdb_api_token.strip():
+        if not settings.tmdb_api_token.strip() or tmdb_cooldown_active():
             return
         if artwork_repair_task and not artwork_repair_task.done():
             artwork_repair_pending = True
