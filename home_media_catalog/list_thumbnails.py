@@ -1,4 +1,4 @@
-"""Persistent, versioned list-cover mosaics.
+"""Persistent, transparent PNG list-cover mosaics.
 
 The image is generated once per list revision, kept under the configured data
 directory and served to web/iOS without repeating image composition. Existing
@@ -19,7 +19,7 @@ from .artwork import ArtworkError
 LOGGER = logging.getLogger(__name__)
 
 WIDTH, HEIGHT, GAP = 360, 216, 4
-BACKGROUND = (25, 33, 46)
+BACKGROUND = (0, 0, 0, 0)
 
 
 def _regions(count: int, width: int = WIDTH, height: int = HEIGHT) -> list[tuple[int, int, int, int]]:
@@ -46,8 +46,8 @@ def _regions(count: int, width: int = WIDTH, height: int = HEIGHT) -> list[tuple
 
 
 def compose(images: list[bytes | None], *, width: int = WIDTH, height: int = HEIGHT) -> bytes:
-    """Fill each tile even when its original poster is unavailable."""
-    canvas = Image.new("RGB", (width, height), BACKGROUND)
+    """Compose RGBA tiles; gaps and unavailable posters remain transparent."""
+    canvas = Image.new("RGBA", (width, height), BACKGROUND)
     if not images:
         draw = ImageDraw.Draw(canvas)
         draw.rounded_rectangle((width * 2 // 5, height // 4, width * 3 // 5, height * 3 // 4), radius=10, outline=(125, 153, 177), width=4)
@@ -61,16 +61,15 @@ def compose(images: list[bytes | None], *, width: int = WIDTH, height: int = HEI
                         if source.width * source.height > 40_000_000:
                             raise ValueError("Poster is too large.")
                         tile = ImageOps.fit(
-                            ImageOps.exif_transpose(source).convert("RGB"),
+                            ImageOps.exif_transpose(source).convert("RGBA"),
                             (w, h),
                             method=Image.Resampling.LANCZOS,
                         )
-                    canvas.paste(tile, (x, y))
+                    canvas.alpha_composite(tile, (x, y))
                     continue
                 except (UnidentifiedImageError, OSError, ValueError):
                     pass
             draw = ImageDraw.Draw(canvas)
-            draw.rectangle((x, y, x + w - 1, y + h - 1), fill=(37, 49, 65))
             draw.rounded_rectangle(
                 (x + w // 4, y + h // 4, x + 3 * w // 4, y + 3 * h // 4),
                 radius=8,
@@ -79,7 +78,7 @@ def compose(images: list[bytes | None], *, width: int = WIDTH, height: int = HEI
             )
 
     output = io.BytesIO()
-    canvas.save(output, format="JPEG", quality=85, optimize=True)
+    canvas.save(output, format="PNG", optimize=True)
     return output.getvalue()
 
 
@@ -93,7 +92,7 @@ class ListThumbnails:
     def _path(self, list_id: str, revision: int) -> Path:
         # A list is always retrieved by ID from the database before this path
         # is built; avoid trusting URL segments as filesystem path components.
-        return self.directory / f"{list_id}-{revision}-layout2.jpg"
+        return self.directory / f"{list_id}-{revision}-layout3.png"
 
     def thumbnail_input(self, list_id: str):
         return self.store.list_thumbnail_input(list_id)
@@ -171,8 +170,8 @@ class ListThumbnails:
     def remove_old(self, list_id: str, keep: Path | None = None) -> None:
         if not self.directory.exists():
             return
-        for path in self.directory.glob(f"{list_id}-*.jpg"):
-            if path != keep:
+        for path in self.directory.glob(f"{list_id}-*"):
+            if path.suffix in (".jpg", ".png") and path != keep:
                 path.unlink(missing_ok=True)
 
     async def delete(self, list_id: str) -> None:
@@ -190,7 +189,7 @@ class CollectionThumbnails(ListThumbnails):
 
     def _path(self, list_id: str, revision: int) -> Path:
         # Invalidate covers cached with the old, potentially empty layout.
-        return self.directory / f"{list_id}-{revision}-layout4.jpg"
+        return self.directory / f"{list_id}-{revision}-layout5.png"
 
     def thumbnail_input(self, collection_id: str):
         return self.store.collection_thumbnail_input(collection_id)
