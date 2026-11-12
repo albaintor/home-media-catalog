@@ -1622,8 +1622,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(413, "Poster exceeds 5 MiB.")
             chunks.append(chunk)
         data = b"".join(chunks)
-        if not data or app.state.artwork._image_type(data) != "image/jpeg":
-            raise HTTPException(415, "The upload is not a JPEG.")
+        try:
+            if not data or app.state.artwork._image_type(data) != "image/jpeg":
+                raise HTTPException(415, "The upload is not a JPEG.")
+        except ArtworkError as exc:
+            raise HTTPException(415, "The upload is not a supported image.") from exc
         try:
             with Image.open(BytesIO(data)) as jpeg:
                 if jpeg.format != "JPEG" or jpeg.width > 10000 or jpeg.height > 10000:
