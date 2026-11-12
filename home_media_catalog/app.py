@@ -251,13 +251,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["Referrer-Policy"] = "same-origin"
         # SAMEORIGIN preserves embedding under Home Assistant ingress.
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
-        response.headers["Cache-Control"] = (
-            "private, max-age=31536000, immutable"
-            if "/lists/" in request.url.path
-            and "/thumbnails/" in request.url.path
-            and response.status_code == 200
-            else "private, no-store"
+        # Format badges reuse a small fixed set of public PNG/SVG files across
+        # thousands of cards. Cache them locally instead of downloading the
+        # same logos again whenever the page is opened or scrolled.
+        # Do not apply this policy to API data or mutable application scripts.
+        path = request.url.path
+        is_format_asset = (
+            "/static/format-icons/" in path
+            or path.endswith("/static/format-logos.svg")
         )
+        if is_format_asset and response.status_code in (200, 304):
+            # No 'immutable': updated logos must eventually refresh even
+            # though these static filenames are not content-hashed.
+            response.headers["Cache-Control"] = "public, max-age=604800"
+        elif (
+            "/lists/" in path
+            and "/thumbnails/" in path
+            and response.status_code == 200
+        ):
+            response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "private, no-store"
         return response
 
     @app.exception_handler(HTTPException)
