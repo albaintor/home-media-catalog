@@ -113,5 +113,7 @@ def test_catalogue_sync_trigger_is_connected_without_prolonging_imports():
     assert 'result.get("rebuilt_works") and self.on_catalog_changed' in sync
     assert "self.on_catalog_changed()" in sync
     app = (Path(__file__).parent.parent / "home_media_catalog" / "app.py").read_text()
-    assert "sync.on_catalog_changed = start_ai_index" in app
+    assert "sync.on_catalog_changed = on_catalog_changed" in app
+    assert "start_ai_index()" in app
+    assert "start_artwork_repair()" in app
     assert "run_ai_index_debounced" in app
