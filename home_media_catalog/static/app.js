@@ -496,6 +496,14 @@ function seriesProgressMarkup(item) {
   const label=watchDisplayLabel(item);
   return `<span class="series-progress-chip ${progress.partial?'partial':'complete'}" role="status" title="${esc(label)}" aria-label="${esc(label)}"><span aria-hidden="true">${progress.partial?'◐':'✓'}</span> ${progress.watched}/${progress.total} épisodes vus</span>`;
 }
+// Missing movie/TV posters still have a canonical authenticated image route.
+// The server resolves an exact IMDb/TMDB ID when a lazy image enters view.
+function mediaPosterPath(item) {
+  if(item.artwork?.poster)return item.artwork.poster;
+  if(['movie','tvshow'].includes(item.kind)&&item.id)
+    return '/api/v1/media/'+encodeURIComponent(item.id)+'/artwork/poster';
+  return null;
+}
 function poster(item, detail=false) {
   const progress=item.total_seconds>0 ? Math.min(100,100*item.resume_seconds/item.total_seconds):0;
   const series=seriesProgress(item);
@@ -505,7 +513,7 @@ function poster(item, detail=false) {
     ? '<span class="state" title="Vu" aria-label="Vu">✓</span>'
     :item.watch_status==='in_progress'
     ? '<span class="state progress" title="En cours" aria-label="En cours">◐</span>':'';
-  return `<div class="poster"><span class="poster-placeholder" aria-hidden="true">${esc(item.title.slice(0,2).toUpperCase())}</span>${item.artwork.poster?`<img src="${esc(url(item.artwork.poster))}" alt="" ${detail?'':'loading="lazy"'}>`:''}${!detail&&item.rating?`<span class="rating">★ ${Number(item.rating).toFixed(1)}</span>`:''}${!detail?stateIcon:''}${(series?.partial||progress>0&&item.watch_status==='in_progress')?`<span class="progress-track ${series?.partial?'series-track':''}"><span style="width:${series?.partial?100*series.watched/series.total:progress}%"></span></span>`:''}</div>`;
+  return `<div class="poster"><span class="poster-placeholder" aria-hidden="true">${esc(item.title.slice(0,2).toUpperCase())}</span>${mediaPosterPath(item)?`<img src="${esc(url(mediaPosterPath(item)))}" alt="" ${detail?'':'loading="lazy"'}>`:''}${!detail&&item.rating?`<span class="rating">★ ${Number(item.rating).toFixed(1)}</span>`:''}${!detail?stateIcon:''}${(series?.partial||progress>0&&item.watch_status==='in_progress')?`<span class="progress-track ${series?.partial?'series-track':''}"><span style="width:${series?.partial?100*series.watched/series.total:progress}%"></span></span>`:''}</div>`;
 }
 const formatLogos = {'4K':['4k','video'],'Blu-ray 4K':['bluray4k','disc'],'8K':['8k','video'],'1080p':['1080p','video'],'720p':['720p','video'],'3D':['3d','video'],'Blu-ray 3D':['3d','disc'],'Blu-ray':['bluray','disc'],'DVD':['dvd','disc'],'Dolby Vision':['vision','hdr'],'HDR10':['hdr10','hdr'],'HDR10+':['hdr10plus','hdr'],'HLG':['hlg','hdr'],'Dolby Atmos':['atmos','audio'],'Dolby TrueHD':['truehd','audio'],'DTS-HD MA':['dtshdma','audio'],'DTS-HD':['dtshd','audio'],'DTS:X':['dtsx','audio'],'DTS':['dts','audio'],'Dolby Digital':['dd','audio'],'Dolby Digital+':['ddplus','audio'],'AAC':['aac','audio'],'FLAC':['flac','audio'],'Opus':['opus','audio']};
 
@@ -1393,8 +1401,8 @@ function collectionArtwork(items, fallbackArtwork=null, expectedCount=null) {
   const selected=collectionMosaicItems(items);
   if(!selected.length)return '<span class="collection-artwork-placeholder" aria-hidden="true">▦</span>';
   const layout=['','single','pair','triple','mosaic'][selected.length];
-  const cells=selected.map(item=>item.artwork?.poster
-    ? `<img src="${esc(url(item.artwork.poster))}" alt="" loading="lazy">`
+  const cells=selected.map(item=>mediaPosterPath(item)
+    ? `<img src="${esc(url(mediaPosterPath(item)))}" alt="" loading="lazy">`
     : '<span class="collection-artwork-empty" aria-hidden="true">▦</span>');
   return `<span class="collection-artwork ${layout}" aria-hidden="true">${cells.join('')}</span>`;
 }
