@@ -8,11 +8,13 @@ import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
 import httpx
+from PIL import Image, UnidentifiedImageError
 from cryptography.fernet import InvalidToken
 from fastapi import (
     BackgroundTasks,
@@ -55,7 +57,7 @@ from .backup import MAX_BACKUP_BYTES, export_backup, import_backup
 from .compatibility import mobile_compatibility
 from .connectors.base import ConnectorError
 from .connectors.kodi import KodiConnector
-from .enrichment import enrich_tmdb, probe_tmdb
+from .enrichment import enrich_tmdb, probe_tmdb, resolve_tmdb_poster
 from .internal_catalog import find_tmdb, lookup_disc_barcode
 from .list_thumbnails import CollectionThumbnails, ListThumbnails
 from .models import (
@@ -165,6 +167,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Reconcile the persisted vector index on every server start. Scheduling
         # is immediate and non-blocking; unchanged documents cost no API calls.
         start_ai_index(immediate=True)
+        start_artwork_repair()
         discovery = None
         if settings.discovery_enabled:
             from .discovery import BonjourPublisher
@@ -177,6 +180,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if discovery:
                 await asyncio.to_thread(discovery.stop)
             await sync.close()
+            if artwork_repair_task and not artwork_repair_task.done():
+                artwork_repair_task.cancel()
+                try:
+                    await artwork_repair_task
+                except asyncio.CancelledError:
+                    pass
             if ai_index_task and not ai_index_task.done():
                 ai_index_task.cancel()
                 try:
@@ -206,6 +215,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     collection_thumbnails = CollectionThumbnails(store, app.state.artwork, settings.data_dir)
     app.state.collection_thumbnails = collection_thumbnails
     enrichment_lock = asyncio.Lock()
+    artwork_repair_task: asyncio.Task | None = None
+    artwork_repair_pending = False
+    artwork_repair_status = {"running": False, "checked": 0, "repaired": 0, "failed": 0}
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -484,7 +496,88 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if ai_index_task is None or ai_index_task.done():
             ai_index_task = asyncio.create_task(run_ai_index_debounced(immediate=immediate))
 
-    sync.on_catalog_changed = start_ai_index
+    async def warm_poster_dependents(media_id: str) -> None:
+        members = await asyncio.to_thread(store.artwork_dependents, media_id)
+        await asyncio.gather(
+            *(collection_thumbnails.warm(item) for item in members["collections"]),
+            *(thumbnails.warm(item) for item in members["lists"]),
+            return_exceptions=True,
+        )
+
+    async def repair_missing_posters() -> None:
+        nonlocal artwork_repair_pending, artwork_repair_status
+        artwork_repair_status = {"running": True, "checked": 0, "repaired": 0, "failed": 0}
+        try:
+            ids = await asyncio.to_thread(store.missing_poster_ids)
+            for media_id in ids:
+                await asyncio.sleep(0.35)  # Bounded TMDB traffic; never parallelize bulk find calls.
+                try:
+                    async with enrichment_lock:
+                        detail = await asyncio.to_thread(store.detail, media_id)
+                        if not detail or detail.get("artwork", {}).get("poster"):
+                            continue
+                        reference = await resolve_tmdb_poster(detail, settings.tmdb_api_token)
+                        if reference:
+                            # Only publish a poster after its actual JPEG/PNG bytes
+                            # were fetched and validated by the image pipeline.
+                            await app.state.artwork.get([reference])
+                            changed = await asyncio.to_thread(
+                                store.save_poster_artwork, media_id, reference
+                            )
+                        else:
+                            changed = False
+                    if changed:
+                        artwork_repair_status["repaired"] += 1
+                        await warm_poster_dependents(media_id)
+                except asyncio.CancelledError:
+                    raise
+                except (ConnectorError, ArtworkError, OSError, ValueError) as exc:
+                    artwork_repair_status["failed"] += 1
+                    _LOG.warning("Artwork repair failed for %s: %s", media_id, exc)
+                    if isinstance(exc, ConnectorError) and "limite temporairement" in str(exc):
+                        # Do not hammer TMDB while it is returning HTTP 429.
+                        break
+                finally:
+                    artwork_repair_status["checked"] += 1
+        finally:
+            artwork_repair_status["running"] = False
+            if artwork_repair_pending:
+                artwork_repair_pending = False
+                start_artwork_repair()
+
+    def start_artwork_repair() -> None:
+        nonlocal artwork_repair_task, artwork_repair_pending
+        if not settings.tmdb_api_token.strip():
+            return
+        if artwork_repair_task and not artwork_repair_task.done():
+            artwork_repair_pending = True
+            return
+        artwork_repair_task = asyncio.create_task(repair_missing_posters())
+
+    def on_catalog_changed() -> None:
+        start_ai_index()
+        start_artwork_repair()
+
+    sync.on_catalog_changed = on_catalog_changed
+
+    @app.post(
+        API + "/catalogue/artwork/repair",
+        tags=["Enrichment"],
+        dependencies=[Depends(writable)],
+    )
+    async def start_missing_poster_repair():
+        if not settings.tmdb_api_token.strip():
+            raise HTTPException(503, "TMDB is not configured.")
+        start_artwork_repair()
+        return {"status": "scheduled", **artwork_repair_status}
+
+    @app.get(
+        API + "/catalogue/artwork/repair",
+        tags=["Enrichment"],
+        dependencies=[Depends(writable)],
+    )
+    def missing_poster_repair_status():
+        return artwork_repair_status
 
     @app.get(API + "/ai/status", tags=["AI"], dependencies=[Depends(authenticated)])
     def ai_status():
@@ -1481,16 +1574,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if (
                 not refresh
                 and updated
+                and detail.get("artwork", {}).get("poster")
                 and datetime.fromisoformat(updated) > datetime.now(UTC) - timedelta(days=30)
                 and (detail["kind"] != "tvshow" or detail.get("season_posters_cached"))
             ):
                 return {**detail, "tmdb_available": bool(settings.tmdb_api_token.strip())}
             try:
                 payload = await enrich_tmdb(detail, settings.tmdb_api_token)
+                if payload.get("poster") and not detail.get("artwork", {}).get("poster"):
+                    try:
+                        await app.state.artwork.get([payload["poster"]])
+                    except ArtworkError:
+                        payload.pop("poster", None)  # Retry on the next enrichment.
             except ConnectorError as exc:
                 raise HTTPException(502, str(exc)) from exc
             if not await asyncio.to_thread(store.save_enrichment, media_id, payload):
                 raise HTTPException(404, "Media was removed during enrichment.")
+            if payload.get("poster") and not detail.get("artwork", {}).get("poster"):
+                await warm_poster_dependents(media_id)
             pass  # No vector index in single-model mode.
             if refresh:
                 photos = [
@@ -1500,6 +1601,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ]
                 await asyncio.to_thread(app.state.artwork.invalidate, photos)
             return media_detail(media_id)
+
+    @app.post(
+        API + "/media/{media_id}/artwork/poster",
+        response_model=MediaDetail,
+        tags=["Enrichment"],
+        dependencies=[Depends(writable)],
+    )
+    async def upload_recovered_poster(media_id: str, request: Request):
+        """Accept an admin's validated JPEG; never allow arbitrary filesystem paths."""
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "image/jpeg":
+            raise HTTPException(415, "Only image/jpeg is supported for poster upload.")
+        maximum = 5 * 1024 * 1024
+        if request.headers.get("content-length", "").isdigit() and int(request.headers["content-length"]) > maximum:
+            raise HTTPException(413, "Poster exceeds 5 MiB.")
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > maximum:
+                raise HTTPException(413, "Poster exceeds 5 MiB.")
+            chunks.append(chunk)
+        data = b"".join(chunks)
+        if not data or app.state.artwork._image_type(data) != "image/jpeg":
+            raise HTTPException(415, "The upload is not a JPEG.")
+        try:
+            with Image.open(BytesIO(data)) as jpeg:
+                if jpeg.format != "JPEG" or jpeg.width > 10000 or jpeg.height > 10000:
+                    raise ValueError("Unsupported image dimensions.")
+                jpeg.verify()
+        except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+            raise HTTPException(422, "JPEG artwork is corrupt or unsafe.") from exc
+        async with enrichment_lock:
+            current = await asyncio.to_thread(store.detail, media_id)
+            if not current:
+                raise HTTPException(404, "Unknown media.")
+            if current["kind"] not in ("movie", "tvshow"):
+                raise HTTPException(422, "Posters can only be repaired for movies or series.")
+            if current.get("artwork", {}).get("poster"):
+                return media_detail(media_id)
+            reference = await asyncio.to_thread(
+                app.state.artwork.save_uploaded_poster, media_id, data
+            )
+            try:
+                changed = await asyncio.to_thread(
+                    store.save_poster_artwork, media_id, reference
+                )
+            except KeyError as exc:
+                raise HTTPException(404, "Media disappeared during upload.") from exc
+        if changed:
+            await warm_poster_dependents(media_id)
+        return media_detail(media_id)
 
     @app.get(
         API + "/media/{media_id}/people/{index}/artwork",
