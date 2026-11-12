@@ -74,6 +74,7 @@ const state = {csrf:null,role:'read',view:savedView==='list'?'list':'grid',order
 state.multi={source_type:[],genre:[],watch_status:[]};
 state.groupBy=preferences.collectionDefaultsVersion===2?(preferences.groupBy==='collection'?'collection':''):'collection';
 state.openCollection=null;
+state.openCollectionMembers=null;
 state.manualCollections=[];
 state.indexedCollections=[];
 state.collections=Array.isArray(preferences.collections)?preferences.collections.filter(v=>typeof v==='string').slice(0,40):[];
@@ -1248,14 +1249,29 @@ function mergeCollectionGroupsByMembers(groups) {
   return merged;
 }
 function collectionGroups(items) {
+  const search=collectionFold($('search').value.trim());
+  const chosen=new Set(state.collections.map(collectionSelectionKey));
+  const isChosen=name=>!chosen.size||chosen.has(collectionSelectionKey(name));
+  // An exact collection-name match takes precedence over a partial name
+  // match. Otherwise only the indexed names containing the query qualify.
+  // Do not display every manual collection just because its index is loaded.
+  const indexedNameMatches=search?(state.indexedCollections||[]).filter(c=>
+    isChosen(c.name)&&(c.is_manual||!state.internalCollectionsOnly&&isSagaCollection(c.name))&&
+    collectionFold(c.name).includes(search)):[];
+  const exactNameMatches=indexedNameMatches.filter(c=>collectionFold(c.name)===search);
+  const preferredNameMatches=exactNameMatches.length?exactNameMatches:indexedNameMatches;
+  const preferredNames=new Set(preferredNameMatches.map(c=>collectionSelectionKey(c.name)));
+  const hasNameMatches=preferredNames.size>0;
   const available=new Set(items.flatMap(media=>media.collections||[])
     .filter(isSagaCollection)
     .map(name=>state.mergeEquivalentCollections?collectionName(name):String(name||'').trim())
     .map(collectionFold));
   const groups=new Map();
-  const chosen=new Set(state.collections.map(collectionSelectionKey));
-  const isChosen=name=>!chosen.size||chosen.has(collectionSelectionKey(name));
-  const manualGroups=new Map((state.manualCollections||[]).filter(c=>c.is_manual&&isChosen(c.name)).map(c=>
+  const matchedManualIDs=new Set(items.flatMap(media=>media.manual_collection_ids||[]));
+  const manualGroups=new Map((state.manualCollections||[]).filter(c=>
+    c.is_manual&&isChosen(c.name)&&(!search||
+      (hasNameMatches?preferredNames.has(collectionSelectionKey(c.name)):
+        matchedManualIDs.has(c.id)))).map(c=>
     [c.id,{id:c.id,title:c.name,items:[],itemCount:c.item_count||0,seen:new Set(),provenance:new Map(),manual:true,artwork:c.artwork}]));
   for(const media of items) {
     const manualIDs=media.manual_collection_ids||[];
@@ -1303,7 +1319,17 @@ function collectionGroups(items) {
       .flatMap(group=>group.items.map(media=>media.id))
   );
   const visibleNamedGroups=namedGroups.filter(group=>
-    group.manual||group.items.length!==1||!containedInLargerCollection.has(group.items[0].id));
+    (!hasNameMatches||preferredNames.has(collectionSelectionKey(group.title)))&&
+    (group.manual||group.items.length!==1||!containedInLargerCollection.has(group.items[0].id)));
+  // A collection-name search must also find indexed collections whose
+  // individual member titles do not contain the search term. Their mosaic
+  // and count come from the server index; members load on opening the group.
+  for(const indexed of preferredNameMatches) {
+    if(visibleNamedGroups.some(g=>collectionSelectionKey(g.title)===collectionSelectionKey(indexed.name)))
+      continue;
+    visibleNamedGroups.push({id:indexed.id,title:indexed.name,items:[],
+      itemCount:indexed.item_count||0,artwork:indexed.artwork,manual:!!indexed.is_manual});
+  }
   // The server has already composed revisioned JPEG mosaics in release-year
   // order. Use them when the displayed group is exactly one indexed group.
   // Merged groups spanning several server collections still need the client
@@ -1326,7 +1352,7 @@ function collectionGroups(items) {
   // physical-only CLZ records (e.g. "Blu-Ray") display each film directly.
   // Reconcile against final visible groups so no work disappears during merges.
   const represented=new Set(visibleNamedGroups.flatMap(group=>group.items.map(item=>item.id)));
-  const individualMedia=(state.internalCollectionsOnly||chosen.size?[]:items).filter(item=>!represented.has(item.id))
+  const individualMedia=(state.internalCollectionsOnly||chosen.size||hasNameMatches?[]:items).filter(item=>!represented.has(item.id))
     .map(item=>({id:'standalone:'+item.id,title:item.title,items:[item],standalone:true}));
   const visibleGroups=[...visibleNamedGroups,...individualMedia];
   for(const group of visibleGroups)
@@ -1395,7 +1421,7 @@ function renderCards(items, append=false) {
     $('manual-collection-actions').hidden=!editable;
     $('manual-edit-button').textContent=state.manualEditing?'Terminer':'Modifier';
     $('manual-remove-selected-button').hidden=!editable||!state.manualEditing||!state.manualSelected.size;
-    items=group?.items||[];
+    items=state.openCollectionMembers??group?.items??[];
     if(editable&&state.manualEditing) {
       items=items.map(item=>item);
       root.className=state.view==='grid'?'poster-grid':'list-results';
@@ -1420,18 +1446,48 @@ function renderCards(items, append=false) {
 let collectionReturnPosition=null;
 function enterCollection(collectionId) {
   if(state.groupBy!=='collection'||state.openCollection!==null)return;
+  const group=collectionGroups(state.items).find(c=>c.id===collectionId);
   collectionReturnPosition={x:window.scrollX,y:window.scrollY};
   state.openCollection=collectionId;
+  state.openCollectionMembers=null;
   state.manualEditing=false;
   state.manualSelected?.clear();
   renderCards(state.items);
   $('results').scrollIntoView({block:'start'});
+  // Search results contain only matching member titles. Opening a matching
+  // collection by name must show its complete contents, even when none of
+  // its individual media titles matches the search term.
+  if(!$('search').value.trim()||!group)return;
+  const indexed=(state.indexedCollections||[]).find(c=>c.id===collectionId)||
+    (state.indexedCollections||[]).find(c=>collectionSelectionKey(c.name)===collectionSelectionKey(group.title));
+  if(!indexed)return;
+  const sequence=state.seq;
+  (async()=>{
+    const members=[];
+    let offset=0;
+    while(true) {
+      const query=new URLSearchParams({collection_id:indexed.id,limit:'200',
+        offset:String(offset),sort:'year',order:'asc'});
+      const page=await api('media?'+query);
+      if(state.seq!==sequence||state.openCollection!==collectionId)return;
+      members.push(...page.items);
+      offset+=page.items.length;
+      if(!page.has_more||!page.items.length)break;
+    }
+    if(state.seq===sequence&&state.openCollection===collectionId) {
+      state.openCollectionMembers=members;
+      renderCards(state.items);
+    }
+  })().catch(e=>{
+    if(state.seq===sequence&&state.openCollection===collectionId)error(e.message);
+  });
 }
 function leaveCollection() {
   if(state.openCollection===null)return;
   const position=collectionReturnPosition;
   collectionReturnPosition=null;
   state.openCollection=null;
+  state.openCollectionMembers=null;
   state.manualEditing=false;
   state.manualSelected?.clear();
   renderCards(state.items);
@@ -1470,9 +1526,8 @@ async function loadMedia({append=false}={}) {
     state.items.push(...added); state.total=page.total; state.nextOffset=offset+page.items.length;
     state.hasMore=page.has_more&&page.items.length>0;
     $('result-count').textContent=`${page.total.toLocaleString(displayLocale())} résultat${page.total>1?'s':''}${state.personSearch?.tmdbId?' · TMDB #'+state.personSearch.tmdbId+' (crédits non identifiés inclus)':state.personSearch?.imdbId?' · IMDb '+state.personSearch.imdbId+' (crédits non identifiés inclus)':''}${state.recent?' · ajoutés depuis 30 jours':''}`;
-    const visibleManual=state.manualCollections.some(c=>!state.collections.length||
-      state.collections.some(name=>collectionSelectionKey(name)===collectionSelectionKey(c.name)));
-    if (!append&&!page.items.length&&!(state.groupBy==='collection'&&visibleManual)) {
+    const visibleGroups=state.groupBy==='collection'?collectionGroups(state.items):[];
+    if (!append&&!page.items.length&&!(state.groupBy==='collection'&&visibleGroups.length)) {
       const empty=!state.facets?.sources.length || state.facets.sources.every(s=>!s.item_count);
       $('results').innerHTML=`<div class="empty-state"><span class="empty-icon" aria-hidden="true">▦</span><h2>${empty?'Votre bibliothèque commence ici.':'Aucun titre ne correspond.'}</h2><p>${empty?'Connectez la base Kodi ou importez un export CLZ Movies.':'Modifiez les filtres ou essayez un autre mot.'}</p>${state.role==='admin'&&empty?'<button class="primary" data-action="connections">Ajouter une source →</button>':'<button class="secondary" data-action="reset">Effacer les filtres</button>'}</div>`;
     } else renderCards(state.groupBy==='collection'?state.items:added,append);
