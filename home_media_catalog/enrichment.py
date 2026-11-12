@@ -10,6 +10,14 @@ from .connectors.base import ConnectorError
 from .people import category, youtube_url
 
 
+class TmdbRateLimited(ConnectorError):
+    """Provider throttling that needs a persisted automatic retry, not a reimport."""
+
+    def __init__(self, retry_after: float):
+        self.retry_after = min(86400.0, max(60.0, retry_after))
+        super().__init__("TMDB limite temporairement les requêtes. Reprise automatique programmée.")
+
+
 @asynccontextmanager
 async def tmdb_connection(token: str):
     token = token.strip().removeprefix("Bearer ").strip()
@@ -32,13 +40,15 @@ async def tmdb_connection(token: str):
                 for attempt in range(5):
                     await asyncio.sleep(0.25)
                     response = await client.get(path, params=params)
-                    if response.status_code in (429, 500, 502, 503, 504) and attempt < 4:
+                    if response.status_code == 429:
                         retry_after = response.headers.get("Retry-After", "")
                         try:
                             pause = float(retry_after)
                         except ValueError:
-                            pause = 2 ** attempt
-                        await asyncio.sleep(min(60.0, max(1.0, pause)))
+                            pause = 300.0
+                        raise TmdbRateLimited(pause)
+                    if response.status_code in (500, 502, 503, 504) and attempt < 4:
+                        await asyncio.sleep(min(60.0, 2 ** attempt))
                         continue
                     response.raise_for_status()
                     return response.json()
