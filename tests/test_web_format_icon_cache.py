@@ -4,8 +4,10 @@ from pathlib import Path
 
 
 def test_format_badges_use_eager_static_pngs():
-    script = (Path(__file__).resolve().parents[1] / "home_media_catalog" / "static" / "app.js").read_text()
-    badge_renderer = script.split("function formatBadges(", 1)[1].split("function detailFormatBadges(", 1)[0]
+    static = Path(__file__).resolve().parents[1] / "home_media_catalog" / "static"
+    script = (static / "app.js").read_text()
+    badge_renderer = script.split("function formatBadges(", 1)[1]
+    badge_renderer = badge_renderer.split("function detailFormatBadges(", 1)[0]
     assert 'loading="eager"' in badge_renderer
     assert 'loading="lazy"' not in badge_renderer
     assert 'decoding="async"' in badge_renderer
