@@ -34,6 +34,8 @@ def poster_bytes():
 def test_repaired_poster_persists_across_clz_resynchronization(store):
     source, records, media_id = seed_without_artwork(store)
     assert media_id in store.missing_poster_ids()
+    manual_id = store.save_manual_collection("Manually grouped saga")["id"]
+    store.add_manual_collection_items(manual_id, [media_id])
     before = {
         item["id"]: item["revision"] for item in store.collection_index()
     }
@@ -43,8 +45,12 @@ def test_repaired_poster_persists_across_clz_resynchronization(store):
     assert store.detail(media_id)["artwork"]["poster"] is not None
     assert store.artwork(media_id, "poster") == [reference]
     assert media_id not in store.missing_poster_ids()
-    assert any(item["revision"] > before[item["id"]]
-               for item in store.collection_index() if item["id"] in before)
+    after = {item["id"]: item["revision"] for item in store.collection_index()}
+    assert any(revision > before[collection_id]
+               for collection_id, revision in after.items() if collection_id in before)
+    # Manual collection URLs must also change; otherwise previously cached
+    # two-tile mosaics still show the missing poster placeholder.
+    assert after[manual_id] > before[manual_id]
     store.apply_snapshot(source, records)
     assert store.artwork(media_id, "poster") == [reference]
     store.save_enrichment(media_id, {"people": [], "trailers": []})
