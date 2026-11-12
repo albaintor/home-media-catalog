@@ -3434,6 +3434,24 @@ class Store:
             )
         ]
 
+    def tmdb_enrichment_revisions(self) -> list[dict[str, str]]:
+        """Published rich-metadata revisions for local-first iOS replicas.
+
+        Enrichment is per canonical work, not per physical edition. Returning
+        revisions rather than the complete cast/crew avoids re-fetching rich
+        details that have not changed since the last offline synchronization.
+        Poster-only repairs remain handled by artwork change polling.
+        """
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT work_id,updated_at FROM enrichment "
+                "WHERE json_type(payload,'$.people') IS NOT NULL "
+                "AND json_type(payload,'$.trailers') IS NOT NULL "
+                "ORDER BY work_id"
+            ).fetchall()
+        return [{"media_id": row["work_id"], "updated_at": row["updated_at"]}
+                for row in rows]
+
     def tmdb_retry_state(self) -> dict[str, Any]:
         """Persistent queue checkpoints, including a provider-wide 429 cooldown."""
         with self.connect() as conn:
