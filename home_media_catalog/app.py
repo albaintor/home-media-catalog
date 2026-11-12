@@ -560,6 +560,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     sync.on_catalog_changed = on_catalog_changed
 
+    @app.get(
+        API + "/catalogue/artwork/changes",
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+    )
+    def catalogue_artwork_changes(after: int = Query(0, ge=0)):
+        """Authenticated incremental invalidations for web/mobile caches."""
+        return store.artwork_changes(after)
+
     @app.post(
         API + "/catalogue/artwork/repair",
         tags=["Enrichment"],
