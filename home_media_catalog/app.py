@@ -14,7 +14,6 @@ from typing import Literal
 from uuid import UUID
 
 import httpx
-from PIL import Image, UnidentifiedImageError
 from cryptography.fernet import InvalidToken
 from fastapi import (
     BackgroundTasks,
@@ -32,6 +31,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image, UnidentifiedImageError
 from starlette.middleware.cors import CORSMiddleware
 
 from . import DATA_MODEL_VERSION, __version__
