@@ -125,6 +125,10 @@ def test_visible_poster_request_repairs_missing_clz_artwork(tmp_path, monkeypatc
         return "https://image.tmdb.org/t/p/w500/deadpool2.jpg"
 
     async def artwork(candidates, *, persist=True):
+        from home_media_catalog.artwork import ArtworkError
+
+        if not candidates:
+            raise ArtworkError("No source artwork")
         assert candidates[0].endswith("deadpool2.jpg")
         return poster_bytes(), "image/jpeg"
 
