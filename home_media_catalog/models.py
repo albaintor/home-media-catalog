@@ -101,6 +101,10 @@ class InternalMediaInput(StrictModel):
     barcode: str | None = Field(default=None, pattern=r"^[0-9]{8}$|^[0-9]{12,14}$")
     format: Literal["", "DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray"] = ""
     poster_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
+    physical_season: int | None = Field(default=None, ge=0, le=10000)
+    physical_title: str | None = Field(default=None, max_length=300)
+    physical_episode_count: int | None = Field(default=None, ge=0, le=10000)
+    season_poster_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
 
 
 class SourceInput(StrictModel):
