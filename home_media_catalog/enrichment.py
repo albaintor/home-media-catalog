@@ -53,6 +53,36 @@ async def probe_tmdb(token: str) -> None:
             raise ConnectorError("TMDB n'a pas renvoyé une configuration valide.")
 
 
+def tmdb_poster_reference(path: str | None) -> str | None:
+    """Only TMDB CDN paths from provider responses are accepted."""
+    if isinstance(path, str) and re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", path):
+        return "https://image.tmdb.org/t/p/w500" + path
+    return None
+
+
+async def resolve_tmdb_poster(detail: dict, token: str) -> str | None:
+    """Resolve known IDs without title matching; avoid credits/video downloads."""
+    kind = {"movie": "movie", "tvshow": "tv"}.get(detail.get("kind"))
+    if not kind:
+        return None
+    ids = detail.get("identifiers") or {}
+    tmdb_ids = [v for v in ids.get("tmdb", []) if isinstance(v, str) and re.fullmatch(r"[0-9]{1,24}", v)]
+    imdb_ids = [v for v in ids.get("imdb", []) if isinstance(v, str) and re.fullmatch(r"tt[0-9]{5,12}", v)]
+    if len(tmdb_ids) != 1 and len(imdb_ids) != 1:
+        return None
+    async with tmdb_connection(token) as get:
+        if len(tmdb_ids) == 1:
+            identifier = tmdb_ids[0]
+        else:
+            found = await get("find/" + imdb_ids[0], external_source="imdb_id")
+            matches = found.get("movie_results" if kind == "movie" else "tv_results") or []
+            if len(matches) != 1:
+                return None
+            identifier = str(matches[0]["id"])
+        data = await get(f"{kind}/{identifier}", language="fr-FR")
+        return tmdb_poster_reference(data.get("poster_path"))
+
+
 async def enrich_tmdb(detail: dict, token: str) -> dict:
     kind = {"movie": "movie", "tvshow": "tv"}.get(detail["kind"])
     if not kind:
@@ -135,6 +165,7 @@ async def enrich_tmdb(detail: dict, token: str) -> dict:
                 "people": people,
                 "trailers": list(dict.fromkeys(trailers)),
                 "tmdb_id": tmdb_id,
+                **({"poster": poster} if (poster := tmdb_poster_reference(data.get("poster_path"))) else {}),
                 **({"season_posters": season_posters} if kind == "tv" else {}),
             }
     except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
