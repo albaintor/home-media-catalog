@@ -1591,6 +1591,12 @@ class Store:
                 person_names(work_id, json.loads(enrichment[0]).get("people")),
             )
         posters = list(dict.fromkeys(v for p, _ in entries for v in p.get("poster", [])))
+        # Repair artwork is stored independently of imported source records so
+        # CLZ/Kodi reimports cannot erase a recovered poster. Source posters win.
+        if not posters and enrichment:
+            repaired = json.loads(enrichment["payload"]).get("poster")
+            if isinstance(repaired, str) and repaired:
+                posters = [repaired]
         fanarts = list(dict.fromkeys(v for p, _ in entries for v in p.get("fanart", [])))
         values = {
             "kind": primary["kind"],
@@ -2759,11 +2765,60 @@ class Store:
             self._rebuild(conn, work_id)
         return True
 
+    def missing_poster_ids(self, limit: int = 5000) -> list[str]:
+        """Find imported movie/series records with provider IDs but no poster."""
+        with self.connect() as conn:
+            return [row[0] for row in conn.execute(
+                "SELECT w.id FROM works w WHERE w.kind IN ('movie','tvshow') "
+                "AND (w.poster='[]' OR w.poster IS NULL) "
+                "AND EXISTS (SELECT 1 FROM identifiers i WHERE i.work_id=w.id "
+                "AND i.namespace IN ('tmdb','imdb')) ORDER BY w.id LIMIT ?",
+                (limit,),
+            )]
+
+    def save_poster_artwork(self, work_id: str, reference: str) -> bool:
+        """Persist a repaired poster and revision all affected mosaics/lists."""
+        if not (reference.startswith("https://image.tmdb.org/t/p/w500/")
+                or re.fullmatch(r"hmc-poster://[0-9a-f]{64}", reference)):
+            raise ValueError("Invalid repaired poster reference.")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT poster FROM works WHERE id=?", (work_id,)).fetchone()
+            if row is None:
+                raise KeyError(work_id)
+            if json.loads(row["poster"] or "[]"):
+                return False  # Concurrent source synchronization already supplied a poster.
+            old = conn.execute(
+                "SELECT payload FROM enrichment WHERE work_id=?", (work_id,)
+            ).fetchone()
+            payload = json.loads(old["payload"]) if old else {}
+            payload["poster"] = reference
+            conn.execute(
+                "INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(work_id) DO UPDATE SET payload=excluded.payload,"
+                "updated_at=excluded.updated_at",
+                (work_id, encode(payload), now()),
+            )
+            self._rebuild(conn, work_id)
+            conn.execute(
+                "UPDATE lists SET revision=revision+1 WHERE id IN "
+                "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,),
+            )
+        return True
+
     def save_enrichment(self, work_id: str, payload: dict) -> bool:
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if not conn.execute("SELECT 1 FROM works WHERE id=?", (work_id,)).fetchone():
                 return False
+            previous = conn.execute(
+                "SELECT payload FROM enrichment WHERE work_id=?", (work_id,)
+            ).fetchone()
+            # Refreshing credits must not erase an uploaded/repaired poster.
+            if previous:
+                old_poster = json.loads(previous["payload"]).get("poster")
+                if old_poster and not payload.get("poster"):
+                    payload = {**payload, "poster": old_poster}
             conn.execute(
                 "INSERT INTO enrichment VALUES(?,?,?) ON CONFLICT(work_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",
                 (work_id, encode(payload), now()),
