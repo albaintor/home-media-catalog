@@ -962,10 +962,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return store.media(collection_id=collection_id, limit=limit, offset=offset, sort="title", order="asc")
 
     @app.get(
+        API + "/collections/{collection_id}/thumbnails/{revision}.png",
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+        responses={200: {"content": {"image/png": {}}}},
+    )
+    @app.get(
         API + "/collections/{collection_id}/thumbnails/{revision}.jpg",
         tags=["Catalogue"],
         dependencies=[Depends(authenticated)],
-        responses={200: {"content": {"image/jpeg": {}}}},
+        responses={200: {"content": {"image/png": {}}}},
     )
     async def collection_thumbnail(collection_id: str, revision: int):
         source = await asyncio.to_thread(store.collection_thumbnail_input, collection_id)
@@ -974,7 +980,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data = await collection_thumbnails.ensure(collection_id, revision)
         if data is None:
             raise HTTPException(404, "Collection changed while loading.")
-        return Response(data, media_type="image/jpeg")
+        return Response(data, media_type="image/png")
 
     @app.get(
         API + "/media/{media_id}/seasons",
@@ -2433,10 +2439,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         background_tasks.add_task(thumbnails.warm, list_id)
 
     @app.get(
+        API + "/lists/{list_id}/thumbnails/{revision}.png",
+        tags=["Lists"],
+        dependencies=[Depends(authenticated)],
+        responses={200: {"content": {"image/png": {}}}},
+    )
+    @app.get(
         API + "/lists/{list_id}/thumbnails/{revision}.jpg",
         tags=["Lists"],
         dependencies=[Depends(authenticated)],
-        responses={200: {"content": {"image/jpeg": {}}}},
+        responses={200: {"content": {"image/png": {}}}},
     )
     async def list_thumbnail(list_id: str, revision: int):
         # Revisioned immutable URL prevents obsolete covers in browsers and
@@ -2447,7 +2459,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data = await thumbnails.ensure(list_id, revision)
         if data is None:
             raise HTTPException(404, "List thumbnail changed while loading.")
-        return Response(data, media_type="image/jpeg")
+        return Response(data, media_type="image/png")
 
     @app.get(
         API + "/media/{media_id}/artwork/{aspect}",
