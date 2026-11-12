@@ -228,6 +228,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     artwork_repair_task: asyncio.Task | None = None
     artwork_repair_timer: asyncio.Task | None = None
     artwork_repair_pending = False
+    # Avoid repeatedly calling TMDB for an ID known to be unavailable.
+    poster_on_demand_retry_after: dict[str, float] = {}
     artwork_repair_status = {
         "running": False, "checked": 0, "repaired": 0, "failed": 0,
         "unmatched": 0, "last_error": None, "last_media_id": None,
@@ -518,6 +520,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             *(thumbnails.warm(item) for item in members["lists"]),
             return_exceptions=True,
         )
+
+    async def recover_poster_on_demand(
+        media_id: str, *, broken_source: bool = False
+    ) -> tuple[bytes, str] | None:
+        """Resolve an exact provider ID when a visible image is absent or broken.
+
+        A failed CLZ source URL must not prevent TMDB recovery; server and iOS
+        can request the same authenticated image endpoint.
+        """
+        if not settings.tmdb_api_token.strip():
+            return None
+        if poster_on_demand_retry_after.get(media_id, 0) > time.monotonic():
+            return None
+        try:
+            async with enrichment_lock:
+                detail = await asyncio.to_thread(store.detail, media_id)
+                if not detail or detail.get("kind") not in ("movie", "tvshow"):
+                    return None
+                reference = await resolve_tmdb_poster(detail, settings.tmdb_api_token)
+                if reference is None:
+                    poster_on_demand_retry_after[media_id] = time.monotonic() + 3600
+                    return None
+                data, mime = await app.state.artwork.get([reference])
+                changed = await asyncio.to_thread(
+                    store.save_poster_artwork, media_id, reference,
+                    replace_broken=broken_source
+                )
+            if changed:
+                await warm_poster_dependents(media_id)
+            poster_on_demand_retry_after.pop(media_id, None)
+            return data, mime
+        except asyncio.CancelledError:
+            raise
+        except (ConnectorError, ArtworkError, OSError, ValueError) as exc:
+            poster_on_demand_retry_after[media_id] = time.monotonic() + 300
+            _LOG.warning("Targeted poster repair for %s failed: %s", media_id, exc)
+            return None
 
     async def repair_missing_posters() -> None:
         nonlocal artwork_repair_pending, artwork_repair_status
@@ -1654,28 +1693,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(writable)],
     )
     async def repair_single_poster(media_id: str):
-        """Targeted server fallback for a phone without its own TMDB credential."""
+        """Repair both missing posters and dead CLZ/Kodi image references."""
+        detail = await asyncio.to_thread(store.detail, media_id)
+        if not detail:
+            raise HTTPException(404, "Unknown media.")
+        if detail["kind"] not in ("movie", "tvshow"):
+            raise HTTPException(422, "Only movies and series can have TMDB posters.")
+        candidates = await asyncio.to_thread(store.artwork, media_id, "poster")
+        if candidates:
+            try:
+                await app.state.artwork.get(candidates)
+                return media_detail(media_id)
+            except ArtworkError:
+                pass
         if not settings.tmdb_api_token.strip():
             raise HTTPException(503, "TMDB is not configured.")
-        async with enrichment_lock:
-            detail = await asyncio.to_thread(store.detail, media_id)
-            if not detail:
-                raise HTTPException(404, "Unknown media.")
-            if detail.get("artwork", {}).get("poster"):
-                return media_detail(media_id)
-            if detail.get("kind") not in ("movie", "tvshow"):
-                raise HTTPException(422, "Only movies and series can have TMDB posters.")
-            try:
-                reference = await resolve_tmdb_poster(detail, settings.tmdb_api_token)
-                if reference:
-                    await app.state.artwork.get([reference])
-            except (ConnectorError, ArtworkError) as exc:
-                raise HTTPException(502, str(exc)) from exc
-            if not reference:
-                raise HTTPException(404, "No TMDB poster matches this media ID.")
-            changed = await asyncio.to_thread(store.save_poster_artwork, media_id, reference)
-        if changed:
-            await warm_poster_dependents(media_id)
+        result = await recover_poster_on_demand(media_id, broken_source=bool(candidates))
+        if not result:
+            raise HTTPException(502, "TMDB poster could not be resolved or downloaded.")
         return media_detail(media_id)
 
     @app.post(
@@ -2703,6 +2738,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data, content_type = await app.state.artwork.get(candidates)
             return Response(data, media_type=content_type)
         except ArtworkError as exc:
+            if aspect == "poster":
+                repaired = await recover_poster_on_demand(
+                    media_id, broken_source=bool(candidates)
+                )
+                if repaired:
+                    data, content_type = repaired
+                    return Response(data, media_type=content_type)
             raise HTTPException(404, str(exc)) from exc
 
     @app.post(
