@@ -861,3 +861,18 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .manual-view-items button{display:flex;justify-content:space-between;gap:12px;align-items:center}
 .manual-view-items small{color:var(--muted)}
 @media(max-width:700px){.collection-backdrop{height:170px;margin-bottom:-140px}.manual-view-artwork{height:120px}}
+
+
+/* Read-only metadata for CLZ physical seasons. Not styled as a playable row. */
+.season-guide-entry{display:flex;align-items:flex-start;gap:13px;padding:12px;border:1px solid #354257;border-radius:10px;background:#202938}
+.season-guide-entry .season-episode-description{flex:1}
+.season-guide-still{width:120px;aspect-ratio:16/9;object-fit:cover;border-radius:6px;flex-shrink:0}
+@media(max-width:600px){.season-guide-entry{flex-wrap:wrap}.season-guide-still{width:92px}}
+
+/* Previews use YouTube's own thumbnail, not a screenshot or a video stream. */
+.media-trailer-row{display:flex;gap:13px;overflow-x:auto;padding:6px 0 10px;scroll-snap-type:x mandatory}
+.media-trailer-card{display:flex;flex-direction:column;gap:7px;flex:0 0 220px;min-width:0;text-decoration:none;color:var(--text);font-size:13px;font-weight:600;scroll-snap-align:start}
+.media-trailer-image{position:relative;display:block;aspect-ratio:16/9;overflow:hidden;border-radius:9px;background:#263346}
+.media-trailer-image>img{width:100%;height:100%;object-fit:cover}
+.media-trailer-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:48px;height:48px;border-radius:50%;background:#000b;color:white;font-size:20px;padding-left:3px;transition:background .15s,transform .15s}
+.media-trailer-card:hover .media-trailer-play,.media-trailer-card:focus-visible .media-trailer-play{background:#e22b35;transform:translate(-50%,-50%) scale(1.08)}
