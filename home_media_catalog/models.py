@@ -605,6 +605,7 @@ class CatalogueStatus(BaseModel):
     counts: dict[str, int]
     sources: list[SourceView]
     tmdb_available: bool = False
+    tmdb_enrichment: dict[str, Any] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------- music
