@@ -5,12 +5,12 @@ import hashlib
 import ipaddress
 import json
 import re
-from uuid import uuid4
 import socket
 import time
 from pathlib import Path
 from threading import Lock
 from urllib.parse import unquote, urlsplit
+from uuid import uuid4
 
 import aiohttp
 from aiohttp.abc import AbstractResolver
