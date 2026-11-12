@@ -217,6 +217,11 @@
         <label>Type<select id="internal-kind"><option value="movie">Film</option><option value="tvshow">Série</option></select></label>
         <label>Année<input id="internal-year" type="number" min="1870" max="2200" step="1"></label>
       </div>
+      <div id="internal-season-fields" class="internal-season-fields" hidden>
+        <label>Saison physique (facultatif)<input id="internal-season" type="number" min="0" max="10000" step="1" placeholder="N° de saison"></label>
+        <p class="hint">Une saison identifiée est rattachée à la série TMDB sélectionnée. Un coffret de plusieurs saisons reste une édition de la série, sans numéro de saison unique.</p>
+        <p id="internal-season-detected" class="hint" role="status"></p>
+      </div>
       <label>Support<select id="internal-format"><option value="">Non spécifié</option><option>DVD</option><option>Blu-ray</option><option>Blu-ray 3D</option><option>4K Ultra HD Blu-ray</option></select></label>
       <label>Synopsis (facultatif)<textarea id="internal-plot" maxlength="5000" rows="3"></textarea></label>
       <p id="internal-add-error" class="error-text" role="alert"></p>
