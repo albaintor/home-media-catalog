@@ -1,9 +1,8 @@
 """Regression coverage for server-side and iOS-uploaded missing posters."""
 from io import BytesIO
 
-from PIL import Image
-
 from conftest import READ
+from PIL import Image
 from home_media_catalog.connectors.base import Record
 
 
