@@ -156,9 +156,22 @@ def parse_clz(data: bytes) -> list[Record]:
             title, flags=re.IGNORECASE,
         )
         physical_season = int(season_match.group(1)) if is_tv and season_match else None
+        # CLZ omits "Season 1" on some single-season discs (e.g. Hawkeye)
+        # but still exports the six episode records. Preserve those episodes
+        # as physical season 1 unless this is explicitly a multi-season box.
+        episode_count = len(node.findall("episodes/episode"))
+        multi_season_title = bool(re.search(
+            r"\b(?:complete\s+(?:series|seasons?)|integrale?|intégrale|"
+            r"seasons?\s*\d+\s*[-–&+/]\s*\d+|"
+            r"saisons?\s*\d+\s*[-–&+/]\s*\d+)\b",
+            title, flags=re.IGNORECASE,
+        ))
+        if is_tv and physical_season is None and episode_count > 0 and not multi_season_title:
+            physical_season = 1
         series_title = explicit_series or (
             title[:season_match.start()].rstrip(" :-—").strip()
-            if physical_season is not None else ""
+            if season_match is not None and physical_season is not None
+            else (title if is_tv else "")
         )
         if not series_title:
             physical_season = None
@@ -231,7 +244,7 @@ def parse_clz(data: bytes) -> list[Record]:
                 "series_title": series_title or None,
                 "physical_season": physical_season,
                 "physical_title": title if physical_season is not None else None,
-                "physical_episode_count": len(node.findall("episodes/episode")) if physical_season is not None else 0,
+                "physical_episode_count": episode_count if physical_season is not None else 0,
                 "physical_year": (
                     integer(text(node, "releasedate/year/displayname"))
                     if physical_season is not None else None
