@@ -3,6 +3,7 @@ from io import BytesIO
 
 from conftest import READ
 from PIL import Image
+
 from home_media_catalog.connectors.base import Record
 
 
