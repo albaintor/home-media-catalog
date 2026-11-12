@@ -74,3 +74,27 @@ def test_persisted_rate_limit_checkpoints_survive_reinitialization(store):
     recovered = Store(store.path)
     assert recovered.tmdb_retry_state()["retry_at"] == until
     assert recovered.tmdb_retry_state()["last_error"] == "HTTP 429"
+
+
+def test_revisions_select_only_completed_tmdb_details_for_local_first(store):
+    source = store.save_source({"name": "CLZ", "type": "clz"})["id"]
+    store.apply_snapshot(source, [
+        Record("first", "movie", "Cached poster only",
+               identifiers={"imdb": "tt1234567"}),
+        Record("second", "movie", "Complete credits",
+               identifiers={"imdb": "tt7654321"})
+    ])
+    identities = {
+        row["title"]: row["id"]
+        for row in store.media(source_type="clz")["items"]
+    }
+    store.save_enrichment(identities["Cached poster only"], {
+        "poster": "https://image.tmdb.org/t/p/w500/photo.jpg"
+    })
+    store.save_enrichment(identities["Complete credits"], _payload())
+    revisions = store.tmdb_enrichment_revisions()
+    assert len(revisions) == 1
+    assert revisions[0]["media_id"] == identities["Complete credits"]
+    assert revisions[0]["updated_at"] == store.detail(
+        identities["Complete credits"]
+    )["enriched_at"]
