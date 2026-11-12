@@ -1409,6 +1409,11 @@ function renderCards(items, append=false) {
   if(grouped) {
     const groups=collectionGroups(state.items);
     if(!opened) {
+      // Media counts can be zero for a name-only collection match: the
+      // grouped-result count must describe the cards actually displayed.
+      if($('search').value.trim()) {
+        $('result-count').textContent=`${groups.length.toLocaleString(displayLocale())} résultat${groups.length>1?'s':''} · regroupement par collection`;
+      }
       root.className='collection-grid';
       root.innerHTML=groups.map(group=>group.items.length===1&&!group.manual
         ? card(group.items[0])
