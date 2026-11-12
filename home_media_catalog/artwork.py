@@ -4,6 +4,8 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import re
+from uuid import uuid4
 import socket
 import time
 from pathlib import Path
@@ -56,6 +58,7 @@ class Artwork:
     def __init__(self, settings):
         self.settings = settings
         self.cache = settings.data_dir / "artwork"
+        self.uploads = settings.data_dir / "uploaded-posters"
         self.semaphore = asyncio.Semaphore(6)
         self.last_prune = 0.0
         self.write_lock = Lock()
@@ -74,6 +77,24 @@ class Artwork:
                     raise ArtworkError("Artwork does not exist in the configured mount.")
                 return candidate
         return None
+
+    @staticmethod
+    def uploaded_poster_reference(media_id: str) -> str:
+        # A digest, never the URL parameter, becomes the filesystem name.
+        return "hmc-poster://" + hashlib.sha256(media_id.encode()).hexdigest()
+
+    def save_uploaded_poster(self, media_id: str, data: bytes) -> str:
+        reference = self.uploaded_poster_reference(media_id)
+        key = reference.removeprefix("hmc-poster://")
+        self.uploads.mkdir(parents=True, exist_ok=True)
+        target = self.uploads / (key + ".jpg")
+        temporary = self.uploads / ("." + uuid4().hex + ".tmp")
+        try:
+            temporary.write_bytes(data)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return reference
 
     def _cached(self, key: str):
         path = self.cache / (key + ".bin")
@@ -131,6 +152,13 @@ class Artwork:
             for url in candidates:
                 key = hashlib.sha256(url.encode()).hexdigest()
                 try:
+                    if re.fullmatch(r"hmc-poster://[0-9a-f]{64}", url):
+                        path = self.uploads / (url.removeprefix("hmc-poster://") + ".jpg")
+                        if path.is_file():
+                            data = await asyncio.to_thread(path.read_bytes)
+                            if len(data) <= 5 * 1024 * 1024 and self._image_type(data) == "image/jpeg":
+                                return data, "image/jpeg"
+                        continue
                     # Music artwork is fetched on demand and never written
                     # to the persistent server artwork cache.
                     if persist:
