@@ -946,8 +946,8 @@ class Store:
         slots = ",".join("?" for _ in variants)
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT w.title AS title, w.poster AS poster, "
-                "s.name AS source_name, r.source_id "
+                "SELECT COALESCE(json_extract(r.payload,'$.metadata.physical_title'), w.title) AS title, "
+                "w.poster AS poster, s.name AS source_name, r.source_id "
                 "FROM records r JOIN works w ON w.id=r.work_id "
                 "JOIN sources s ON s.id=r.source_id "
                 "WHERE json_extract(r.payload,'$.metadata.barcode') IN (" + slots + ") "
