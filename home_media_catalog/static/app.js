@@ -1891,6 +1891,47 @@ $('scan-all-kodi').addEventListener('click',async()=>{
 });
 
 setInterval(()=>{if(!$('app').hidden){pollActivity();pollPersonalWritebacks();}},3000);
+
+// Other devices may repair posters without a catalogue source reimport.
+// Poll only a monotonic invalidation cursor, then refresh the current page
+// and versioned mosaics. No TMDB requests occur in the browser.
+const artworkChangesKey='catalogue_artwork_cursor_v1:'+baseURL.pathname;
+let artworkChangesPollBusy=false;
+let artworkChangesUnsupported=false;
+async function pollArtworkChanges() {
+  if(artworkChangesPollBusy||artworkChangesUnsupported||$('app').hidden||
+     document.hidden||state.loading||$('detail-dialog')?.open)return;
+  artworkChangesPollBusy=true;
+  try {
+    let cursor=Number(readStorage(artworkChangesKey))||0;
+    let received=0;
+    for(let page=0;page<8;page++) {
+      const result=await api('catalogue/artwork/changes?after='+cursor,{cache:'no-store'});
+      if(!Array.isArray(result.changes)||!Number.isSafeInteger(result.cursor)||
+         result.cursor<cursor)break;
+      const count=result.changes.length;
+      cursor=result.cursor;
+      received+=count;
+      if(count<200)break;
+    }
+    if(received) {
+      const position={x:window.scrollX,y:window.scrollY};
+      await loadMedia();
+      await refreshHomeListThumbnails();
+      window.scrollTo(position.x,position.y);
+    }
+    writeStorage(artworkChangesKey,String(cursor));
+  } catch(e) {
+    if(e.status===404)artworkChangesUnsupported=true;
+    else console.warn('Artwork invalidation check failed:',e.message);
+  } finally {
+    artworkChangesPollBusy=false;
+  }
+}
+setInterval(()=>{if(!document.hidden)void pollArtworkChanges();},30000);
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden)void pollArtworkChanges();
+});
 async function refreshStaleOnOpen() {
   try {
     const jobs=await api('sources/sync-stale',{method:'POST'});
@@ -1916,6 +1957,7 @@ async function initialize() {
     setView(state.view,false); renderPersonalStatus(); await refresh(); await refreshHomeListThumbnails(); await pollActivity(); void refreshNetworkHome();
     // Only once on authenticated entry; the server enforces the 24h threshold.
     void refreshStaleOnOpen();
+    void pollArtworkChanges();
     void startKodiRemote({api,url,role:state.role});
   } catch (e) {
     if(e.serverUnavailable)showServerUnavailable(e);
