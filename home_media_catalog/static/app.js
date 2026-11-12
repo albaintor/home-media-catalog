@@ -2081,6 +2081,24 @@ function internalPreview(element, imageURL, description, subtitle='') {
   element.appendChild(text);
   element.hidden=false;
 }
+let internalPhysicalEditionTitle = null;
+function seasonFromDiscTitle(label) {
+  if(/(?:seasons|saisons|season|saison)\s+\d{1,3}\s*[-–/&+]\s*\d{1,3}/i.test(label||''))return null;
+  const matches=[...(label||'').matchAll(/(?:^|[\s:–—-]+)(?:season|saison|staffel|temporada|s)\s*[:.]?\s*0*(\d{1,3})\b(?!\s*[-–]\s*\d)/gi)];
+  return matches.length===1?Number(matches[0][1]):null;
+}
+function refreshInternalSeasonFields() {
+  const isTV=$('internal-kind').value==='tvshow';
+  $('internal-season-fields').hidden=!isTV;
+  if(isTV) {
+    const number=$('internal-season').value;
+    $('internal-season-detected').textContent=number!==''?
+      'Saison '+number+' : sera ajoutée aux éditions physiques de cette série.':
+      'Aucune saison unique définie (édition ou coffret de la série).';
+  }
+}
+$('internal-season').addEventListener('input',refreshInternalSeasonFields);
+$('internal-kind').addEventListener('change',refreshInternalSeasonFields);
 let internalSelection = null;
 let internalSearchTimer = null;
 let internalSearchSerial = 0;
@@ -2090,6 +2108,7 @@ function selectInternalTMDB(item, automatically=false) {
   $('internal-title').value=item.title;
   $('internal-year').value=item.year||'';
   $('internal-kind').value=item.kind;
+  refreshInternalSeasonFields();
   $('internal-plot').value=item.plot||'';
   const caption=[item.year||'',item.kind==='tvshow'?'Série':'Film','TMDB #'+item.tmdb_id]
     .filter(Boolean).join(' · ');
@@ -2118,6 +2137,9 @@ $('internal-add-button').addEventListener('click', () => {
   $('internal-selected-preview').hidden = true;
   $('internal-barcode-preview').hidden = true;
   internalSelection = null;
+  internalPhysicalEditionTitle = null;
+  $('internal-season').value='';
+  refreshInternalSeasonFields();
   showDialog('internal-add-dialog');
   $('internal-search').focus();
 });
@@ -2205,7 +2227,12 @@ $('internal-lookup').addEventListener('click', async () => {
         barcodelookup:'Barcode Lookup'})[found.source] || 'une base de codes-barres';
       message.textContent='Référence trouvée dans '+provider+' : '+found.title+
         ' · Vérifiez la correspondance du film dans TMDB.';
-      const simplified=found.title.replace(/\b(?:blu[- ]?ray|dvd|ultra hd|4k|edition|édition|disc|disque)\b/gi,'')
+      internalPhysicalEditionTitle=found.title;
+      const detectedSeason=seasonFromDiscTitle(found.title);
+      $('internal-season').value=detectedSeason===null?'':String(detectedSeason);
+      refreshInternalSeasonFields();
+      const cleaned=detectedSeason===null?found.title:found.title.replace(/(?:^|[\s:–—-]+)(?:season|saison|staffel|temporada|s)\s*[:.]?\s*0*\d{1,3}\b/gi,' ');
+      const simplified=cleaned.replace(/\b(?:blu[- ]?ray|dvd|ultra hd|4k|edition|édition|disc|disque)\b/gi,'')
         .replace(/\s{2,}/g,' ').trim();
       const tmdbQuery=simplified||found.title;
       internalSelection=null;
@@ -2247,6 +2274,19 @@ $('internal-add-form').addEventListener('submit', async (event) => {
     barcode: $('internal-barcode').value.trim() || null,
     format: $('internal-format').value
   };
+  if(item.kind==='tvshow'){
+    const input=$('internal-season').value.trim();
+    if(input!==''){
+      const season=Number(input);
+      if(!Number.isInteger(season)||season<0||season>10000){
+        $('internal-add-error').textContent='Numéro de saison invalide.';
+        submit.disabled=false;
+        return;
+      }
+      item.physical_season=season;
+    }
+    item.physical_title=internalPhysicalEditionTitle||title;
+  }
   if (internalSelection && internalSelection.title === title &&
       internalSelection.kind === item.kind) {
     item.tmdb_id = internalSelection.tmdb_id;
