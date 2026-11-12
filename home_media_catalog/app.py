@@ -58,7 +58,12 @@ from .compatibility import mobile_compatibility
 from .connectors.base import ConnectorError
 from .connectors.kodi import KodiConnector
 from .enrichment import enrich_tmdb, enrich_tmdb_season_guide, probe_tmdb, resolve_tmdb_poster
-from .internal_catalog import find_tmdb, lookup_disc_barcode
+from .internal_catalog import (
+    find_tmdb,
+    lookup_disc_barcode,
+    physical_season_in_title,
+    tmdb_physical_season,
+)
 from .list_thumbnails import CollectionThumbnails, ListThumbnails
 from .models import (
     CatalogueStatus,
@@ -973,6 +978,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ConnectorError as exc:
             raise HTTPException(502, str(exc)) from exc
 
+    @app.get(
+        API + "/internal/tv/{tmdb_id}/seasons/{season}",
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+    )
+    async def internal_tmdb_season(tmdb_id: str, season: int):
+        if not settings.tmdb_api_token.strip():
+            raise HTTPException(503, "TMDB is not configured.")
+        try:
+            return await tmdb_physical_season(tmdb_id, season, settings.tmdb_api_token)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except ConnectorError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
     @app.post(
         API + "/internal/items",
         tags=["Catalogue"],
@@ -980,10 +1000,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status_code=201,
     )
     async def create_internal_media(data: InternalMediaInput):
+        edition = data.model_dump()
+        if data.kind == "tvshow":
+            season = data.physical_season
+            if season is None:
+                season, _ = physical_season_in_title(data.physical_title or data.title)
+            if season is None:
+                season, _ = physical_season_in_title(data.title)
+            if season is not None:
+                edition["physical_season"] = season
+                edition["physical_title"] = data.physical_title or data.title
+                if data.tmdb_id and settings.tmdb_api_token.strip() and (
+                    not data.season_poster_path or data.physical_episode_count is None
+                ):
+                    try:
+                        details = await tmdb_physical_season(
+                            data.tmdb_id, season, settings.tmdb_api_token
+                        )
+                        edition["season_poster_path"] = (
+                            edition.get("season_poster_path") or details.get("poster_path")
+                        )
+                        if edition.get("physical_episode_count") is None:
+                            edition["physical_episode_count"] = details.get("episode_count")
+                    except (ConnectorError, ValueError):
+                        # The physical edition must remain addable when TMDB is down.
+                        pass
         try:
-            saved = await asyncio.to_thread(
-                store.save_internal_media, data.model_dump()
-            )
+            saved = await asyncio.to_thread(store.save_internal_media, edition)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         # The index scheduler calls asyncio.create_task: invoke it on the
