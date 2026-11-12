@@ -168,6 +168,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # is immediate and non-blocking; unchanged documents cost no API calls.
         start_ai_index(immediate=True)
         start_artwork_repair()
+        # Network outages, transient TMDB throttling and late imports must not
+        # leave a poster permanently missing until a container restart.
+        nonlocal artwork_repair_timer
+        artwork_repair_timer = asyncio.create_task(periodic_artwork_repair())
         discovery = None
         if settings.discovery_enabled:
             from .discovery import BonjourPublisher
@@ -180,6 +184,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if discovery:
                 await asyncio.to_thread(discovery.stop)
             await sync.close()
+            if artwork_repair_timer and not artwork_repair_timer.done():
+                artwork_repair_timer.cancel()
+                try:
+                    await artwork_repair_timer
+                except asyncio.CancelledError:
+                    pass
             if artwork_repair_task and not artwork_repair_task.done():
                 artwork_repair_task.cancel()
                 try:
@@ -216,8 +226,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.collection_thumbnails = collection_thumbnails
     enrichment_lock = asyncio.Lock()
     artwork_repair_task: asyncio.Task | None = None
+    artwork_repair_timer: asyncio.Task | None = None
     artwork_repair_pending = False
-    artwork_repair_status = {"running": False, "checked": 0, "repaired": 0, "failed": 0}
+    artwork_repair_status = {
+        "running": False, "checked": 0, "repaired": 0, "failed": 0,
+        "unmatched": 0, "last_error": None, "last_media_id": None,
+        "last_run_started": None, "last_run_finished": None,
+    }
     if settings.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -506,7 +521,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     async def repair_missing_posters() -> None:
         nonlocal artwork_repair_pending, artwork_repair_status
-        artwork_repair_status = {"running": True, "checked": 0, "repaired": 0, "failed": 0}
+        artwork_repair_status = {
+            "running": True, "checked": 0, "repaired": 0, "failed": 0,
+            "unmatched": 0, "last_error": None, "last_media_id": None,
+            "last_run_started": datetime.now(UTC).isoformat(),
+            "last_run_finished": None,
+        }
         try:
             ids = await asyncio.to_thread(store.missing_poster_ids)
             for media_id in ids:
@@ -526,13 +546,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             )
                         else:
                             changed = False
+                            artwork_repair_status["unmatched"] += 1
                     if changed:
                         artwork_repair_status["repaired"] += 1
                         await warm_poster_dependents(media_id)
                 except asyncio.CancelledError:
                     raise
-                except (ConnectorError, ArtworkError, OSError, ValueError) as exc:
+                except Exception as exc:
                     artwork_repair_status["failed"] += 1
+                    artwork_repair_status["last_media_id"] = media_id
+                    artwork_repair_status["last_error"] = str(exc)
                     _LOG.warning("Artwork repair failed for %s: %s", media_id, exc)
                     if isinstance(exc, ConnectorError) and "limite temporairement" in str(exc):
                         # Do not hammer TMDB while it is returning HTTP 429.
@@ -541,6 +564,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     artwork_repair_status["checked"] += 1
         finally:
             artwork_repair_status["running"] = False
+            artwork_repair_status["last_run_finished"] = datetime.now(UTC).isoformat()
             if artwork_repair_pending:
                 artwork_repair_pending = False
                 start_artwork_repair()
@@ -553,6 +577,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             artwork_repair_pending = True
             return
         artwork_repair_task = asyncio.create_task(repair_missing_posters())
+
+    async def periodic_artwork_repair() -> None:
+        while True:
+            await asyncio.sleep(30 * 60)
+            if settings.tmdb_api_token.strip():
+                start_artwork_repair()
 
     def on_catalog_changed() -> None:
         start_ai_index()
@@ -586,7 +616,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(writable)],
     )
     def missing_poster_repair_status():
-        return artwork_repair_status
+        return {
+            **artwork_repair_status,
+            "tmdb_configured": bool(settings.tmdb_api_token.strip()),
+            "pending": len(store.missing_poster_ids(limit=100000)),
+            "retry_interval_minutes": 30,
+        }
 
     @app.get(API + "/ai/status", tags=["AI"], dependencies=[Depends(authenticated)])
     def ai_status():
