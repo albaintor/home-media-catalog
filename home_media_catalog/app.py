@@ -567,7 +567,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             artwork_repair_status["last_run_finished"] = datetime.now(UTC).isoformat()
             if artwork_repair_pending:
                 artwork_repair_pending = False
-                start_artwork_repair()
+                # The current worker is still marked running in its own
+                # finally block. Schedule a fresh pass after it has completed.
+                asyncio.get_running_loop().call_later(0.1, start_artwork_repair)
 
     def start_artwork_repair() -> None:
         nonlocal artwork_repair_task, artwork_repair_pending
