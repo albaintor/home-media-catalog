@@ -110,7 +110,11 @@ function renderCollectionPicker() {
   // One choice per canonical name. Internal collections take precedence when
   // imported sources contain the same name or numbered/saga aliases.
   const manual=(state.manualCollections||[]).map(c=>({value:c.name,label:c.name,internal:true}));
-  const external=(state.facets?.collections||[]).filter(isSagaCollection)
+  const hiddenImported=new Set((state.indexedCollections||[])
+    .filter(c=>!c.is_manual&&c.has_manual_overlap)
+    .map(c=>collectionSelectionKey(c.name)));
+  const external=(state.facets?.collections||[]).filter(name=>
+    isSagaCollection(name)&&!hiddenImported.has(collectionSelectionKey(name)))
     .map(name=>({value:name,label:collectionName(name),internal:false}));
   const unique=new Map();
   for(const choice of [...manual,...(state.internalCollectionsOnly?[]:external)]) {
@@ -998,11 +1002,13 @@ async function openMediaActions(trigger) {
     <button type="button" data-quick-action="trailer">▷ Bande-annonce YouTube</button>
     ${admin&&(item.source_types||[]).includes('internal')?'<button type="button" data-quick-action="remove-internal" class="error-text">Supprimer une édition interne…</button>':''}
     ${admin?'<details class="media-actions-lists"><summary>＋ Ajouter à une liste <span aria-hidden="true">›</span></summary><div class="media-actions-list-choices"><button type="button" data-quick-action="new-list">＋ Nouvelle liste</button><p class="hint">Chargement des listes…</p></div></details>':''}`;
-  if(admin&&['movie','tvshow'].includes(item.kind)&&!(item.manual_collection_ids||[]).length) {
+  if(admin&&['movie','tvshow'].includes(item.kind)) {
+    const assigned=new Set(item.manual_collection_ids||[]);
     menu.insertAdjacentHTML('beforeend',
       '<details class="media-actions-lists"><summary>＋ Ajouter à une collection <span aria-hidden="true">›</span></summary><div class="media-actions-list-choices">'+
       '<button type="button" data-quick-action="new-manual">＋ Nouvelle collection</button>'+
-      state.manualCollections.map(c=>'<button type="button" data-quick-manual="'+esc(c.id)+'">'+esc(c.name)+'</button>').join('')+
+      state.manualCollections.map(c=>'<button type="button" data-quick-manual="'+esc(c.id)+'"'+
+        (assigned.has(c.id)?' disabled':'')+'>'+(assigned.has(c.id)?'✓ ':'')+esc(c.name)+'</button>').join('')+
       '</div></details>');
   }
   menu.showPopover();
@@ -1276,13 +1282,20 @@ function mergeCollectionGroupsByMembers(groups) {
 }
 function collectionGroups(items) {
   const search=collectionFold($('search').value.trim());
+  // Any internally assigned work suppresses the entire imported collection.
+  // Its unassigned siblings become individual cards rather than disappearing.
+  const hiddenImported=new Set((state.indexedCollections||[])
+    .filter(c=>!c.is_manual&&c.has_manual_overlap)
+    .map(c=>collectionSelectionKey(c.name)));
+  const forcedStandalone=new Set();
   const chosen=new Set(state.collections.map(collectionSelectionKey));
   const isChosen=name=>!chosen.size||chosen.has(collectionSelectionKey(name));
   // An exact collection-name match takes precedence over a partial name
   // match. Otherwise only the indexed names containing the query qualify.
   // Do not display every manual collection just because its index is loaded.
   const indexedNameMatches=search?(state.indexedCollections||[]).filter(c=>
-    isChosen(c.name)&&(c.is_manual||!state.internalCollectionsOnly&&isSagaCollection(c.name))&&
+    isChosen(c.name)&&(c.is_manual||!state.internalCollectionsOnly&&isSagaCollection(c.name)&&
+      !hiddenImported.has(collectionSelectionKey(c.name)))&&
     collectionFold(c.name).includes(search)):[];
   const exactNameMatches=indexedNameMatches.filter(c=>collectionFold(c.name)===search);
   const preferredNameMatches=exactNameMatches.length?exactNameMatches:indexedNameMatches;
@@ -1312,6 +1325,10 @@ function collectionGroups(items) {
     }
     if(state.internalCollectionsOnly)continue;
     const matched=(media.collections||[]).filter(name=>isSagaCollection(name)&&isChosen(name));
+    if((media.collections||[]).some(name=>hiddenImported.has(collectionSelectionKey(name)))) {
+      forcedStandalone.add(media.id);
+      continue;
+    }
     const names=new Set();
     for(const raw of matched) {
       const name=normalizedSagaName(raw,available);
@@ -1381,7 +1398,8 @@ function collectionGroups(items) {
   // physical-only CLZ records (e.g. "Blu-Ray") display each film directly.
   // Reconcile against final visible groups so no work disappears during merges.
   const represented=new Set(visibleNamedGroups.flatMap(group=>group.items.map(item=>item.id)));
-  const individualMedia=(state.internalCollectionsOnly||chosen.size||hasNameMatches?[]:items).filter(item=>!represented.has(item.id))
+  const individualMedia=items.filter(item=>!represented.has(item.id)&&
+      (!state.internalCollectionsOnly&&!chosen.size&&!hasNameMatches||forcedStandalone.has(item.id)))
     .map(item=>({id:'standalone:'+item.id,title:item.title,items:[item],standalone:true}));
   const visibleGroups=[...visibleNamedGroups,...individualMedia];
   for(const group of visibleGroups)
@@ -2400,13 +2418,12 @@ function manualMembershipMarkup(item) {
   if(!['movie','tvshow'].includes(item.kind))return '';
   const assigned=new Set(item.manual_collection_ids||[]);
   const groups=state.manualCollections.filter(c=>assigned.has(c.id));
-  const members=groups.length
+  const existing=groups.length
     ?groups.map(c=>'<button type="button" class="secondary" data-open-manual="'+esc(c.id)+'">'+esc(c.name)+'</button>').join('')
-    :assigned.size
-      ?'<span class="hint">'+esc((item.collections||[]).join(', '))+'</span>'
-      :state.role==='admin'
-        ?'<button type="button" class="secondary" id="detail-add-manual">＋ Ajouter à une collection</button>'
-        :'';
+    :assigned.size?'<span class="hint">'+esc((item.collections||[]).join(', '))+'</span>':'';
+  const add=state.role==='admin'
+    ?'<button type="button" class="secondary" id="detail-add-manual">＋ Ajouter à une collection</button>':'';
+  const members=existing+add;
   const imported=!assigned.size?(item.collections||[]).filter(isSagaCollection):[];
   return '<div class="manual-membership"><strong>Collections</strong><div class="manual-membership-choices">'+members+'</div>'+
     (imported.length?'<p class="hint">Collections importées : '+esc(imported.join(' · '))+'</p>':'')+'</div>';
@@ -2437,11 +2454,14 @@ async function openManualCollectionPopup(collectionID) {
 }
 function openManualChoice(mediaID) {
   if(state.role!=='admin')return;
+  const item=state.detail?.id===mediaID?state.detail:state.items.find(m=>m.id===mediaID);
+  const assigned=new Set(item?.manual_collection_ids||[]);
   $('manual-choice-dialog').dataset.mediaId=mediaID;
   $('manual-choice-items').innerHTML=
     '<button type="button" class="secondary" data-manual-new>＋ Nouvelle collection</button>'+
     state.manualCollections.map(c=>
-      '<button type="button" class="secondary" data-manual-choice="'+esc(c.id)+'">'+esc(c.name)+'</button>').join('');
+      '<button type="button" class="secondary" data-manual-choice="'+esc(c.id)+'"'+
+      (assigned.has(c.id)?' disabled':'')+'>'+(assigned.has(c.id)?'✓ ':'')+esc(c.name)+'</button>').join('');
   showDialog('manual-choice-dialog');
 }
 async function quickAddToManual(mediaID,collectionID) {
