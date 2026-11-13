@@ -1373,7 +1373,8 @@ function collectionGroups(items) {
   for(const indexed of preferredNameMatches) {
     if(visibleNamedGroups.some(g=>collectionSelectionKey(g.title)===collectionSelectionKey(indexed.name)))
       continue;
-    visibleNamedGroups.push({id:indexed.id,title:indexed.name,items:[],
+    visibleNamedGroups.push({id:indexed.id,title:indexed.name,
+      items:indexed.item_count===1&&indexed.single_media?[indexed.single_media]:[],
       itemCount:indexed.item_count||0,artwork:indexed.artwork,manual:!!indexed.is_manual});
   }
   // The server has already composed revisioned JPEG mosaics in release-year
