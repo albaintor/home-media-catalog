@@ -1324,11 +1324,12 @@ function collectionGroups(items) {
       continue;
     }
     if(state.internalCollectionsOnly)continue;
-    const matched=(media.collections||[]).filter(name=>isSagaCollection(name)&&isChosen(name));
-    if((media.collections||[]).some(name=>hiddenImported.has(collectionSelectionKey(name)))) {
+    // Suppressing one imported collection must not suppress memberships
+    // in other, unaffected imported collections for the same work.
+    const matched=(media.collections||[]).filter(name=>isSagaCollection(name)&&
+      isChosen(name)&&!hiddenImported.has(collectionSelectionKey(name)));
+    if((media.collections||[]).some(name=>hiddenImported.has(collectionSelectionKey(name))))
       forcedStandalone.add(media.id);
-      continue;
-    }
     const names=new Set();
     for(const raw of matched) {
       const name=normalizedSagaName(raw,available);
@@ -1399,8 +1400,11 @@ function collectionGroups(items) {
   // physical-only CLZ records (e.g. "Blu-Ray") display each film directly.
   // Reconcile against final visible groups so no work disappears during merges.
   const represented=new Set(visibleNamedGroups.flatMap(group=>group.items.map(item=>item.id)));
+  // Name-matched collection searches show only those collections. A work
+  // orphaned by a suppressed imported group must not leak into such results.
   const individualMedia=items.filter(item=>!represented.has(item.id)&&
-      (!state.internalCollectionsOnly&&!chosen.size&&!hasNameMatches||forcedStandalone.has(item.id)))
+      !state.internalCollectionsOnly&&!hasNameMatches&&
+      (!chosen.size||forcedStandalone.has(item.id)))
     .map(item=>({id:'standalone:'+item.id,title:item.title,items:[item],standalone:true}));
   const visibleGroups=[...visibleNamedGroups,...individualMedia];
   for(const group of visibleGroups)
