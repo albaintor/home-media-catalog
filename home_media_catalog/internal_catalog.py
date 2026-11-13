@@ -296,6 +296,29 @@ def physical_season_in_title(title: str) -> tuple[int | None, str]:
     return season, base
 
 
+async def tmdb_series_season_profile(tmdb_id: str, token: str) -> dict:
+    """Return season cardinality for safe single-season disc inference.
+
+    A bare series title or barcode is not evidence that a physical disc covers
+    season 1. Infer it only when TMDB confirms exactly one regular season.
+    """
+    if not re.fullmatch(r"[0-9]{1,24}", tmdb_id):
+        raise ValueError("Invalid TMDB TV-series identifier.")
+    async with tmdb_connection(token) as get:
+        data = await get(f"tv/{tmdb_id}", language="fr-FR")
+    seasons = data.get("seasons")
+    regular = [
+        row for row in seasons
+        if isinstance(row, dict) and isinstance(row.get("season_number"), int)
+        and row["season_number"] > 0
+    ] if isinstance(seasons, list) else []
+    count = data.get("number_of_seasons")
+    # Never infer if TMDB returned contradictory or incomplete season data.
+    single = count == 1 and len(regular) == 1 and regular[0]["season_number"] == 1
+    return {"number_of_seasons": count if isinstance(count, int) else None,
+            "single_season": single}
+
+
 async def tmdb_physical_season(tmdb_id: str, season: int, token: str) -> dict:
     """Fetch provider-backed season art and episode count, never a show poster."""
     if not re.fullmatch(r"[0-9]{1,24}", tmdb_id) or not 0 <= season <= 10000:
