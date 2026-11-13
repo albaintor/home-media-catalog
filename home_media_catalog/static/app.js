@@ -1400,11 +1400,19 @@ function collectionGroups(items) {
   // physical-only CLZ records (e.g. "Blu-Ray") display each film directly.
   // Reconcile against final visible groups so no work disappears during merges.
   const represented=new Set(visibleNamedGroups.flatMap(group=>group.items.map(item=>item.id)));
-  // Name-matched collection searches show only those collections. A work
-  // orphaned by a suppressed imported group must not leak into such results.
+  // A suppressed imported collection may leave a movie without a group.
+  // That fallback must not inject unrelated films into a metadata search
+  // that already found a named collection (even if the imported name has a typo).
+  // Explicit title, synopsis, genre or credited-person matches remain visible.
+  const hasGroupedSearchResults=!!search&&visibleNamedGroups.some(g=>g.items.length>0);
+  const directMetadataMatch=item=>[
+    item.title,item.original_title,item.plot,...(item.genres||[]),
+    ...(item.search_people||[])
+  ].some(value=>collectionFold(value).includes(search));
   const individualMedia=items.filter(item=>!represented.has(item.id)&&
       !state.internalCollectionsOnly&&!hasNameMatches&&
-      (!chosen.size||forcedStandalone.has(item.id)))
+      (!chosen.size||forcedStandalone.has(item.id))&&
+      (!hasGroupedSearchResults||!forcedStandalone.has(item.id)||directMetadataMatch(item)))
     .map(item=>({id:'standalone:'+item.id,title:item.title,items:[item],standalone:true}));
   const visibleGroups=[...visibleNamedGroups,...individualMedia];
   for(const group of visibleGroups)
