@@ -235,6 +235,59 @@ def test_manual_edition_does_not_merge_distinct_remake_years(store):
 
 
 
+def test_legacy_clz_one_season_repaired_without_reimport(store):
+    source = store.save_source({"name": "Physical discs", "type": "clz"})["id"]
+    store.apply_snapshot(source, [
+        Record("clz:hawkeye", "tvshow", "Hawkeye", year=2021,
+               identifiers={"imdb": "tt10160804"},
+               metadata={"series_title": "Hawkeye",
+                         "physical_episode_count": 6}),
+    ])
+    work_id = store.media(q="Hawkeye")["items"][0]["id"]
+    assert store.seasons(work_id) == []
+    assert store.has_legacy_clz_single_season(work_id)
+    # The caller performs the verified provider lookup first; the store must
+    # not guess season 1 without that external confirmation.
+    assert store.repair_legacy_clz_single_season(work_id, episode_count=6)
+    seasons = store.seasons(work_id)
+    assert len(seasons) == 1
+    assert seasons[0]["season"] == 1
+    assert seasons[0]["owned_physical"] is True
+    assert seasons[0]["physical_episode_count"] == 6
+    assert not store.has_legacy_clz_single_season(work_id)
+
+
+def test_single_season_disc_inference_rejects_multi_season_boxset():
+    assert not internal_catalog.is_multi_season_boxset("Hawkeye Blu-ray 4K")
+    assert internal_catalog.is_multi_season_boxset("Complete Series Blu-ray")
+    assert internal_catalog.is_multi_season_boxset("Mandalorian Seasons 1-3")
+    assert internal_catalog.is_multi_season_boxset("Intégrale de la série")
+
+
+def test_tmdb_series_profile_requires_unambiguous_single_regular_season(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def tmdb(_token):
+        async def get(path, **kwargs):
+            assert path == "tv/88329"
+            assert kwargs == {"language": "fr-FR"}
+            return {"number_of_seasons": 1, "seasons": [
+                {"season_number": 0, "episode_count": 3},
+                {"season_number": 1, "episode_count": 6,
+                 "poster_path": "/hawk.jpg"},
+            ]}
+        yield get
+
+    monkeypatch.setattr(internal_catalog, "tmdb_connection", tmdb)
+    result = asyncio.run(
+        internal_catalog.tmdb_series_season_profile("88329", "token")
+    )
+    assert result["single_season"] is True
+    assert result["episode_count"] == 6
+    assert result["poster_path"] == "/hawk.jpg"
+
+
 def test_internal_tv_seasons_share_one_work_and_own_distinct_posters(store):
     first_id = None
     for number in (1, 2, 3):
