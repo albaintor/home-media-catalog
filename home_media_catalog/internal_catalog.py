@@ -335,6 +335,26 @@ async def tmdb_series_season_profile(tmdb_id: str, token: str) -> dict:
     }
 
 
+async def tmdb_season_profile_from_identifiers(
+    tmdb_ids: list[str], imdb_ids: list[str], token: str,
+) -> dict | None:
+    """Resolve a series by a unique provider identifier, never by title fuzziness."""
+    tmdb_id = tmdb_ids[0] if len(tmdb_ids) == 1 else None
+    if not tmdb_id and len(imdb_ids) == 1:
+        imdb = imdb_ids[0]
+        if not re.fullmatch(r"tt[0-9]{5,12}", imdb):
+            return None
+        async with tmdb_connection(token) as get:
+            data = await get(f"find/{imdb}", external_source="imdb_id")
+        matches = data.get("tv_results") or []
+        if len(matches) != 1 or not isinstance(matches[0].get("id"), int):
+            return None
+        tmdb_id = str(matches[0]["id"])
+    if not tmdb_id:
+        return None
+    return await tmdb_series_season_profile(tmdb_id, token)
+
+
 async def tmdb_physical_season(tmdb_id: str, season: int, token: str) -> dict:
     """Fetch provider-backed season art and episode count, never a show poster."""
     if not re.fullmatch(r"[0-9]{1,24}", tmdb_id) or not 0 <= season <= 10000:
