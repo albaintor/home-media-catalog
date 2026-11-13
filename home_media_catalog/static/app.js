@@ -26,6 +26,35 @@ const nonSagaCollections = new Set([
 ]);
 const collectionFold = name => String(name||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().trim();
 const physicalCollectionKey = name => collectionFold(name).replace(/[\s_-]+/g,'');
+
+/** Exact names outrank partial matches; typo tolerance is collection-only. */
+function collectionNameSearchRank(name, rawQuery) {
+  const query=collectionFold(rawQuery);
+  const value=collectionFold(name);
+  if(!query)return 0;
+  if(value===query)return 3;
+  if(value.includes(query))return 2;
+  // Short or multiword queries must never fuzzy-match arbitrary labels.
+  if(query.length<6||query.includes(' '))return 0;
+  const maxDistance=query.length>=8?2:1;
+  const tokens=value.match(/[\\p{L}\\p{N}]+/gu)||[];
+  const withinDistance=word=>{
+    if(Math.abs(word.length-query.length)>maxDistance)return false;
+    const left=[...query],right=[...word];
+    let previous=Array.from({length:right.length+1},(_,i)=>i);
+    for(let i=1;i<=left.length;i++) {
+      const next=[i];
+      for(let j=1;j<=right.length;j++)
+        next[j]=Math.min(next[j-1]+1,previous[j]+1,
+          previous[j-1]+(left[i-1]===right[j-1]?0:1));
+      if(Math.min(...next)>maxDistance)return false;
+      previous=next;
+    }
+    return previous[right.length]<=maxDistance;
+  };
+  return tokens.some(withinDistance)?1:0;
+}
+
 const isSagaCollection = name => !!String(name||'').trim() &&
   !nonSagaCollections.has(physicalCollectionKey(name));
 const collectionName = title => String(title||'').replace(/\s*[-–—]\s*saga\s*$/i,'').trim() || String(title||'');
@@ -1296,9 +1325,11 @@ function collectionGroups(items) {
   const indexedNameMatches=search?(state.indexedCollections||[]).filter(c=>
     isChosen(c.name)&&(c.is_manual||!state.internalCollectionsOnly&&isSagaCollection(c.name)&&
       !hiddenImported.has(collectionSelectionKey(c.name)))&&
-    collectionFold(c.name).includes(search)):[];
-  const exactNameMatches=indexedNameMatches.filter(c=>collectionFold(c.name)===search);
-  const preferredNameMatches=exactNameMatches.length?exactNameMatches:indexedNameMatches;
+    collectionNameSearchRank(c.name,search)>0):[];
+  const bestNameRank=Math.max(0,...indexedNameMatches.map(c=>
+    collectionNameSearchRank(c.name,search)));
+  const preferredNameMatches=indexedNameMatches.filter(c=>
+    collectionNameSearchRank(c.name,search)===bestNameRank);
   const preferredNames=new Set(preferredNameMatches.map(c=>collectionSelectionKey(c.name)));
   const hasNameMatches=preferredNames.size>0;
   const available=new Set(items.flatMap(media=>media.collections||[])
@@ -1377,6 +1408,19 @@ function collectionGroups(items) {
     visibleNamedGroups.push({id:indexed.id,title:indexed.name,
       items:indexed.item_count===1&&indexed.single_media?[indexed.single_media]:[],
       itemCount:indexed.item_count||0,artwork:indexed.artwork,manual:!!indexed.is_manual});
+  }
+  // When only one title survives the media search, retain the actual indexed
+  // collection size. Opening the card fetches its complete membership by ID.
+  for(const group of visibleNamedGroups) {
+    if(group.manual||!search||!preferredNames.has(collectionSelectionKey(group.title)))
+      continue;
+    const indexed=preferredNameMatches.find(c=>
+      collectionSelectionKey(c.name)===collectionSelectionKey(group.title));
+    if(indexed&&Number(indexed.item_count)>group.items.length) {
+      group.id=indexed.id;
+      group.itemCount=indexed.item_count;
+      group.artwork=indexed.artwork;
+    }
   }
   // The server has already composed revisioned JPEG mosaics in release-year
   // order. Use them when the displayed group is exactly one indexed group.
@@ -1472,7 +1516,8 @@ function renderCards(items, append=false) {
         $('result-count').textContent=`${groups.length.toLocaleString(displayLocale())} résultat${groups.length>1?'s':''} · regroupement par collection`;
       }
       root.className='collection-grid';
-      root.innerHTML=groups.map(group=>group.items.length===1&&!group.manual
+      root.innerHTML=groups.map(group=>group.items.length===1&&!group.manual&&
+        (group.itemCount??group.items.length)===1
         ? card(group.items[0])
         : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.itemCount??group.items.length} titres">${collectionArtwork(group.items,group.artwork,group.itemCount)}<strong>${esc(group.title)}</strong><span>${group.itemCount??group.items.length} titres</span></button>`).join('');
       attachImageFallbacks(root);
