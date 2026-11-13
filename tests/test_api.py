@@ -5,6 +5,33 @@ from conftest import ADMIN, INGRESS, READ
 from home_media_catalog.connectors.base import Record
 
 
+def test_search_matches_localized_and_original_titles_in_both_scopes(client, admin):
+    """Title-only and advanced search must both include original and localized titles."""
+    source = client.post(
+        "/api/v1/sources", headers=admin, json={"name": "Original title test", "type": "clz"}
+    ).json()["id"]
+    client.app.state.store.apply_snapshot(
+        source,
+        [
+            Record("original-title-work", "movie", "Le Jardin des nuages",
+                   original_title="The Floating Garden"),
+            Record("other-title-work", "movie", "Un autre film",
+                   original_title="Another Movie"),
+        ],
+    )
+    for advanced in (False, True):
+        scope = "&deep_search=true" if advanced else ""
+        for query, expected in (("jardin", "Le Jardin des nuages"),
+                                ("floating", "Le Jardin des nuages"),
+                                ("another", "Un autre film")):
+            response = client.get(
+                f"/api/v1/media?q={query}{scope}", headers=admin
+            )
+            assert response.status_code == 200
+            titles = [entry["title"] for entry in response.json()["items"]]
+            assert titles == [expected], (query, advanced, titles)
+
+
 def test_auth_required_and_read_only_token(client):
     assert client.get("/api/v1/media").status_code == 401
     read = {"Authorization": f"Bearer {READ}"}
