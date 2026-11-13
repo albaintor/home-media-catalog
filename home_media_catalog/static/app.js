@@ -37,7 +37,7 @@ function collectionNameSearchRank(name, rawQuery) {
   // Short or multiword queries must never fuzzy-match arbitrary labels.
   if(query.length<6||query.includes(' '))return 0;
   const maxDistance=query.length>=8?2:1;
-  const tokens=value.match(/[\\p{L}\\p{N}]+/gu)||[];
+  const tokens=value.match(/[\p{L}\p{N}]+/gu)||[];
   const withinDistance=word=>{
     if(Math.abs(word.length-query.length)>maxDistance)return false;
     const left=[...query],right=[...word];
