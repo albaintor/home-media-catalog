@@ -3477,9 +3477,25 @@ class Store:
                     or not isinstance(trailers, list) or len(trailers) > 40):
                     rejected.append(work_id)
                     continue
-                if (any(not isinstance(p, dict) or
-                        not isinstance(p.get("name"), str) or
-                        len(p["name"]) > 200 for p in people)
+                poster = item.get("poster")
+                valid_poster = poster is None or (
+                    isinstance(poster, str) and
+                    re.fullmatch(r"https://image\\.tmdb\\.org/t/p/w500/[A-Za-z0-9_.-]{1,150}", poster)
+                )
+                if (not valid_poster
+                    or any(not isinstance(p, dict) or
+                           not isinstance(p.get("name"), str) or
+                           len(p["name"]) > 200 or
+                           not isinstance(p.get("category"), str) or
+                           len(p["category"]) > 40 or
+                           not isinstance(p.get("photos", []), list) or
+                           len(p.get("photos", [])) > 3 or
+                           any(not isinstance(url, str) or
+                               not re.fullmatch(
+                                   r"https://image\\.tmdb\\.org/t/p/w185/[A-Za-z0-9_.-]{1,150}",
+                                   url
+                               ) for url in p.get("photos", []))
+                           for p in people)
                     or any(not isinstance(url, str) or
                            len(url) > 255 or not youtube_url(url) for url in trailers)):
                     rejected.append(work_id)
@@ -3523,9 +3539,21 @@ class Store:
                     ))
                 if not payload.get("tmdb_id"):
                     payload["tmdb_id"] = tmdb_id
+                if poster and not payload.get("poster"):
+                    payload["poster"] = poster
+                # An exact IMDb match established the work's canonical identity;
+                # retain its new TMDB identifier for future direct lookups.
+                if not known_tmdb and isinstance(imdb_id, str) and imdb_id in known_imdb:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO identifiers(work_id,kind,namespace,value)"
+                        " VALUES(?,?,'tmdb',?)", (work_id, row["kind"], tmdb_id)
+                    )
                 if payload == old:
                     unchanged.append(work_id)
                     continue
+                missing_poster = not json.loads(conn.execute(
+                    "SELECT poster FROM works WHERE id=?", (work_id,)
+                ).fetchone()["poster"] or "[]")
                 conn.execute(
                     "INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?) "
                     "ON CONFLICT(work_id) DO UPDATE SET "
@@ -3533,6 +3561,22 @@ class Store:
                     (work_id, encode(payload), now()),
                 )
                 self._rebuild(conn, work_id)
+                if missing_poster and json.loads(conn.execute(
+                    "SELECT poster FROM works WHERE id=?", (work_id,)
+                ).fetchone()["poster"] or "[]"):
+                    conn.execute(
+                        "UPDATE collections SET revision=revision+1 WHERE is_manual=1 "
+                        "AND id IN (SELECT collection_id FROM collection_items "
+                        "WHERE work_id=?)", (work_id,)
+                    )
+                    conn.execute(
+                        "UPDATE lists SET revision=revision+1 WHERE id IN "
+                        "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,)
+                    )
+                    conn.execute(
+                        "INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
+                        (work_id, now()),
+                    )
                 accepted.append(work_id)
         return {"accepted": accepted, "unchanged": unchanged, "rejected": rejected}
 
