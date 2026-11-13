@@ -208,6 +208,9 @@ class MediaSummary(BaseModel):
     # Filled only for a local cast/crew search; omitted roles mean no known
     # character/job, not that the person has no credit for the title.
     matched_roles: list[str] = Field(default_factory=list)
+    # Compact credit-name index for on-device advanced search. This avoids
+    # fetching each film's complete cast and crew while searching offline.
+    search_people: list[str] = Field(default_factory=list)
     artwork: ArtworkLinks
 
 
