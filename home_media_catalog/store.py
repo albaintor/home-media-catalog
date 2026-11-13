@@ -3480,7 +3480,7 @@ class Store:
                 poster = item.get("poster")
                 valid_poster = poster is None or (
                     isinstance(poster, str) and
-                    re.fullmatch(r"https://image\\.tmdb\\.org/t/p/w500/[A-Za-z0-9_.-]{1,150}", poster)
+                    re.fullmatch(r"https://image\.tmdb\.org/t/p/w500/[A-Za-z0-9_.-]{1,150}", poster)
                 )
                 if (not valid_poster
                     or any(not isinstance(p, dict) or
@@ -3492,7 +3492,7 @@ class Store:
                            len(p.get("photos", [])) > 3 or
                            any(not isinstance(url, str) or
                                not re.fullmatch(
-                                   r"https://image\\.tmdb\\.org/t/p/w185/[A-Za-z0-9_.-]{1,150}",
+                                   r"https://image\.tmdb\.org/t/p/w185/[A-Za-z0-9_.-]{1,150}",
                                    url
                                ) for url in p.get("photos", []))
                            for p in people)
