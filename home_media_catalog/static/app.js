@@ -1288,7 +1288,7 @@ function collectionGroups(items) {
     .filter(c=>!c.is_manual&&c.has_manual_overlap)
     .map(c=>collectionSelectionKey(c.name)));
   const forcedStandalone=new Set();
-  const chosen=new Set(state.collections.map(collectionSelectionKey));
+  const chosen=new Set((state.collections||[]).map(collectionSelectionKey));
   const isChosen=name=>!chosen.size||chosen.has(collectionSelectionKey(name));
   // An exact collection-name match takes precedence over a partial name
   // match. Otherwise only the indexed names containing the query qualify.
