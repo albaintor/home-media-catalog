@@ -169,95 +169,6 @@ for (const merge of [false,true]) {
     subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
 
 
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
-def test_external_overlap_hides_whole_group_and_preserves_every_work():
-    """An internal assignment suppresses the full imported group, not its other films."""
-    source = r"""
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const src = fs.readFileSync(process.argv[1], 'utf8');
-const helpers = src.slice(src.indexOf('const nonSagaCollections'),
-    src.indexOf('let filtersRestored=false'));
-const funcs = src.slice(src.indexOf('function collectionMetric('),
-    src.indexOf('function collectionArtwork('));
-const state = {
-  mergeEquivalentCollections:true, order:'asc', collections:[],
-  manualCollections:[{id:'manual-favourites',name:'Favourites',is_manual:true,item_count:1}],
-  internalCollectionsOnly:false,
-  facets:{collections:['Batman','Marvel','Solo Saga']},
-  indexedCollections:[
-    {id:'ext-batman',name:'Batman',item_count:2,is_manual:false,has_manual_overlap:true},
-    {id:'ext-marvel',name:'Marvel',item_count:2,is_manual:false,has_manual_overlap:false},
-    {id:'ext-solo',name:'Solo Saga',item_count:1,is_manual:false,has_manual_overlap:false}
-  ]
-};
-const $ = id => ({value:id==='search'?'':'title'});
-const {collectionGroups}=Function('state','
-    """The grid uses a persisted full collection mosaic instead of partial pages."""
-    source = r"""
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const src = fs.readFileSync(process.argv[1], 'utf8');
-const helpers = src.slice(src.indexOf('const nonSagaCollections'),
-    src.indexOf('let filtersRestored=false'));
-const funcs = src.slice(src.indexOf('function collectionMetric('),
-    src.indexOf('function renderCards('));
-const state = {
-  mergeEquivalentCollections:false, order:'asc', collections:[],
-  manualCollections:[], internalCollectionsOnly:false,
-  indexedCollections:[{
-    id:'collection-1',name:'Chronology',item_count:3,is_manual:false,
-    artwork:'/api/v1/collections/collection-1/thumbnails/7.jpg?layout=4'
-  }]
-};
-const $ = () => ({value:'title'});
-const api = Function('state','$','displayLocale','esc','url',
-  helpers+'\n'+funcs+'\nreturn {collectionGroups,collectionMosaicItems,collectionArtwork};'
-)(state,$,()=> 'fr',x=>x,x=>x);
-const media = [
- {id:'new',title:'New',year:2020,collections:['Chronology'],artwork:{poster:'new.jpg'}},
- {id:'old',title:'Old',year:1980,collections:['Chronology'],artwork:{poster:'old.jpg'}},
- {id:'mid',title:'Middle',year:2005,collections:['Chronology'],artwork:{poster:'mid.jpg'}}
-];
-const group = api.collectionGroups(media).find(c=>c.title==='Chronology');
-assert.equal(group.itemCount,3);
-assert.equal(group.artwork,state.indexedCollections[0].artwork);
-assert.deepEqual(api.collectionMosaicItems(media).map(m=>m.year),[1980,2005,2020]);
-const markup=api.collectionArtwork(group.items,group.artwork,group.itemCount);
-assert.ok(markup.includes('/thumbnails/7.jpg?layout=4'));
-assert.ok(!markup.includes('new.jpg'));
-assert.ok(!markup.includes('old.jpg'));
-"""
-    subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
-,'displayLocale',
-  helpers+'\n'+funcs+'\nreturn {collectionGroups};')(state,$,()=> 'fr');
-const media=[
-  {id:'a',title:'A',collections:['Favourites'],manual_collection_ids:['manual-favourites']},
-  {id:'b',title:'B',collections:['Batman']},
-  {id:'c',title:'C',collections:['Batman','Marvel']},
-  {id:'d',title:'D',collections:['Marvel']},
-  {id:'e',title:'E',collections:['Marvel']},
-  {id:'f',title:'F',collections:['Solo Saga']},
-  {id:'g',title:'G',collections:[]}
-];
-for(const merge of [true,false]){
-  state.mergeEquivalentCollections=merge;
-  const groups=collectionGroups(media);
-  assert.ok(!groups.some(g=>g.title==='Batman'));
-  assert.deepEqual(groups.find(g=>g.id==='manual-favourites').items.map(i=>i.id),['a']);
-  assert.deepEqual(groups.find(g=>g.title==='Marvel').items.map(i=>i.id).sort(),['d','e']);
-  assert.ok(groups.some(g=>g.id==='standalone:b'));
-  assert.ok(groups.some(g=>g.id==='standalone:c'));
-  assert.ok(groups.some(g=>g.id==='standalone:g'));
-  assert.equal(groups.find(g=>g.title==='Solo Saga').items.length,1);
-  assert.deepEqual([...new Set(groups.flatMap(g=>g.items.map(i=>i.id)))].sort(),
-    media.map(i=>i.id).sort());
-}
-"""
-    subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
-
-
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
 def test_collection_cover_prefers_server_revision_and_orders_fallback_by_year():
     """The grid uses a persisted full collection mosaic instead of partial pages."""
@@ -294,5 +205,45 @@ const markup=api.collectionArtwork(group.items,group.artwork,group.itemCount);
 assert.ok(markup.includes('/thumbnails/7.jpg?layout=4'));
 assert.ok(!markup.includes('new.jpg'));
 assert.ok(!markup.includes('old.jpg'));
+"""
+    subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_internal_overlap_preserves_all_grouped_media():
+    """Hide overlapping imported groups, retaining their works as media cards."""
+    source = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs');
+const src=fs.readFileSync(process.argv[1],'utf8');
+const helpers=src.slice(src.indexOf('const nonSagaCollections'),src.indexOf('let filtersRestored=false'));
+const funcs=src.slice(src.indexOf('function collectionMetric('),src.indexOf('function collectionArtwork('));
+const state={
+  mergeEquivalentCollections:true,order:'asc',collections:[],
+  manualCollections:[{id:'manual-faves',name:'Favourites',is_manual:true,item_count:1}],
+  internalCollectionsOnly:false,facets:{collections:['Batman','Marvel']},
+  indexedCollections:[
+    {id:'bat',name:'Batman',is_manual:false,has_manual_overlap:true,item_count:2},
+    {id:'mar',name:'Marvel',is_manual:false,has_manual_overlap:false,item_count:2}]
+};
+const $=id=>({value:id==='search'?'':'title'});
+const {collectionGroups}=Function('state','$','displayLocale',
+  helpers+'\n'+funcs+'\nreturn {collectionGroups};')(state,$,()=> 'fr');
+const media=[
+  {id:'a',title:'A',manual_collection_ids:['manual-faves'],collections:['Favourites']},
+  {id:'b',title:'B',collections:['Batman']},
+  {id:'c',title:'C',collections:['Batman','Marvel']},
+  {id:'d',title:'D',collections:['Marvel']},
+  {id:'e',title:'E',collections:['Marvel']}
+];
+for(const merge of [true,false]){
+  state.mergeEquivalentCollections=merge;
+  const groups=collectionGroups(media);
+  assert.ok(!groups.some(g=>g.title==='Batman'));
+  assert.ok(groups.some(g=>g.id==='standalone:b'));
+  assert.ok(groups.some(g=>g.id==='standalone:c'));
+  assert.equal(groups.find(g=>g.id==='manual-faves').items.length,1);
+  assert.deepEqual([...new Set(groups.flatMap(g=>g.items.map(i=>i.id)))].sort(),
+    media.map(i=>i.id).sort());
+}
 """
     subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
