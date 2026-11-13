@@ -55,6 +55,30 @@ def test_manual_collection_is_prioritized_and_survives_imports(store):
     assert store.media()["total"] == 3
 
 
+
+def test_multiple_manual_memberships_and_external_overlap_flag(store):
+    source, records, ids = _seed(store)
+    first = store.save_manual_collection("Favourites")
+    second = store.save_manual_collection("To rewatch")
+    movie_id = ids["Film A"]
+    assert store.add_manual_collection_items(first["id"], [movie_id])["added"] == 1
+    assert store.add_manual_collection_items(second["id"], [movie_id])["added"] == 1
+
+    grouped = {c["name"]: c for c in store.collection_index()}
+    assert grouped["Kodi Saga"]["has_manual_overlap"] is True
+    assert grouped["Other Saga"]["has_manual_overlap"] is False
+    assert grouped["Kodi Saga"]["item_count"] == 1
+    assert grouped["Favourites"]["item_count"] == 1
+    assert grouped["To rewatch"]["item_count"] == 1
+
+    summary = next(row for row in store.media()["items"] if row["id"] == movie_id)
+    assert set(summary["manual_collection_ids"]) == {first["id"], second["id"]}
+    assert set(summary["collections"]) == {"Favourites", "To rewatch"}
+    assert store.media()["total"] == 3
+    assert store.media(collection_id=first["id"])["total"] == 1
+    assert store.media(collection_id=second["id"])["total"] == 1
+
+
 def test_manual_collection_endpoints_and_permissions(client, admin):
     store = client.app.state.store
     _, _, ids = _seed(store)
