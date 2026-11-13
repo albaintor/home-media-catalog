@@ -268,9 +268,9 @@ async def lookup_disc_barcode(value: str) -> dict:
 def is_multi_season_boxset(title: str) -> bool:
     """Ambiguous complete-series boxes must not silently become season 1."""
     return bool(re.search(
-        r"(?i)\\b(?:complete\\s+series|complete\\s+seasons?|int[eé]grale|"
-        r"seasons?\\s*\\d{1,3}\\s*[-–/&+]\\s*\\d{1,3}|"
-        r"saisons?\\s*\\d{1,3}\\s*[-–/&+]\\s*\\d{1,3})\\b",
+        r"(?i)\b(?:complete\s+series|complete\s+seasons?|int[eé]grale|"
+        r"seasons?\s*\d{1,3}\s*[-–/&+]\s*\d{1,3}|"
+        r"saisons?\s*\d{1,3}\s*[-–/&+]\s*\d{1,3})\b",
         title or "",
     ))
 
