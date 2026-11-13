@@ -1,6 +1,7 @@
 """Versioned REST API consumed identically by the web UI and native clients."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -804,6 +805,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tmdb_wakeup.set()
 
     sync.on_catalog_changed = on_catalog_changed
+
+    def tmdb_key_fingerprint() -> str | None:
+        token = settings.tmdb_api_token.strip().removeprefix("Bearer ").strip()
+        return hashlib.sha256(token.encode("utf-8")).hexdigest() if token else None
+
+    @app.get(
+        API + "/catalogue/enrichment/coordination",
+        tags=["Enrichment"],
+        dependencies=[Depends(authenticated)],
+    )
+    def enrichment_coordination():
+        """Only clients using this same TMDB credential share its cooldown."""
+        state = store.tmdb_retry_state()
+        return {
+            "key_fingerprint": tmdb_key_fingerprint(),
+            "retry_at": state.get("retry_at"),
+            "last_error": state.get("last_error"),
+        }
+
+    @app.post(
+        API + "/catalogue/enrichment/coordination",
+        tags=["Enrichment"],
+        dependencies=[Depends(writable)],
+    )
+    async def report_device_tmdb_rate_limit(request: Request):
+        """Merge a device's 429 Retry-After monotonically for the same key.
+
+        Clients with different credentials must not throttle one another.
+        A stale device notification can never shorten the server deadline.
+        """
+        data = await request.json()
+        if not isinstance(data, dict):
+            raise HTTPException(422, "Invalid TMDB coordination body.")
+        fingerprint = data.get("key_fingerprint")
+        expected = tmdb_key_fingerprint()
+        if not expected or not isinstance(fingerprint, str) or not secure_equal(
+            fingerprint, expected
+        ):
+            return {"shared": False, "retry_at": None}
+        requested = data.get("retry_at")
+        if not isinstance(requested, str):
+            raise HTTPException(422, "Invalid retry_at.")
+        try:
+            deadline = datetime.fromisoformat(requested.replace("Z", "+00:00"))
+            if deadline.tzinfo is None:
+                raise ValueError("timezone required")
+        except ValueError as exc:
+            raise HTTPException(422, "Invalid retry_at timestamp.") from exc
+        now_at = datetime.now(UTC)
+        if deadline <= now_at:
+            return {"shared": True, "retry_at": store.tmdb_retry_state().get("retry_at")}
+        # Do not let a faulty client impose an unbounded pause.
+        if deadline > now_at + timedelta(hours=24):
+            raise HTTPException(422, "Retry deadline exceeds 24 hours.")
+        async with enrichment_lock:
+            state = await asyncio.to_thread(store.tmdb_retry_state)
+            current = state.get("retry_at")
+            if current:
+                try:
+                    deadline = max(deadline, datetime.fromisoformat(current))
+                except (ValueError, TypeError):
+                    pass
+            state["retry_at"] = deadline.isoformat()
+            state["last_error"] = "TMDB HTTP 429 received by paired iOS device."
+            await asyncio.to_thread(store.save_tmdb_retry_state, state)
+            return {"shared": True, "retry_at": state["retry_at"]}
+
+    @app.post(
+        API + "/catalogue/enrichment/device",
+        tags=["Enrichment"],
+        dependencies=[Depends(writable)],
+    )
+    async def publish_device_tmdb_enrichment(request: Request):
+        """Accept pending iOS metadata without importing physical editions.
+
+        Only canonical works with matching provider identities can be changed.
+        The server merges rather than replacing previously enriched metadata.
+        """
+        data = await request.json()
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            raise HTTPException(422, "Expected an items array.")
+        try:
+            outcome = await asyncio.to_thread(store.merge_device_tmdb_enrichment, items)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if outcome["accepted"]:
+            start_ai_index()
+        return outcome
 
     @app.get(
         API + "/catalogue/enrichment/revisions",
