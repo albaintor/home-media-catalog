@@ -72,6 +72,7 @@ from .internal_catalog import (
     is_multi_season_boxset,
     tmdb_physical_season,
     tmdb_series_season_profile,
+    tmdb_season_profile_from_identifiers,
 )
 from .list_thumbnails import CollectionThumbnails, ListThumbnails
 from .models import (
@@ -1514,11 +1515,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tags=["Catalogue"],
         dependencies=[Depends(authenticated)],
     )
-    def media_seasons(media_id: str):
-        """Navigate Kodi episodes and CLZ physical seasons, even without episode files."""
-        result = store.seasons(media_id)
+    async def media_seasons(media_id: str):
+        """Navigate Kodi episodes and physical discs, including old CLZ imports."""
+        result = await asyncio.to_thread(store.seasons, media_id)
         if result is None:
             raise HTTPException(404, "Unknown TV show.")
+        if (not any(row["owned_physical"] for row in result)
+                and settings.tmdb_api_token.strip()
+                and await asyncio.to_thread(store.has_legacy_clz_single_season, media_id)):
+            detail = await asyncio.to_thread(store.detail, media_id)
+            identifiers = (detail or {}).get("identifiers") or {}
+            try:
+                profile = await tmdb_season_profile_from_identifiers(
+                    identifiers.get("tmdb") or [],
+                    identifiers.get("imdb") or [],
+                    settings.tmdb_api_token,
+                )
+                if profile and profile["single_season"]:
+                    changed = await asyncio.to_thread(
+                        store.repair_legacy_clz_single_season,
+                        media_id, profile.get("episode_count"),
+                    )
+                    if changed:
+                        result = await asyncio.to_thread(store.seasons, media_id)
+            except (ConnectorError, ValueError):
+                # A provider outage must not break the regular season listing.
+                pass
         return result
 
     @app.get(
