@@ -3206,7 +3206,12 @@ class Store:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT c.id,c.name,c.revision,c.is_manual,COUNT(ci.work_id) item_count, "
-                "MIN(ci.work_id) AS sole_work_id "
+                "MIN(ci.work_id) AS sole_work_id, "
+                "CASE WHEN c.is_manual=0 AND EXISTS ("
+                "SELECT 1 FROM collection_items ext "
+                "JOIN collection_items mi ON mi.work_id=ext.work_id "
+                "JOIN collections mc ON mc.id=mi.collection_id AND mc.is_manual=1 "
+                "WHERE ext.collection_id=c.id) THEN 1 ELSE 0 END AS has_manual_overlap "
                 "FROM collections c LEFT JOIN collection_items ci "
                 "ON ci.collection_id=c.id AND (c.is_manual=1 OR NOT EXISTS("
                 "SELECT 1 FROM collection_items mi "
@@ -3242,6 +3247,7 @@ class Store:
             for item in result:
                 sole_id = item.pop("sole_work_id", None)
                 item["is_manual"] = bool(item["is_manual"])
+                item["has_manual_overlap"] = bool(item.get("has_manual_overlap", False))
                 item["single_media"] = (
                     single_items.get(sole_id) if item["item_count"] == 1 else None
                 )
