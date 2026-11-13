@@ -3452,6 +3452,90 @@ class Store:
         return [{"media_id": row["work_id"], "updated_at": row["updated_at"]}
                 for row in rows]
 
+    def merge_device_tmdb_enrichment(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Merge authenticated device enrichment by canonical work identity.
+
+        Never trust a device's local UUID as evidence of a TMDB match: an
+        existing IMDb or TMDB identifier must agree. Do not replace complete
+        server metadata with older or partial local responses.
+        """
+        if not 1 <= len(items) <= 100:
+            raise ValueError("Supply between 1 and 100 enriched media items.")
+        accepted, unchanged, rejected = [], [], []
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for item in items:
+                work_id = item.get("media_id")
+                tmdb_id = item.get("tmdb_id")
+                imdb_id = item.get("imdb_id")
+                people = item.get("people")
+                trailers = item.get("trailers")
+                if (not isinstance(work_id, str) or len(work_id) > 128
+                    or not isinstance(tmdb_id, str) or not tmdb_id.isdigit()
+                    or len(tmdb_id) > 24
+                    or not isinstance(people, list) or len(people) > 300
+                    or not isinstance(trailers, list) or len(trailers) > 40):
+                    rejected.append(work_id)
+                    continue
+                if (any(not isinstance(p, dict) or
+                        not isinstance(p.get("name"), str) or
+                        len(p["name"]) > 200 for p in people)
+                    or any(not isinstance(url, str) or
+                           len(url) > 255 or not youtube_url(url) for url in trailers)):
+                    rejected.append(work_id)
+                    continue
+                row = conn.execute(
+                    "SELECT kind FROM works WHERE id=?", (work_id,)
+                ).fetchone()
+                if not row or row["kind"] not in ("movie", "tvshow"):
+                    rejected.append(work_id)
+                    continue
+                identifiers = {
+                    (r["namespace"], r["value"]) for r in conn.execute(
+                        "SELECT namespace,value FROM identifiers WHERE work_id=?",
+                        (work_id,)
+                    )
+                }
+                known_tmdb = {v for ns, v in identifiers if ns == "tmdb"}
+                known_imdb = {v for ns, v in identifiers if ns == "imdb"}
+                identity_ok = (
+                    (not known_tmdb or tmdb_id in known_tmdb) and
+                    ((tmdb_id in known_tmdb) or
+                     (isinstance(imdb_id, str) and imdb_id in known_imdb))
+                )
+                if not identity_ok:
+                    rejected.append(work_id)
+                    continue
+                cached = conn.execute(
+                    "SELECT payload FROM enrichment WHERE work_id=?", (work_id,)
+                ).fetchone()
+                old = json.loads(cached["payload"]) if cached else {}
+                payload = dict(old)
+                # Keep existing, rich server people: enrichments from another
+                # device may be partial or generated using a different locale.
+                if not payload.get("people"):
+                    payload["people"] = people
+                if "trailers" not in payload:
+                    payload["trailers"] = list(dict.fromkeys(trailers))
+                else:
+                    payload["trailers"] = list(dict.fromkeys(
+                        [*payload["trailers"], *trailers]
+                    ))
+                if not payload.get("tmdb_id"):
+                    payload["tmdb_id"] = tmdb_id
+                if payload == old:
+                    unchanged.append(work_id)
+                    continue
+                conn.execute(
+                    "INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?) "
+                    "ON CONFLICT(work_id) DO UPDATE SET "
+                    "payload=excluded.payload,updated_at=excluded.updated_at",
+                    (work_id, encode(payload), now()),
+                )
+                self._rebuild(conn, work_id)
+                accepted.append(work_id)
+        return {"accepted": accepted, "unchanged": unchanged, "rejected": rejected}
+
     def tmdb_retry_state(self) -> dict[str, Any]:
         """Persistent queue checkpoints, including a provider-wide 429 cooldown."""
         with self.connect() as conn:
