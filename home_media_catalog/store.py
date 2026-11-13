@@ -1891,6 +1891,23 @@ class Store:
         ids = [row["id"] for row in rows]
         by_work = cls._sources_for_works(conn, ids)
         collection_sources = cls._collection_sources_for_works(conn, ids)
+        # Replicate only credit names, not full cast/crew payloads, so native
+        # local-first advanced search can find directors and actors offline.
+        searchable_people: dict[str, set[str]] = defaultdict(set)
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            for credit in conn.execute(
+                "SELECT work_id,name_fold FROM work_person_names "
+                f"WHERE work_id IN ({placeholders})", ids
+            ):
+                searchable_people[credit["work_id"]].add(credit["name_fold"])
+            # Plain-text director fields have a role entry even when the
+            # underlying import did not provide structured person records.
+            for credit in conn.execute(
+                "SELECT work_id,name_fold FROM work_person_roles "
+                f"WHERE category='director' AND work_id IN ({placeholders})", ids
+            ):
+                searchable_people[credit["work_id"]].add(credit["name_fold"])
         # Manual memberships supersede imported labels for both grouping and filters.
         manual_memberships: dict[str, list[tuple[str, str]]] = defaultdict(list)
         if ids:
@@ -1930,6 +1947,7 @@ class Store:
             )
             item.update(progress.get(row["id"], {}))
             item["media_sources"] = by_work.get(row["id"], [])
+            item["search_people"] = sorted(searchable_people.get(row["id"], set()))
             manual = manual_memberships.get(row["id"])
             if manual:
                 item["collections"] = [name for _, name in manual]
