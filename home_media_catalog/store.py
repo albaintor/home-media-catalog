@@ -2512,6 +2512,67 @@ class Store:
                 **({"target_offset": target_offset} if target_offset is not None else {}),
             }
 
+    @staticmethod
+    def _legacy_clz_single_season_record(conn: sqlite3.Connection, parent_id: str):
+        """Select only an unnumbered CLZ series disc with no competing disc.
+
+        Old importer versions discarded the physical season for single-season
+        series such as Hawkeye. We do not infer from a title or a barcode: this
+        candidate is repaired only after a verified TMDB single-season lookup.
+        """
+        from .internal_catalog import is_multi_season_boxset
+
+        show = conn.execute("SELECT title,kind FROM works WHERE id=?", (parent_id,)).fetchone()
+        if not show or show["kind"] != "tvshow":
+            return None
+        editions = conn.execute(
+            "SELECT r.id,r.payload FROM records r JOIN sources s ON s.id=r.source_id "
+            "WHERE r.work_id=? AND s.type='clz'", (parent_id,)
+        ).fetchall()
+        if len(editions) != 1:
+            return None
+        record = editions[0]
+        payload = json.loads(record["payload"])
+        metadata = payload.get("metadata") or {}
+        if not isinstance(metadata, dict) or metadata.get("physical_season") is not None:
+            return None
+        series = metadata.get("series_title")
+        if not isinstance(series, str) or not series.strip():
+            return None
+        # The export must explicitly identify a TV series; never attach an
+        # unrelated film with an identical title to this physical season.
+        if payload.get("kind") != "tvshow" or fold(series) != fold(show["title"]):
+            return None
+        if is_multi_season_boxset(metadata.get("physical_title") or payload.get("title") or ""):
+            return None
+        return record, payload, metadata
+
+    def has_legacy_clz_single_season(self, parent_id: str) -> bool:
+        with self.connect() as conn:
+            return self._legacy_clz_single_season_record(conn, parent_id) is not None
+
+    def repair_legacy_clz_single_season(
+        self, parent_id: str, episode_count: int | None = None,
+    ) -> bool:
+        """Persist a season-1 tag only after the caller verifies TMDB cardinality."""
+        with self.connect() as conn:
+            candidate = self._legacy_clz_single_season_record(conn, parent_id)
+            if candidate is None:
+                return False
+            record, payload, metadata = candidate
+            updated = dict(metadata)
+            updated["physical_season"] = 1
+            updated["physical_title"] = payload.get("title")
+            updated["physical_episode_count"] = max(
+                int(metadata.get("physical_episode_count") or 0),
+                episode_count if isinstance(episode_count, int) and episode_count >= 0 else 0,
+            )
+            updated["physical_year"] = metadata.get("physical_year") or payload.get("year")
+            payload["metadata"] = updated
+            conn.execute("UPDATE records SET payload=? WHERE id=?",
+                         (encode(payload), record["id"]))
+            return True
+
     def seasons(self, parent_id: str) -> list[dict[str, Any]] | None:
         """Combine imported Kodi episodes with individually owned CLZ seasons."""
         with self.connect() as conn:
