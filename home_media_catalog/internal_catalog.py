@@ -265,6 +265,16 @@ async def lookup_disc_barcode(value: str) -> dict:
     return answer
 
 
+def is_multi_season_boxset(title: str) -> bool:
+    """Ambiguous complete-series boxes must not silently become season 1."""
+    return bool(re.search(
+        r"(?i)\\b(?:complete\\s+series|complete\\s+seasons?|int[eé]grale|"
+        r"seasons?\\s*\\d{1,3}\\s*[-–/&+]\\s*\\d{1,3}|"
+        r"saisons?\\s*\\d{1,3}\\s*[-–/&+]\\s*\\d{1,3})\\b",
+        title or "",
+    ))
+
+
 # Only explicit season labels are considered. A barcode identifies a release,
 # never a season on its own; box sets such as "Seasons 1-3" remain unassigned.
 _SEASON_LABEL = re.compile(
@@ -315,8 +325,14 @@ async def tmdb_series_season_profile(tmdb_id: str, token: str) -> dict:
     count = data.get("number_of_seasons")
     # Never infer if TMDB returned contradictory or incomplete season data.
     single = count == 1 and len(regular) == 1 and regular[0]["season_number"] == 1
-    return {"number_of_seasons": count if isinstance(count, int) else None,
-            "single_season": single}
+    entry = regular[0] if single else {}
+    return {
+        "number_of_seasons": count if isinstance(count, int) else None,
+        "single_season": single,
+        "episode_count": entry.get("episode_count") if isinstance(entry.get("episode_count"), int) else None,
+        "poster_path": entry.get("poster_path") if isinstance(entry.get("poster_path"), str)
+                       and re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", entry["poster_path"]) else None,
+    }
 
 
 async def tmdb_physical_season(tmdb_id: str, season: int, token: str) -> dict:
