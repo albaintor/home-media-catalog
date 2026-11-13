@@ -958,12 +958,12 @@ def test_clz_unnumbered_first_season_with_episode_list(store):
 
 def test_clz_unnumbered_complete_series_is_not_assigned_season_one():
     xml = (
-        "<collectorz><data><movieinfo><movielist><movie>"
-        "<hash>complete</hash><title>Example Complete Series</title>"
-        "<istvseries boolvalue='1'>Yes</istvseries>"
-        "<episodes><episode/><episode/></episodes>"
-        "</movie></movielist></movieinfo></data></collectorz>"
-    ).encode()
+        b"<collectorz><data><movieinfo><movielist><movie>"
+        b"<hash>complete</hash><title>Example Complete Series</title>"
+        b"<istvseries boolvalue='1'>Yes</istvseries>"
+        b"<episodes><episode/><episode/></episodes>"
+        b"</movie></movielist></movieinfo></data></collectorz>"
+    )
     record = parse_clz(xml)[0]
     assert record.metadata["physical_season"] is None
     assert record.metadata["physical_episode_count"] == 0
