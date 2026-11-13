@@ -1226,6 +1226,22 @@ function currentParams(offset=0) {
   }
   if(state.searchScopeOverride??state.deepSearch) params.set('deep_search','true');
   if (state.recent) params.set('recent_days','30');
+  // Search collection names before matching media metadata. The original
+  // imported name may have a typo, and member titles need not contain it.
+  // This applies to both grouped and ungrouped catalogue views.
+  const collectionQuery=params.get('q')?.trim();
+  if(collectionQuery&&!state.personSearch&&!state.collections.length) {
+    const indexed=(state.indexedCollections||[]).filter(c=>
+      !c.has_manual_overlap&&(c.is_manual||!state.internalCollectionsOnly&&isSagaCollection(c.name)));
+    const bestRank=Math.max(0,...indexed.map(c=>collectionNameSearchRank(c.name,collectionQuery)));
+    if(bestRank>0) {
+      const matches=indexed.filter(c=>collectionNameSearchRank(c.name,collectionQuery)===bestRank);
+      params.delete('q');
+      params.delete('deep_search');
+      if(matches.length===1)params.set('collection_id',matches[0].id);
+      else for(const match of matches.slice(0,40))params.append('collection',match.name);
+    }
+  }
   return params;
 }
 function updateFilterState() {
