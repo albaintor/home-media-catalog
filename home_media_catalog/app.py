@@ -69,7 +69,9 @@ from .internal_catalog import (
     find_tmdb,
     lookup_disc_barcode,
     physical_season_in_title,
+    is_multi_season_boxset,
     tmdb_physical_season,
+    tmdb_series_season_profile,
 )
 from .list_thumbnails import CollectionThumbnails, ListThumbnails
 from .models import (
@@ -1232,6 +1234,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(502, str(exc)) from exc
 
     @app.get(
+        API + "/internal/tv/{tmdb_id}/season-profile",
+        tags=["Catalogue"],
+        dependencies=[Depends(authenticated)],
+    )
+    async def internal_tmdb_season_profile(tmdb_id: str):
+        if not settings.tmdb_api_token.strip():
+            raise HTTPException(503, "TMDB is not configured.")
+        try:
+            return await tmdb_series_season_profile(tmdb_id, settings.tmdb_api_token)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except ConnectorError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @app.get(
         API + "/internal/tv/{tmdb_id}/seasons/{season}",
         tags=["Catalogue"],
         dependencies=[Depends(authenticated)],
@@ -1260,6 +1277,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 season, _ = physical_season_in_title(data.physical_title or data.title)
             if season is None:
                 season, _ = physical_season_in_title(data.title)
+            if (season is None and data.tmdb_id and settings.tmdb_api_token.strip()
+                    and not is_multi_season_boxset(data.physical_title or data.title)):
+                # A barcode does not imply Season 1. Assign it only if the
+                # provider confirms that this TV series has exactly one season.
+                try:
+                    profile = await tmdb_series_season_profile(
+                        data.tmdb_id, settings.tmdb_api_token)
+                    if profile["single_season"]:
+                        season = 1
+                        edition["physical_episode_count"] = (
+                            edition.get("physical_episode_count") or
+                            profile.get("episode_count")
+                        )
+                        edition["season_poster_path"] = (
+                            edition.get("season_poster_path") or
+                            profile.get("poster_path")
+                        )
+                except (ValueError, ConnectorError):
+                    pass
             if season is not None:
                 edition["physical_season"] = season
                 edition["physical_title"] = data.physical_title or data.title
