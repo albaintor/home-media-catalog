@@ -523,9 +523,6 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 /* Settings: accessible categories and a compact, horizontally scrollable tab strip. */
 .connection-tab-nav {
   display: flex;
-  position: sticky;
-  top: 0;
-  z-index: 5;
   align-items: center;
   gap: .4rem;
   overflow-x: auto;
