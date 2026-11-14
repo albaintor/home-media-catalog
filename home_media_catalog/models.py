@@ -92,6 +92,7 @@ class CustomTitleInput(StrictModel):
 
 
 class MediaMetadataInput(StrictModel):
+    remove_poster: bool = False
     custom_title: str | None = Field(default=None, max_length=300)
     original_title: str | None = Field(default=None, max_length=300)
     year: int | None = Field(default=None, ge=1870, le=2200)
@@ -489,6 +490,7 @@ class ListOrderInput(StrictModel):
 
 
 class MediaDetail(MediaSummary):
+    has_custom_poster: bool = False
     country: str | None = None
     studios: list[str] = Field(default_factory=list)
     identifiers: dict[str, list[str]]

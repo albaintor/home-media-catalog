@@ -1358,6 +1358,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     async def update_media_metadata(media_id: str, data: MediaMetadataInput):
         changes = data.model_dump(exclude_unset=True, exclude={"poster_jpeg"})
+        if data.remove_poster and data.poster_jpeg:
+            raise HTTPException(422, "Choose either a new poster or removal.")
         if data.poster_jpeg:
             changes["poster"] = await store_internal_poster(media_id, data.poster_jpeg)
         try:
@@ -1366,7 +1368,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Unknown media.") from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        if data.poster_jpeg:
+        if data.poster_jpeg or data.remove_poster:
             await warm_poster_dependents(media_id)
         start_ai_index()
         return media_detail(media_id)

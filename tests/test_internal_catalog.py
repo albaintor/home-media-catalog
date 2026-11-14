@@ -501,3 +501,20 @@ def test_photographed_cover_overrides_tmdb_and_survives_enrichment(store):
     assert store.artwork(work_id, "poster")[0] == photo
     store.save_enrichment(work_id, {"people": [], "trailers": [], "poster": original})
     assert store.artwork(work_id, "poster")[0] == photo
+
+
+def test_remove_custom_poster_restores_provider_or_leaves_no_poster(store):
+    photo = "hmc-poster://" + "b" * 64
+    provider = "https://image.tmdb.org/t/p/w500/original.jpg"
+    first = store.save_internal_media(entry(_poster_reference=photo))
+    work_id = first["id"]
+    assert store.detail(work_id)["has_custom_poster"]
+    store.save_enrichment(work_id, {"people": [], "trailers": [], "poster": provider})
+    store.update_media_metadata(work_id, {"remove_poster": True})
+    assert store.artwork(work_id, "poster") == [provider]
+    assert not store.detail(work_id)["has_custom_poster"]
+    assert store.detail(work_id)["identifiers"]["tmdb"] == ["554433"]
+    other = store.save_internal_media(entry(title="No match", tmdb_id=None, _poster_reference=photo))
+    store.update_media_metadata(other["id"], {"remove_poster": True})
+    assert store.artwork(other["id"], "poster") == []
+    assert not store.detail(other["id"])["has_custom_poster"]

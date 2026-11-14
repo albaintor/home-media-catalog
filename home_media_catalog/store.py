@@ -1055,6 +1055,9 @@ class Store:
                     # An explicitly photographed/selected cover must take
                     # precedence over a TMDB poster, including after refresh.
                     enrichment = self._editor_payload(conn, work_id)
+                    previous = enrichment.get("poster")
+                    if isinstance(previous, str) and not previous.startswith("hmc-poster://"):
+                        enrichment["poster_fallback"] = previous
                     enrichment["poster"] = data["_poster_reference"]
                     self._save_editor_payload(conn, work_id, enrichment)
                     conn.execute(
@@ -1119,8 +1122,31 @@ class Store:
             payload["metadata_overrides"] = overrides
             if "custom_title" in changes:
                 payload["custom_title"] = (changes["custom_title"] or "").strip() or None
-            if changes.get("poster"):
+            if changes.get("remove_poster"):
+                # Imported JPEGs may be stored both as a work override and on
+                # internal edition records. Remove both so a rebuild cannot
+                # silently resurrect the discarded cover.
+                if str(payload.get("poster") or "").startswith("hmc-poster://"):
+                    payload.pop("poster", None)
+                    fallback = payload.pop("poster_fallback", None)
+                    if isinstance(fallback, str) and not fallback.startswith("hmc-poster://"):
+                        payload["poster"] = fallback
+                for record in conn.execute(
+                    "SELECT id,payload FROM records WHERE work_id=?", (work_id,)
+                ).fetchall():
+                    record_payload = json.loads(record["payload"])
+                    posters = record_payload.get("poster") or []
+                    remaining = [p for p in posters if not str(p).startswith("hmc-poster://")]
+                    if remaining != posters:
+                        record_payload["poster"] = remaining
+                        conn.execute("UPDATE records SET payload=? WHERE id=?",
+                                     (encode(record_payload), record["id"]))
+            elif changes.get("poster"):
+                previous = payload.get("poster")
+                if isinstance(previous, str) and not previous.startswith("hmc-poster://"):
+                    payload["poster_fallback"] = previous
                 payload["poster"] = changes["poster"]
+            if changes.get("poster") or changes.get("remove_poster"):
                 conn.execute(
                     "UPDATE collections SET revision=revision+1 WHERE id IN "
                     "(SELECT collection_id FROM collection_items WHERE work_id=?)", (work_id,)
@@ -3246,6 +3272,10 @@ class Store:
                 list(dict.fromkeys(s for e in editions for s in
                      (e["metadata"].get("studios") or []) if isinstance(s, str)))) or [],
             "identifiers": dict(ids),
+            "has_custom_poster": any(
+                isinstance(p, str) and p.startswith("hmc-poster://")
+                for p in json.loads(row["poster"] or "[]")
+            ),
             "editions": editions,
             "people": people,
             "cast": [p for p in people if p["category"] == "cast"],
@@ -3370,6 +3400,10 @@ class Store:
                     if field in old_payload:
                         payload = {**payload, field: old_payload[field]}
                 old_poster = old_payload.get("poster")
+                if old_payload.get("poster_fallback"):
+                    payload = {**payload, "poster_fallback": old_payload["poster_fallback"]}
+                if old_poster and old_poster.startswith("hmc-poster://") and payload.get("poster"):
+                    payload = {**payload, "poster_fallback": payload["poster"]}
                 if old_poster and (old_poster.startswith("hmc-poster://") or not payload.get("poster")):
                     payload = {**payload, "poster": old_poster}
                 # A credits/trailer refresh must not drop downloaded season guides.
