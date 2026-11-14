@@ -382,3 +382,33 @@ def test_tmdb_season_artwork_lookup_uses_season_not_show(monkeypatch):
     monkeypatch.setattr(internal_catalog, "tmdb_connection", connection)
     metadata = asyncio.run(internal_catalog.tmdb_physical_season("82856", 3, "token"))
     assert metadata == {"season": 3, "poster_path": "/s3.jpg", "episode_count": 8}
+
+
+def test_edit_internal_edition_keeps_other_sources_and_identity(client, admin):
+    store = client.app.state.store
+    external = store.save_source({"name": "CLZ", "type": "clz"})["id"]
+    store.apply_snapshot(external, [Record(
+        "disc:edit", "movie", "Internal Example", year=2024,
+        identifiers={"tmdb": "554433"}, formats=["DVD"]
+    )])
+    item = entry()
+    created = client.post("/api/v1/internal/items", headers=admin, json=item)
+    assert created.status_code == 201
+    work_id = created.json()["id"]
+    endpoint = "/api/v1/internal/items/" + item["id"]
+    payload = {"format": "4K Ultra HD Blu-ray", "barcode": "036000291452"}
+    assert client.patch(endpoint, headers={"Authorization": f"Bearer {READ}"},
+                        json=payload).status_code == 403
+    assert client.patch(endpoint, headers=admin, json={**payload,
+                        "barcode": "4006381333932"}).status_code == 422
+    updated = client.patch(endpoint, headers=admin, json=payload)
+    assert updated.status_code == 200, updated.text
+    assert updated.json() == created.json()
+    detail = store.detail(work_id)
+    assert len(detail["editions"]) == 2
+    internal = next(e for e in detail["editions"] if e["source_type"] == "internal")
+    assert internal["external_key"] == item["id"]
+    assert internal["metadata"]["barcode"] == payload["barcode"]
+    assert "DVD" in detail["formats"]
+    assert "Blu-ray" not in detail["formats"]
+    assert "4K Ultra HD Blu-ray" in detail["formats"]

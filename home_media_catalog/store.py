@@ -1060,6 +1060,32 @@ class Store:
             work_id = current["work_id"]
         return {"id": work_id, "item_id": external_key}
 
+    def update_internal_edition(self, external_key: str, disc_format: str,
+                                barcode: str | None) -> dict[str, Any]:
+        """Edit the existing record, retaining its work and edition identities."""
+        from .internal_catalog import valid_barcode
+
+        if barcode and not valid_barcode(barcode):
+            raise ValueError("Invalid barcode check digit.")
+        if disc_format not in ("", "DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray"):
+            raise ValueError("Unsupported disc format.")
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT id,work_id,payload FROM records WHERE source_id='internal' AND external_key=?",
+                (external_key.lower(),),
+            ).fetchone()
+            if row is None:
+                raise KeyError(external_key)
+            payload = json.loads(row["payload"])
+            payload["formats"] = [disc_format] if disc_format else []
+            metadata = payload.get("metadata") or {}
+            metadata["barcode"] = barcode or None
+            payload["metadata"] = metadata
+            conn.execute("UPDATE records SET payload=? WHERE id=?",
+                         (encode(payload), row["id"]))
+            self._rebuild(conn, row["work_id"])
+            return {"id": row["work_id"], "item_id": external_key.lower()}
+
     def delete_internal_media(self, external_key: str) -> None:
         """Only remove the requested internal edition, never external sources."""
         with self.connect() as conn:

@@ -82,6 +82,7 @@ from .models import (
     EpisodeWatchResult,
     ErrorResponse,
     Facets,
+    InternalEditionUpdate,
     InternalMediaInput,
     JobView,
     Kind,
@@ -1323,6 +1324,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # scanned physical edition reuses the same cached TMDB metadata.
         start_ai_index()
         tmdb_wakeup.set()
+        return saved
+
+    @app.patch(
+        API + "/internal/items/{item_id}",
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+    )
+    async def update_internal_edition(item_id: UUID, data: InternalEditionUpdate):
+        try:
+            saved = await asyncio.to_thread(
+                store.update_internal_edition, str(item_id), data.format, data.barcode
+            )
+        except KeyError as exc:
+            raise HTTPException(404, "Internal edition not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        start_ai_index()
         return saved
 
     @app.delete(

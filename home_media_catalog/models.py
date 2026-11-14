@@ -87,6 +87,12 @@ class ManualCollectionItemsInput(StrictModel):
     media_ids: list[str] = Field(min_length=1, max_length=200)
 
 
+class InternalEditionUpdate(StrictModel):
+    """Editable physical properties, without changing the canonical work."""
+    format: Literal["", "DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray"]
+    barcode: str | None = Field(default=None, pattern=r"^[0-9]{8}$|^[0-9]{12,14}$")
+
+
 class InternalMediaInput(StrictModel):
     """One physical edition, identified by a client-generated idempotency UUID."""
     id: str = Field(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
