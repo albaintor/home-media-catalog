@@ -1292,7 +1292,9 @@ class Store:
                                  (row["work_id"], now()))
             else:
                 payload = json.loads(row["payload"])
-            payload["formats"] = [disc_format] if disc_format else []
+            disc_labels = {"DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray", "Blu-ray 4K", "4K UHD"}
+            remaining = [f for f in payload.get("formats", []) if f not in disc_labels]
+            payload["formats"] = list(dict.fromkeys(remaining + ([disc_format] if disc_format else [])))
             metadata = payload.get("metadata") or {}
             metadata["barcode"] = barcode or None
             payload["metadata"] = metadata
