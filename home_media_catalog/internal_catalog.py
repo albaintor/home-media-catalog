@@ -3,6 +3,7 @@
 Works are identified through TMDB separately: a barcode identifies an edition,
 not an IMDb or TMDB film. Public providers cannot cover every retail release.
 """
+import asyncio
 import logging
 import os
 import re
@@ -58,12 +59,17 @@ def barcode_variants(value: str) -> tuple[str, ...]:
     upca = expand_upce(value)
     if upca:
         aliases.extend([upca, "0" + upca])
-    if len(value) == 12:
-        aliases.append("0" + value)
-    elif len(value) == 13 and value.startswith("0"):
-        aliases.append(value[1:])
-    if len(value) == 14 and value.startswith("00"):
-        aliases.append(value[2:])
+    # Padding zeros preserve the GTIN; a nonzero packaging indicator does not.
+    base = upca or value
+    if len(base) == 14 and base.startswith("0"):
+        base = base[1:]
+        aliases.append(base)
+    if len(base) == 13 and base.startswith("0"):
+        aliases.append(base[1:])
+    if len(base) == 12:
+        aliases.append("0" + base)
+    if len(base) in {8, 12, 13}:
+        aliases.append(base.zfill(14))
     return tuple(dict.fromkeys(aliases))
 
 async def find_tmdb(query: str, token: str) -> list[dict]:
@@ -199,69 +205,167 @@ async def _lookup_barcodelookup(value: str, client: httpx.AsyncClient, key: str)
     return _result(value, "barcodelookup", rows)
 
 
+_USER_AGENT = "HomeMediaCatalog/2.6.2 (https://github.com/albaintor/home-media-catalog)"
+_DISC_WORDS = re.compile(
+    r"\b(?:blu[- ]?ray|dvd|uhd|4k|ultra\s*hd|video|disc|disque|film|movie|"
+    r"season|saison|staffel|temporada|steelbook)\b|ブルーレイ|ＤＶＤ",
+    re.IGNORECASE,
+)
+
+
+async def _lookup_upcmdb(value: str, client: httpx.AsyncClient) -> dict | None:
+    response = await client.get(
+        f"https://upcmdb.com/api/v1/lookup/{value}",
+        headers={"Accept": "application/json", "User-Agent": _USER_AGENT},
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict):
+        raise ValueError("Invalid UPCMDB response")
+    item = body.get("data")
+    if body.get("status") != "success" or not isinstance(item, dict):
+        if body.get("status") == "success":
+            raise ValueError("Missing UPCMDB result")
+        return None
+    title = item.get("title")
+    if not isinstance(title, str) or not title.strip():
+        return None
+    fmt = item.get("format")
+    title = title.strip()
+    if isinstance(fmt, str) and fmt.strip() and fmt.casefold() not in title.casefold():
+        title += f" - {fmt.strip()}"
+    return _result(value, "upcmdb", [{
+        "title": title[:300], "category": "Disc",
+        "imdb_id": item.get("imdbID"), "format": fmt,
+    }])
+
+
+async def _lookup_openproductsfacts(value: str, client: httpx.AsyncClient) -> dict | None:
+    response = await client.get(
+        f"https://world.openproductsfacts.org/api/v2/product/{value}.json",
+        params={"fields": "code,product_name,product_name_en,product_name_fr,categories"},
+        headers={"Accept": "application/json", "User-Agent": _USER_AGENT},
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict):
+        raise ValueError("Invalid Open Products Facts response")
+    if body.get("status") == 0:
+        return None
+    item = body.get("product")
+    if not isinstance(item, dict):
+        raise ValueError("Invalid Open Products Facts product")
+    title = item.get("product_name") or item.get("product_name_en") or item.get("product_name_fr")
+    if not isinstance(title, str) or not title.strip():
+        return None
+    # No cross-product image reuse. Generic data must describe a disc.
+    if not _DISC_WORDS.search(title + " " + str(item.get("categories") or "")):
+        return None
+    return _result(value, "openproductsfacts", [{"title": title.strip()[:300], "category": "Disc"}])
+
+
+async def _lookup_wikidata(value: str, client: httpx.AsyncClient) -> dict | None:
+    # Exact indexed GTIN, not a web search or a title guess.
+    values = " ".join(f'"{alias}"' for alias in barcode_variants(value))
+    query = (
+        "SELECT DISTINCT ?item ?itemLabel ?itemDescription WHERE { "
+        f"VALUES ?code {{ {values} }} ?item wdt:P3962 ?code . "
+        'SERVICE wikibase:label { bd:serviceParam wikibase:language "en,fr,de,es,it,ja,ko". } '
+        "} LIMIT 5"
+    )
+    response = await client.get(
+        "https://query.wikidata.org/sparql", params={"query": query, "format": "json"},
+        headers={"Accept": "application/sparql-results+json", "User-Agent": _USER_AGENT},
+    )
+    response.raise_for_status()
+    body = response.json()
+    rows = []
+    for item in body["results"]["bindings"]:
+        title = item.get("itemLabel", {}).get("value", "")
+        description = item.get("itemDescription", {}).get("value", "")
+        if title and _DISC_WORDS.search(title + " " + description):
+            rows.append({"title": title[:300], "category": "Disc"})
+    return _result(value, "wikidata", rows)
+
+
 async def lookup_disc_barcode(value: str) -> dict:
     if not valid_barcode(value):
         raise ValueError("Invalid EAN/UPC/GTIN barcode or check digit.")
+    variants = barcode_variants(value)
+    # Shared cache for unambiguous equivalent UPC/EAN/GTIN representations.
+    cache_key = (expand_upce(value) or value).zfill(14)
     now_time = time.monotonic()
-    cached = _CACHE.get(value)
+    cached = _CACHE.get(cache_key)
     if cached and cached[0] > now_time:
-        return cached[1]
+        return {**cached[1], "barcode": value}
 
     attempted: list[str] = []
     errors: list[str] = []
-    answer = None
-    variants = barcode_variants(value)
-    async with httpx.AsyncClient(timeout=9, trust_env=False, follow_redirects=False) as client:
-        # World-wide product index first, including US UPC and non-French EAN.
-        attempted.append("upcitemdb")
-        try:
-            answer = await _lookup_upcitemdb(value, client)
-            # UPC-E is often stored using its expanded UPC-A equivalent.
-            if answer is None and expand_upce(value):
-                answer = await _lookup_upcitemdb(expand_upce(value), client)
-        except (httpx.HTTPError, ValueError) as exc:
-            errors.append("upcitemdb")
-            _LOG.info("UPCitemdb barcode lookup unavailable: %s", type(exc).__name__)
-
-        # French national bibliography is additive: non-French discs continue
-        # to work via the global provider. Normalize UPC-A -> EAN-13 here.
-        if answer is None:
-            ean13 = next((v for v in variants if len(v) == 13), None)
-            if ean13:
-                attempted.append("bnf")
-                try:
-                    answer = await _lookup_bnf(ean13, client)
-                except (httpx.HTTPError, ParseError, ValueError) as exc:
-                    errors.append("bnf")
-                    _LOG.info("BnF barcode lookup unavailable: %s", type(exc).__name__)
-
-        # Optional paid provider expands coverage without shipping keys in iOS.
-        key = os.getenv("BARCODELOOKUP_API_KEY", "").strip()
-        if answer is None and key:
-            attempted.append("barcodelookup")
+    answers: list[dict] = []
+    upc = next((v for v in variants if len(v) == 12), None)
+    ean = next((v for v in variants if len(v) == 13), None)
+    retail_code = upc or ean or value
+    async with httpx.AsyncClient(timeout=7, trust_env=False, follow_redirects=False) as client:
+        async def run(name, lookup, *args):
             try:
-                answer = await _lookup_barcodelookup(value, client, key)
-            except (httpx.HTTPError, ValueError) as exc:
-                errors.append("barcodelookup")
-                _LOG.info("Barcode Lookup unavailable: %s", type(exc).__name__)
+                return name, await lookup(*args), False
+            except (httpx.HTTPError, ParseError, ValueError, KeyError, TypeError) as exc:
+                _LOG.info("%s barcode lookup unavailable: %s", name, type(exc).__name__)
+                return name, None, True
 
-    if answer is None:
-        answer = {
-            "barcode": value, "found": False, "title": None,
-            "source": None, "items": [],
-        }
-    answer["providers_checked"] = attempted
-    answer["providers_unavailable"] = errors
-    # Do not conflate "not indexed" with "service down"; the UI can show both.
+        async def wave(calls):
+            attempted.extend(call[0] for call in calls)
+            for name, answer, failed in await asyncio.gather(*(run(*call) for call in calls)):
+                if failed:
+                    errors.append(name)
+                if answer:
+                    answers.append(answer)
+
+        # Parallel first wave; BnF remains available for non-French editions.
+        calls = []
+        if upc:
+            calls.append(("upcmdb", _lookup_upcmdb, upc, client))
+        calls.append(("upcitemdb", _lookup_upcitemdb, retail_code, client))
+        if ean:
+            calls.append(("bnf", _lookup_bnf, ean, client))
+        await wave(calls)
+        # Complementary indexes only on a miss, conserving their quotas.
+        if not answers:
+            calls = [
+                ("openproductsfacts", _lookup_openproductsfacts, retail_code, client),
+                ("wikidata", _lookup_wikidata, value, client),
+            ]
+            key = os.getenv("BARCODELOOKUP_API_KEY", "").strip()
+            if key:
+                calls.append(("barcodelookup", _lookup_barcodelookup, retail_code, client, key))
+            await wave(calls)
+
+    # Prefer edition-specific records with format/season evidence, then specialist
+    # sources. Stable sorting makes the winner independent of network timing.
+    priority = {"upcmdb": 3, "bnf": 2, "upcitemdb": 1,
+                "barcodelookup": 1, "openproductsfacts": 0, "wikidata": 0}
+    answers.sort(key=lambda row: (
+        bool(_DISC_WORDS.search(row["title"])),
+        priority.get(row["source"], 0), bool(row.get("image_url")),
+    ), reverse=True)
+    answer = answers[0] if answers else {
+        "found": False, "title": None, "source": None, "items": [],
+    }
+    # Keep the existing response contract, augment with provenance and candidates.
+    answer = {**answer, "barcode": value,
+              "providers_checked": attempted, "providers_unavailable": errors}
     answer["status"] = (
         "found" if answer["found"] else
-        "unavailable" if errors and len(errors) == len(attempted) else
-        "not_found"
+        "unavailable" if errors and len(errors) == len(attempted) else "not_found"
     )
-    # A negative cache protects free provider quotas; transient outages expire quickly.
     if len(_CACHE) >= 500:
         _CACHE.clear()
-    _CACHE[value] = (now_time + (3600 if answer["found"] else 300), answer)
+    ttl = 3600 if answer["found"] else (30 if errors else 300)
+    _CACHE[cache_key] = (now_time + ttl, answer)
     return answer
 
 
