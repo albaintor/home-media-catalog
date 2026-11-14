@@ -412,3 +412,32 @@ def test_edit_internal_edition_keeps_other_sources_and_identity(client, admin):
     assert "DVD" in detail["formats"]
     assert "Blu-ray" not in detail["formats"]
     assert "4K Ultra HD Blu-ray" in detail["formats"]
+
+
+def test_manual_internal_work_metadata_is_editable_without_tmdb(client, admin):
+    import base64
+    from io import BytesIO
+    from PIL import Image
+
+    image = BytesIO()
+    Image.new("RGB", (20, 30), "red").save(image, format="JPEG")
+    encoded = base64.b64encode(image.getvalue()).decode()
+    item = entry(tmdb_id=None, title="Unlisted work", poster_jpeg=encoded)
+    created = client.post("/api/v1/internal/items", headers=admin, json=item)
+    assert created.status_code == 201, created.text
+    work_id = created.json()["id"]
+    response = client.patch(
+        "/api/v1/internal/items/" + item["id"], headers=admin,
+        json={"format": "DVD", "barcode": None, "manual_metadata": {
+            "title": "Corrected title", "year": 1999, "original_title": "Original",
+            "plot": "Manual synopsis", "poster_jpeg": encoded,
+        }},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["id"] == work_id
+    detail = client.get("/api/v1/media/" + work_id, headers=admin).json()
+    assert detail["title"] == "Corrected title"
+    assert detail["year"] == 1999
+    assert detail["plot"] == "Manual synopsis"
+    assert client.get("/api/v1/media/" + work_id + "/artwork/poster",
+                      headers=admin).content == image.getvalue()

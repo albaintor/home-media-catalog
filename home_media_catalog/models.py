@@ -87,10 +87,19 @@ class ManualCollectionItemsInput(StrictModel):
     media_ids: list[str] = Field(min_length=1, max_length=200)
 
 
+class ManualInternalMetadata(StrictModel):
+    title: str = Field(min_length=1, max_length=300)
+    original_title: str | None = Field(default=None, max_length=300)
+    year: int | None = Field(default=None, ge=1870, le=2200)
+    plot: str | None = Field(default=None, max_length=5000)
+    poster_jpeg: str | None = Field(default=None, max_length=1400000)
+
+
 class InternalEditionUpdate(StrictModel):
-    """Editable physical properties, without changing the canonical work."""
+    """Editable physical properties and optional manual work metadata."""
     format: Literal["", "DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray"]
     barcode: str | None = Field(default=None, pattern=r"^[0-9]{8}$|^[0-9]{12,14}$")
+    manual_metadata: ManualInternalMetadata | None = None
 
 
 class InternalMediaInput(StrictModel):
@@ -111,6 +120,7 @@ class InternalMediaInput(StrictModel):
     physical_title: str | None = Field(default=None, max_length=300)
     physical_episode_count: int | None = Field(default=None, ge=0, le=10000)
     season_poster_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
+    poster_jpeg: str | None = Field(default=None, max_length=1400000)
 
 
 class SourceInput(StrictModel):

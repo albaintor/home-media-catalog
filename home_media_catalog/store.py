@@ -1015,7 +1015,9 @@ class Store:
                        if value}
                 path = data.get("poster_path")
                 poster = (
-                    ["https://image.tmdb.org/t/p/w500" + path]
+                    [data["_poster_reference"]]
+                    if data.get("_poster_reference")
+                    else ["https://image.tmdb.org/t/p/w500" + path]
                     if path and data.get("tmdb_id") else []
                 )
                 record = Record(
@@ -1060,8 +1062,10 @@ class Store:
             work_id = current["work_id"]
         return {"id": work_id, "item_id": external_key}
 
-    def update_internal_edition(self, external_key: str, disc_format: str,
-                                barcode: str | None) -> dict[str, Any]:
+    def update_internal_edition(
+        self, external_key: str, disc_format: str, barcode: str | None,
+        manual: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Edit the existing record, retaining its work and edition identities."""
         from .internal_catalog import valid_barcode
 
@@ -1076,7 +1080,57 @@ class Store:
             ).fetchone()
             if row is None:
                 raise KeyError(external_key)
-            payload = json.loads(row["payload"])
+            if manual is not None:
+                title = manual["title"].strip()
+                if not title:
+                    raise ValueError("Enter a title.")
+                records = conn.execute(
+                    "SELECT id,source_id,payload FROM records WHERE work_id=?",
+                    (row["work_id"],),
+                ).fetchall()
+                if any(r["source_id"] != "internal" or
+                       json.loads(r["payload"]).get("identifiers") for r in records):
+                    raise ValueError("Only an unlinked internal work can have manual metadata.")
+                if conn.execute(
+                    "SELECT 1 FROM identifiers WHERE work_id=? LIMIT 1", (row["work_id"],)
+                ).fetchone():
+                    raise ValueError("Provider-linked metadata cannot be edited manually.")
+                for record in records:
+                    value = json.loads(record["payload"])
+                    value.update(title=title, original_title=manual.get("original_title"),
+                                 year=manual.get("year"), plot=manual.get("plot"))
+                    if manual.get("_poster_reference"):
+                        value["poster"] = [manual["_poster_reference"]]
+                    if record["id"] == row["id"]:
+                        payload = value
+                    else:
+                        conn.execute("UPDATE records SET payload=? WHERE id=?",
+                                     (encode(value), record["id"]))
+                if manual.get("_poster_reference"):
+                    # Replace a previous repaired poster too; the user's image wins.
+                    previous = conn.execute("SELECT payload FROM enrichment WHERE work_id=?",
+                                            (row["work_id"],)).fetchone()
+                    enriched = json.loads(previous["payload"]) if previous else {}
+                    enriched["poster"] = manual["_poster_reference"]
+                    conn.execute(
+                        "INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?) "
+                        "ON CONFLICT(work_id) DO UPDATE SET payload=excluded.payload,"
+                        "updated_at=excluded.updated_at",
+                        (row["work_id"], encode(enriched), now()),
+                    )
+                    conn.execute(
+                        "UPDATE collections SET revision=revision+1 WHERE is_manual=1 AND id IN "
+                        "(SELECT collection_id FROM collection_items WHERE work_id=?)",
+                        (row["work_id"],),
+                    )
+                    conn.execute(
+                        "UPDATE lists SET revision=revision+1 WHERE id IN "
+                        "(SELECT list_id FROM list_items WHERE work_id=?)", (row["work_id"],),
+                    )
+                    conn.execute("INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
+                                 (row["work_id"], now()))
+            else:
+                payload = json.loads(row["payload"])
             payload["formats"] = [disc_format] if disc_format else []
             metadata = payload.get("metadata") or {}
             metadata["barcode"] = barcode or None

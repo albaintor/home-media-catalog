@@ -1,6 +1,8 @@
 """Versioned REST API consumed identically by the web UI and native clients."""
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import logging
@@ -1265,6 +1267,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ConnectorError as exc:
             raise HTTPException(502, str(exc)) from exc
 
+    async def store_internal_poster(item_id: str, encoded: str) -> str:
+        """Store a bounded, verified JPEG under a content-versioned reference."""
+        try:
+            data = base64.b64decode(encoded, validate=True)
+            if not data or len(data) > 1024 * 1024:
+                raise ValueError("Poster exceeds 1 MiB.")
+            with Image.open(BytesIO(data)) as image:
+                if image.format != "JPEG" or max(image.size) > 4096:
+                    raise ValueError("Unsupported JPEG dimensions.")
+                image.verify()
+        except (binascii.Error, UnidentifiedImageError, OSError, ValueError,
+                Image.DecompressionBombError) as exc:
+            raise HTTPException(422, "Invalid JPEG poster.") from exc
+        key = item_id.lower() + ":" + hashlib.sha256(data).hexdigest()
+        return await asyncio.to_thread(app.state.artwork.save_uploaded_poster, key, data)
+
     @app.post(
         API + "/internal/items",
         tags=["Catalogue"],
@@ -1272,7 +1290,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         status_code=201,
     )
     async def create_internal_media(data: InternalMediaInput):
-        edition = data.model_dump()
+        edition = data.model_dump(exclude={"poster_jpeg"})
+        if data.poster_jpeg:
+            edition["_poster_reference"] = await store_internal_poster(data.id, data.poster_jpeg)
         if data.kind == "tvshow":
             season = data.physical_season
             if season is None:
@@ -1333,14 +1353,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     async def update_internal_edition(item_id: UUID, data: InternalEditionUpdate):
         try:
+            manual = (data.manual_metadata.model_dump(exclude={"poster_jpeg"})
+                      if data.manual_metadata else None)
+            if data.manual_metadata and data.manual_metadata.poster_jpeg and manual is not None:
+                manual["_poster_reference"] = await store_internal_poster(
+                    str(item_id), data.manual_metadata.poster_jpeg
+                )
             saved = await asyncio.to_thread(
-                store.update_internal_edition, str(item_id), data.format, data.barcode
+                store.update_internal_edition, str(item_id), data.format, data.barcode, manual
             )
         except KeyError as exc:
             raise HTTPException(404, "Internal edition not found.") from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         start_ai_index()
+        if data.manual_metadata and data.manual_metadata.poster_jpeg:
+            await warm_poster_dependents(saved["id"])
         return saved
 
     @app.delete(
