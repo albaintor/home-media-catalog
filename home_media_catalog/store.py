@@ -10,7 +10,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .connectors.base import Record
 from .connectors.collection_xml import COLLECTION_TYPES, SOURCE_TYPES
@@ -1062,6 +1062,142 @@ class Store:
             work_id = current["work_id"]
         return {"id": work_id, "item_id": external_key}
 
+    @staticmethod
+    def _editor_payload(conn: sqlite3.Connection, work_id: str) -> dict[str, Any]:
+        row = conn.execute("SELECT payload FROM enrichment WHERE work_id=?", (work_id,)).fetchone()
+        return json.loads(row["payload"]) if row else {}
+
+    @staticmethod
+    def _save_editor_payload(conn: sqlite3.Connection, work_id: str, payload: dict) -> None:
+        conn.execute(
+            "INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(work_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",
+            (work_id, encode(payload), now()),
+        )
+
+    def update_media_metadata(self, work_id: str, changes: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT kind FROM works WHERE id=?", (work_id,)).fetchone()
+            if not row:
+                raise KeyError(work_id)
+            if row["kind"] not in ("movie", "tvshow"):
+                raise ValueError("Only movies and series can be edited.")
+            payload = self._editor_payload(conn, work_id)
+            overrides = dict(payload.get("metadata_overrides") or {})
+            for key in ("original_title", "year", "runtime_minutes", "plot", "genres", "country", "studios"):
+                if key not in changes:
+                    continue
+                value = changes[key]
+                if isinstance(value, list):
+                    if any(len(v.strip()) > 300 for v in value):
+                        raise ValueError("Metadata value exceeds 300 characters.")
+                    value = list(dict.fromkeys(v.strip() for v in value if v.strip()))
+                elif isinstance(value, str):
+                    value = value.strip()
+                overrides[key] = value
+            payload["metadata_overrides"] = overrides
+            if "custom_title" in changes:
+                payload["custom_title"] = (changes["custom_title"] or "").strip() or None
+            if changes.get("poster"):
+                payload["poster"] = changes["poster"]
+                conn.execute(
+                    "UPDATE collections SET revision=revision+1 WHERE id IN "
+                    "(SELECT collection_id FROM collection_items WHERE work_id=?)", (work_id,)
+                )
+                conn.execute(
+                    "UPDATE lists SET revision=revision+1 WHERE id IN "
+                    "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,)
+                )
+                conn.execute("INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
+                             (work_id, now()))
+            self._save_editor_payload(conn, work_id, payload)
+            self._rebuild(conn, work_id)
+
+    def set_edition_hdr(self, work_id: str, edition_id: str, formats: list[str] | None) -> None:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM records WHERE id=? AND work_id=?",
+                                (edition_id, work_id)).fetchone():
+                raise KeyError(edition_id)
+            payload = self._editor_payload(conn, work_id)
+            overrides = dict(payload.get("edition_hdr_overrides") or {})
+            if formats is None:
+                overrides.pop(edition_id, None)
+            else:
+                overrides[edition_id] = list(dict.fromkeys(formats))
+            payload["edition_hdr_overrides"] = overrides
+            self._save_editor_payload(conn, work_id, payload)
+            self._rebuild(conn, work_id)
+
+    @staticmethod
+    def _edition_formats(formats: list[str], override: list[str] | None) -> list[str]:
+        if override is None:
+            return formats
+        def is_hdr(value: str) -> bool:
+            normalized = re.sub(r"[\s_-]", "", value.casefold())
+            return normalized in {"hdr", "hdr10", "hdr10+", "hdr10plus", "dolbyvision", "dv", "dovi", "hlg"}
+        return list(dict.fromkeys([v for v in formats if not is_hdr(v)] + override))
+
+    def convert_source_to_internal(self, source_id: str, remove_source: bool = False) -> dict:
+        """Copy complete imported disc records onto their existing canonical work IDs."""
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            source = conn.execute("SELECT type FROM sources WHERE id=?", (source_id,)).fetchone()
+            if source is None:
+                raise KeyError(source_id)
+            if source["type"] not in ("clz", "mymovies", "filmotech"):
+                raise ValueError("Only imported movie collection sources can be converted.")
+            rows = conn.execute(
+                "SELECT id,work_id,external_key,payload FROM records WHERE source_id=?", (source_id,)
+            ).fetchall()
+            if not rows:
+                raise ValueError("The source contains no editions.")
+            if any(json.loads(row["payload"]).get("kind") not in ("movie", "tvshow") for row in rows):
+                raise ValueError("The source contains unsupported records. Nothing was changed.")
+            conn.execute(
+                "INSERT OR IGNORE INTO sources(id,name,type,enabled,config) VALUES(?,?,?,?,?)",
+                ("internal", "Internal catalog", "internal", 1, "{}"),
+            )
+            affected = set()
+            copied = 0
+            for row in rows:
+                key = str(uuid5(NAMESPACE_URL, "hmc:convert:" + source_id + ":" + row["external_key"]))
+                existing = conn.execute(
+                    "SELECT work_id FROM records WHERE source_id='internal' AND external_key=?", (key,)
+                ).fetchone()
+                if existing:
+                    if existing["work_id"] != row["work_id"]:
+                        raise ValueError("A converted edition belongs to a different work.")
+                    continue
+                value = json.loads(row["payload"])
+                value["external_key"] = key
+                metadata = value.get("metadata") or {}
+                metadata.update(internal=True, converted_source_id=source_id,
+                                converted_external_key=row["external_key"])
+                value["metadata"] = metadata
+                value["formats"] = [
+                    "4K Ultra HD Blu-ray" if canonical_source_format(f, source["type"]) == "Blu-ray 4K"
+                    else canonical_source_format(f, source["type"]) for f in value.get("formats", [])
+                ]
+                new_id = str(uuid4())
+                conn.execute("INSERT INTO records(id,work_id,source_id,external_key,payload) VALUES(?,?,?,?,?)",
+                             (new_id, row["work_id"], "internal", key, encode(value)))
+                editor = self._editor_payload(conn, row["work_id"])
+                hdr = editor.get("edition_hdr_overrides") or {}
+                if row["id"] in hdr:
+                    hdr[new_id] = hdr[row["id"]]
+                    editor["edition_hdr_overrides"] = hdr
+                    self._save_editor_payload(conn, row["work_id"], editor)
+                affected.add(row["work_id"])
+                copied += 1
+            if remove_source:
+                affected.update(row["work_id"] for row in rows)
+                conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
+            for work_id in affected:
+                self._rebuild(conn, work_id)
+            return {"copied": copied, "total": len(rows), "removed_source": remove_source}
+
     def set_custom_title(self, work_id: str, title: str | None) -> None:
         """A display override does not replace source titles or provider identifiers."""
         title = title.strip() if title else None
@@ -1646,7 +1782,7 @@ class Store:
     @staticmethod
     def _rebuild(conn: sqlite3.Connection, work_id: str) -> None:
         rows = conn.execute(
-            "SELECT r.payload,s.type FROM records r JOIN sources s ON s.id=r.source_id WHERE r.work_id=?",
+            "SELECT r.id,r.payload,s.type FROM records r JOIN sources s ON s.id=r.source_id WHERE r.work_id=?",
             (work_id,),
         ).fetchall()
         conn.execute("DELETE FROM identifiers WHERE work_id=?", (work_id,))
@@ -1657,7 +1793,13 @@ class Store:
         conn.execute("DELETE FROM works_title_fts WHERE work_id=?", (work_id,))
         if not rows:
             return
-        entries = [(json.loads(row["payload"]), row["type"]) for row in rows]
+        editor = Store._editor_payload(conn, work_id)
+        hdr_overrides = editor.get("edition_hdr_overrides") or {}
+        entries = []
+        for row in rows:
+            record = json.loads(row["payload"])
+            record["formats"] = Store._edition_formats(record.get("formats", []), hdr_overrides.get(row["id"]))
+            entries.append((record, row["type"]))
         entries.sort(
             key=lambda p: (p[1] != "kodi", not p[0].get("metadata", {}).get("is_default", True))
         )
@@ -1687,7 +1829,10 @@ class Store:
             else "unknown"
         )
         playback = progress or (kodi_watch[0] if kodi_watch else {})
+        overrides = editor.get("metadata_overrides") or {}
         genres = sorted({v for p, _ in entries for v in p.get("genres", [])}, key=fold)
+        if "genres" in overrides:
+            genres = overrides["genres"] or []
         fmts = sorted(
             {
                 canonical_source_format(v, source_type)
@@ -1805,6 +1950,12 @@ class Store:
             "fanart": encode(fanarts),
             "search_text": fold(search_text),
         }
+        for field in ("original_title", "year", "runtime_minutes", "plot"):
+            if field in overrides:
+                values[field] = overrides[field]
+        values["search_text"] = fold(search_text + " " + " ".join(
+            str(overrides.get(field) or "") for field in ("original_title", "plot", "genres", "country", "studios")
+        ))
         personal = conn.execute("SELECT * FROM personal WHERE work_id=?", (work_id,)).fetchone()
         if personal:
             if personal["user_rating"] is not None:
@@ -1825,7 +1976,7 @@ class Store:
         )
         conn.execute(
             "INSERT INTO works_title_fts(work_id,titles) VALUES(?,?)",
-            (work_id, fold(title_text + " " + (custom_title or ""))),
+            (work_id, fold(title_text + " " + (custom_title or "") + " " + (overrides.get("original_title") or ""))),
         )
         Store._sync_collections(conn, work_id)
         for payload, _ in entries:
@@ -2961,6 +3112,8 @@ class Store:
             )
         }
         editions = []
+        editor = self._editor_payload(conn, work_id)
+        hdr_overrides = editor.get("edition_hdr_overrides") or {}
         for record in conn.execute(
             "SELECT r.*,s.name,s.type FROM records r JOIN sources s ON s.id=r.source_id WHERE work_id=? ORDER BY s.type DESC,r.external_key",
             (work_id,),
@@ -2976,8 +3129,9 @@ class Store:
                     "identifiers": payload["identifiers"],
                     "metadata": {
                         **payload["metadata"],
-                        "formats": payload["formats"],
+                        "formats": self._edition_formats(payload["formats"], hdr_overrides.get(record["id"])),
                         "collections": payload["collections"],
+                        **({"hdr_override": hdr_overrides[record["id"]]} if record["id"] in hdr_overrides else {}),
                     },
                     **{
                         n: payload.get(n)
@@ -3063,6 +3217,12 @@ class Store:
         ).fetchone()
         return {
             **value,
+            "country": (editor.get("metadata_overrides") or {}).get("country",
+                next((e["metadata"].get("country") for e in editions
+                      if isinstance(e["metadata"].get("country"), str) and e["metadata"]["country"]), None)),
+            "studios": (editor.get("metadata_overrides") or {}).get("studios",
+                list(dict.fromkeys(s for e in editions for s in
+                     (e["metadata"].get("studios") or []) if isinstance(s, str)))) or [],
             "identifiers": dict(ids),
             "editions": editions,
             "people": people,
@@ -3184,8 +3344,9 @@ class Store:
             # Refreshing credits must not erase an uploaded/repaired poster.
             if previous:
                 old_payload = json.loads(previous["payload"])
-                if "custom_title" in old_payload:
-                    payload = {**payload, "custom_title": old_payload["custom_title"]}
+                for field in ("custom_title", "metadata_overrides", "edition_hdr_overrides"):
+                    if field in old_payload:
+                        payload = {**payload, field: old_payload[field]}
                 old_poster = old_payload.get("poster")
                 if old_poster and (old_poster.startswith("hmc-poster://") or not payload.get("poster")):
                     payload = {**payload, "poster": old_poster}

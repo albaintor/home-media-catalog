@@ -81,6 +81,7 @@ from .models import (
     CatalogueStatus,
     ConnectionResult,
     CustomTitleInput,
+    EditionHDRInput,
     EpisodeWatchInput,
     EpisodeWatchResult,
     ErrorResponse,
@@ -102,6 +103,7 @@ from .models import (
     MariaDBConnectionInput,
     MariaDBDatabasesResult,
     MediaDetail,
+    MediaMetadataInput,
     MediaPage,
     PairingRedeem,
     PairingRequest,
@@ -119,6 +121,7 @@ from .models import (
     SessionInput,
     SessionView,
     SortField,
+    SourceConversionInput,
     SourceInput,
     SourceView,
     WatchStatus,
@@ -1346,6 +1349,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         start_ai_index()
         tmdb_wakeup.set()
         return saved
+
+    @app.patch(
+        API + "/media/{media_id}/metadata",
+        response_model=MediaDetail,
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+    )
+    async def update_media_metadata(media_id: str, data: MediaMetadataInput):
+        changes = data.model_dump(exclude_unset=True, exclude={"poster_jpeg"})
+        if data.poster_jpeg:
+            changes["poster"] = await store_internal_poster(media_id, data.poster_jpeg)
+        try:
+            await asyncio.to_thread(store.update_media_metadata, media_id, changes)
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown media.") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if data.poster_jpeg:
+            await warm_poster_dependents(media_id)
+        start_ai_index()
+        return media_detail(media_id)
+
+    @app.patch(
+        API + "/media/{media_id}/editions/{edition_id}/hdr",
+        response_model=MediaDetail,
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+    )
+    async def update_edition_hdr(media_id: str, edition_id: str, data: EditionHDRInput):
+        try:
+            await asyncio.to_thread(store.set_edition_hdr, media_id, edition_id, data.hdr_formats)
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown edition.") from exc
+        return media_detail(media_id)
 
     @app.patch(
         API + "/media/{media_id}/custom-title",
@@ -3395,6 +3432,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if any(old_config.get(key) != new_config.get(key) for key in fields):
                 background_tasks.add_task(retry_pending_source_writebacks, source_id)
         return saved
+
+    @app.post(
+        API + "/sources/{source_id}/convert-to-internal",
+        tags=["Sources"],
+        dependencies=[Depends(writable)],
+    )
+    async def convert_source_to_internal(source_id: str, data: SourceConversionInput):
+        if source_id in sync.active:
+            raise HTTPException(409, "Wait for this source's current job.")
+        try:
+            result = await asyncio.to_thread(
+                store.convert_source_to_internal, source_id, data.remove_source
+            )
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown source.") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        start_ai_index()
+        return result
 
     @app.delete(
         API + "/sources/{source_id}",

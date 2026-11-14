@@ -91,6 +91,28 @@ class CustomTitleInput(StrictModel):
     custom_title: str | None = Field(default=None, max_length=300)
 
 
+class MediaMetadataInput(StrictModel):
+    custom_title: str | None = Field(default=None, max_length=300)
+    original_title: str | None = Field(default=None, max_length=300)
+    year: int | None = Field(default=None, ge=1870, le=2200)
+    runtime_minutes: int | None = Field(default=None, ge=1, le=14400)
+    plot: str | None = Field(default=None, max_length=5000)
+    genres: list[str] | None = Field(default=None, max_length=100)
+    country: str | None = Field(default=None, max_length=300)
+    studios: list[str] | None = Field(default=None, max_length=100)
+    poster_jpeg: str | None = Field(default=None, max_length=1400000)
+
+
+class EditionHDRInput(StrictModel):
+    hdr_formats: list[Literal["HDR10", "HDR10+", "Dolby Vision", "HLG"]] | None = Field(
+        default=None, max_length=4
+    )
+
+
+class SourceConversionInput(StrictModel):
+    remove_source: bool = False
+
+
 class ManualInternalMetadata(StrictModel):
     title: str = Field(min_length=1, max_length=300)
     original_title: str | None = Field(default=None, max_length=300)
@@ -467,6 +489,8 @@ class ListOrderInput(StrictModel):
 
 
 class MediaDetail(MediaSummary):
+    country: str | None = None
+    studios: list[str] = Field(default_factory=list)
     identifiers: dict[str, list[str]]
     editions: list[EditionView]
     cast: list[CastMember] = Field(default_factory=list)

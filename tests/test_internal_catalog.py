@@ -461,3 +461,29 @@ def test_custom_title_preserves_provider_identity_and_search(client, admin):
     assert store.detail(work_id)["title"] == "French title"
     reset = client.patch(endpoint, headers=admin, json={"custom_title": None})
     assert reset.json()["title"] == "Quebec title"
+
+
+def test_advanced_metadata_hdr_and_source_conversion(store):
+    source = store.save_source({"name": "Discs", "type": "clz", "config": {}})
+    store.apply_snapshot(source["id"], [
+        Record("disc-1", "movie", "Source title", year=2009, formats=["Blu-ray", "HDR10"],
+               identifiers={"tmdb": "12345"}, metadata={"country": "Japan", "studios": ["Old studio"]})
+    ])
+    work_id = store.media()["items"][0]["id"]
+    edition_id = store.detail(work_id)["editions"][0]["id"]
+    store.update_media_metadata(work_id, {"custom_title": "New title", "year": 2010,
+        "genres": ["Animation"], "country": "France", "studios": ["New studio"]})
+    store.set_edition_hdr(work_id, edition_id, ["Dolby Vision"])
+    assert "HDR10" not in store.detail(work_id)["formats"]
+    assert store.convert_source_to_internal(source["id"])["copied"] == 1
+    assert store.convert_source_to_internal(source["id"], True)["copied"] == 0
+    detail = store.detail(work_id)
+    assert detail["title"] == "New title"
+    assert detail["year"] == 2010
+    assert detail["genres"] == ["Animation"]
+    assert detail["country"] == "France"
+    assert detail["studios"] == ["New studio"]
+    assert detail["identifiers"]["tmdb"] == ["12345"]
+    assert len(detail["editions"]) == 1
+    assert detail["editions"][0]["source_type"] == "internal"
+    assert "Dolby Vision" in detail["formats"]
