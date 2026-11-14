@@ -1051,6 +1051,26 @@ class Store:
                     "VALUES(?,?,?,?,?)",
                     (str(uuid4()), work_id, "internal", external_key, encode(asdict(record))),
                 )
+                if data.get("_poster_reference"):
+                    # An explicitly photographed/selected cover must take
+                    # precedence over a TMDB poster, including after refresh.
+                    enrichment = self._editor_payload(conn, work_id)
+                    enrichment["poster"] = data["_poster_reference"]
+                    self._save_editor_payload(conn, work_id, enrichment)
+                    conn.execute(
+                        "UPDATE collections SET revision=revision+1 WHERE id IN "
+                        "(SELECT collection_id FROM collection_items WHERE work_id=?)",
+                        (work_id,),
+                    )
+                    conn.execute(
+                        "UPDATE lists SET revision=revision+1 WHERE id IN "
+                        "(SELECT list_id FROM list_items WHERE work_id=?)",
+                        (work_id,),
+                    )
+                    conn.execute(
+                        "INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
+                        (work_id, now()),
+                    )
                 self._rebuild(conn, work_id)
                 self._reconcile_titles(conn)
             current = conn.execute(
