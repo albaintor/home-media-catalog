@@ -335,13 +335,13 @@ def test_mobile_contract_announced_without_changing_versioned_endpoint(client, a
     status = client.get("/api/v1/status", headers=admin)
     assert status.status_code == 200
     assert status.json()["api_version"] == "v1"
-    assert status.json()["mobile_compatibility"] == {"min_contract": 1, "max_contract": 2}
-    assert status.json()["data_model_version"] == 6
+    assert status.json()["mobile_compatibility"] == {"min_contract": 1, "max_contract": 4}
+    assert status.json()["data_model_version"] == 9
     assert status.json()["version"].endswith("+model.6")
 
     discovery = client.get("/api/v1/discovery")
     assert discovery.status_code == 200
-    assert discovery.json()["mobile_compatibility"] == {"min_contract": 1, "max_contract": 2}
+    assert discovery.json()["mobile_compatibility"] == {"min_contract": 1, "max_contract": 4}
     assert discovery.json()["data_model_version"] == status.json()["data_model_version"]
     assert discovery.json()["server_version"] == status.json()["version"]
 
@@ -518,7 +518,7 @@ def test_mobile_discovery_advertises_optional_features_and_contract(client, admi
     assert discovery.status_code == 200
     body = discovery.json()
     assert body["api_version"] == "v1"
-    assert body["mobile_compatibility"] == {"min_contract": 1, "max_contract": 2}
+    assert body["mobile_compatibility"] == {"min_contract": 1, "max_contract": 4}
     assert {"ai_search", "bulk_list_add"} <= set(body["capabilities"])
     assert body["data_model_version"] >= 6
     status = client.get("/api/v1/status", headers=admin).json()
