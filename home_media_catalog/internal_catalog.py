@@ -145,6 +145,8 @@ async def _lookup_upcitemdb(value: str, client: httpx.AsyncClient) -> dict | Non
         }
         for item in body.get("items", [])[:5] if isinstance(item, dict)
     ]
+    rows.sort(key=lambda row: bool(_DISC_WORDS.search(row["title"] + " " + row["category"])),
+              reverse=True)
     return _result(value, "upcitemdb", rows)
 
 
@@ -348,16 +350,30 @@ async def lookup_disc_barcode(value: str) -> dict:
     # sources. Stable sorting makes the winner independent of network timing.
     priority = {"upcmdb": 3, "bnf": 2, "upcitemdb": 1,
                 "barcodelookup": 1, "openproductsfacts": 0, "wikidata": 0}
+    # The GS1 prefix hints at the registration region, not the market.
+    # Keep all providers eligible; give the French national catalogue a tie-break.
+    if ean and ean[:3].isdigit() and 300 <= int(ean[:3]) <= 379:
+        priority["bnf"] = 4
+    edition_detail = re.compile(
+        r"\b(?:season|saison|staffel|temporada)\s*\d+|"
+        r"\b(?:complete series|int[eé]grale|box\s*set|coffret|steelbook)\b",
+        re.IGNORECASE,
+    )
     answers.sort(key=lambda row: (
-        bool(_DISC_WORDS.search(row["title"])),
+        bool(edition_detail.search(row["title"])), bool(_DISC_WORDS.search(row["title"])),
         priority.get(row["source"], 0), bool(row.get("image_url")),
     ), reverse=True)
     answer = answers[0] if answers else {
         "found": False, "title": None, "source": None, "items": [],
     }
-    # Keep the existing response contract, augment with provenance and candidates.
+    # Keep the response contract. Preserve alternative provider candidates
+    # separately so old clients still use the chosen title and image.
     answer = {**answer, "barcode": value,
-              "providers_checked": attempted, "providers_unavailable": errors}
+              "providers_checked": attempted, "providers_unavailable": errors,
+              "candidates": [
+                  {"source": row["source"], "title": row["title"],
+                   "image_url": row.get("image_url")} for row in answers
+              ]}
     answer["status"] = (
         "found" if answer["found"] else
         "unavailable" if errors and len(errors) == len(attempted) else "not_found"
