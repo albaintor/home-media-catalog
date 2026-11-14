@@ -487,3 +487,17 @@ def test_advanced_metadata_hdr_and_source_conversion(store):
     assert len(detail["editions"]) == 1
     assert detail["editions"][0]["source_type"] == "internal"
     assert "Dolby Vision" in detail["formats"]
+
+
+def test_photographed_cover_overrides_tmdb_and_survives_enrichment(store):
+    first = store.save_internal_media(entry(poster_path="/provider.jpg"))
+    work_id = first["id"]
+    original = "https://image.tmdb.org/t/p/w500/provider.jpg"
+    store.save_enrichment(work_id, {"people": [], "trailers": [], "poster": original})
+    photo = "hmc-poster://" + "a" * 64
+    second = store.save_internal_media(entry(_poster_reference=photo, format="DVD"))
+    assert second["id"] == work_id
+    assert store.detail(work_id)["identifiers"]["tmdb"] == ["554433"]
+    assert store.artwork(work_id, "poster")[0] == photo
+    store.save_enrichment(work_id, {"people": [], "trailers": [], "poster": original})
+    assert store.artwork(work_id, "poster")[0] == photo
