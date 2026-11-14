@@ -67,12 +67,12 @@ from .enrichment import (
 )
 from .internal_catalog import (
     find_tmdb,
+    is_multi_season_boxset,
     lookup_disc_barcode,
     physical_season_in_title,
-    is_multi_season_boxset,
     tmdb_physical_season,
-    tmdb_series_season_profile,
     tmdb_season_profile_from_identifiers,
+    tmdb_series_season_profile,
 )
 from .list_thumbnails import CollectionThumbnails, ListThumbnails
 from .models import (
