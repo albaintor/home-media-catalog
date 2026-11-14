@@ -417,6 +417,7 @@ def test_edit_internal_edition_keeps_other_sources_and_identity(client, admin):
 def test_manual_internal_work_metadata_is_editable_without_tmdb(client, admin):
     import base64
     from io import BytesIO
+
     from PIL import Image
 
     image = BytesIO()
