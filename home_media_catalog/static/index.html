@@ -213,6 +213,7 @@
       <div id="internal-selected-preview" class="internal-found-preview" hidden></div>
       <div id="internal-suggestions" class="internal-suggestions" role="listbox" aria-label="Résultats TMDB"></div>
       <label>Titre<input id="internal-title" required maxlength="300"></label>
+      <label>Titre original<input id="internal-original-title" maxlength="300"></label>
       <div class="internal-inline-fields">
         <label>Type<select id="internal-kind"><option value="movie">Film</option><option value="tvshow">Série</option></select></label>
         <label>Année<input id="internal-year" type="number" min="1870" max="2200" step="1"></label>
@@ -224,8 +225,67 @@
       </div>
       <label>Support<select id="internal-format"><option value="">Non spécifié</option><option>DVD</option><option>Blu-ray</option><option>Blu-ray 3D</option><option>4K Ultra HD Blu-ray</option></select></label>
       <label>Synopsis (facultatif)<textarea id="internal-plot" maxlength="5000" rows="3"></textarea></label>
+      <fieldset class="media-editor-artwork">
+        <legend>Illustration personnalisée</legend>
+        <a id="internal-poster-search" class="text-button" target="_blank" rel="noopener noreferrer" hidden>Rechercher des images sur Internet</a>
+        <label>Fichier image<input id="internal-poster-file" type="file" accept="image/*"></label>
+        <label>URL directe de l’image (HTTPS)<input id="internal-poster-url" type="url" maxlength="2048"></label>
+        <p class="hint">Si le site refuse le téléchargement direct, enregistrez l’image puis sélectionnez le fichier.</p>
+      </fieldset>
       <p id="internal-add-error" class="error-text" role="alert"></p>
       <div class="internal-actions"><button type="button" class="secondary" data-close="internal-add-dialog">Annuler</button><button type="submit" class="primary" id="internal-save">Ajouter au catalogue</button></div>
+    </form>
+  </dialog>
+  <dialog id="media-edit-dialog" class="small-dialog media-editor-dialog" aria-labelledby="media-edit-title">
+    <button type="button" class="dialog-close" data-close="media-edit-dialog" aria-label="Fermer">×</button>
+    <h2 id="media-edit-title">Modifier la fiche</h2>
+    <form id="media-edit-form" class="internal-add-form">
+      <p id="media-edit-source-title" class="hint" data-user-content></p>
+      <label>Titre personnalisé<input name="custom_title" maxlength="300" placeholder="Vide : titre de la source"></label>
+      <label>Titre original<input name="original_title" maxlength="300"></label>
+      <div class="internal-inline-fields">
+        <label>Année<input name="year" type="number" min="1870" max="2200" step="1"></label>
+        <label>Durée (minutes)<input name="runtime_minutes" type="number" min="1" max="14400" step="1"></label>
+      </div>
+      <label>Pays<input name="country" maxlength="300"></label>
+      <fieldset class="media-editor-tags"><legend>Genres</legend><div id="media-edit-genres" class="media-editor-chips"></div><div class="internal-inline"><input id="media-edit-genre-input" maxlength="300" aria-label="Ajouter un genre"><button type="button" class="secondary" data-editor-add="genres">Ajouter</button></div></fieldset>
+      <fieldset class="media-editor-tags"><legend>Studios</legend><div id="media-edit-studios" class="media-editor-chips"></div><div class="internal-inline"><input id="media-edit-studio-input" maxlength="300" aria-label="Ajouter un studio"><button type="button" class="secondary" data-editor-add="studios">Ajouter</button></div></fieldset>
+      <label>Synopsis<textarea name="plot" rows="5" maxlength="5000"></textarea></label>
+      <fieldset class="media-editor-artwork">
+        <legend>Illustration personnalisée</legend>
+        <img id="media-edit-poster-preview" alt="" hidden>
+        <a id="media-edit-poster-search" class="text-button" target="_blank" rel="noopener noreferrer" hidden>Rechercher des images sur Internet</a>
+        <label>Fichier image<input name="poster_file" type="file" accept="image/*"></label>
+        <label>URL directe de l’image (HTTPS)<input name="poster_url" type="url" maxlength="2048"></label>
+        <p class="hint">Si le site refuse le téléchargement direct, enregistrez l’image puis sélectionnez le fichier.</p>
+      </fieldset>
+      <p id="media-edit-error" class="error-text" role="alert"></p>
+      <div class="internal-actions"><button type="button" class="secondary" data-close="media-edit-dialog">Annuler</button><button type="submit" class="primary">Enregistrer</button></div>
+    </form>
+  </dialog>
+  <dialog id="edition-edit-dialog" class="small-dialog media-editor-dialog" aria-labelledby="edition-edit-title">
+    <button type="button" class="dialog-close" data-close="edition-edit-dialog" aria-label="Fermer">×</button>
+    <h2 id="edition-edit-title">Modifier l’édition</h2>
+    <form id="edition-edit-form" class="internal-add-form">
+      <p id="edition-edit-label" class="hint" data-user-content></p>
+      <fieldset id="edition-edit-disc">
+        <legend>Support</legend>
+        <label>Format du disque<select name="format"><option value="">Non spécifié</option><option>DVD</option><option>Blu-ray</option><option>Blu-ray 3D</option><option>4K Ultra HD Blu-ray</option></select></label>
+        <label>Code-barres EAN / UPC<input name="barcode" inputmode="numeric" maxlength="14"></label>
+      </fieldset>
+      <fieldset id="edition-edit-hdr">
+        <legend>HDR</legend>
+        <label class="check-label"><input type="checkbox" name="override_hdr">Remplacer le HDR détecté</label>
+        <div id="edition-hdr-options" class="media-editor-checks">
+          <label class="check-label"><input type="checkbox" name="hdr_formats" value="HDR10">HDR10</label>
+          <label class="check-label"><input type="checkbox" name="hdr_formats" value="HDR10+">HDR10+</label>
+          <label class="check-label"><input type="checkbox" name="hdr_formats" value="Dolby Vision">Dolby Vision</label>
+          <label class="check-label"><input type="checkbox" name="hdr_formats" value="HLG">HLG</label>
+        </div>
+        <p class="hint">Aucune case cochée avec la correction activée signifie SDR. Désactivez la correction pour restaurer les données de la source.</p>
+      </fieldset>
+      <p id="edition-edit-error" class="error-text" role="alert"></p>
+      <div class="internal-actions"><button type="button" class="secondary" data-close="edition-edit-dialog">Annuler</button><button type="submit" class="primary">Enregistrer</button></div>
     </form>
   </dialog>
   <dialog id="detail-dialog" class="detail-dialog"><button class="dialog-close" data-close="detail-dialog" aria-label="Fermer la fiche">×</button><div id="detail-content"></div></dialog>

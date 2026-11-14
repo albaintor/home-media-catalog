@@ -659,7 +659,7 @@ function detailActions(item) {
   const playable=item.kind==='tvshow'
     ? (item.source_types||[]).includes('kodi')&&Number(item.episode_count)>0
     : item.editions.some(e=>e.source_type==='kodi');
-  return `<div class="detail-actions compact-actions">${trailerButton}${personalActions(item)}${playable?`<button id="open-playback" class="action-button play-target-button" title="Lire sur…" aria-label="Lire sur…" aria-haspopup="dialog" aria-controls="play-dialog">${actionIcon('playtarget')}<span>Lire sur…</span></button>`:''}<span id="writeback-indicators" class="writeback-indicators-container">${writebackIndicatorMarkup(item)}</span><span id="personal-status" class="visually-hidden" role="status" aria-live="polite"></span></div>`;
+  return `<div class="detail-actions compact-actions">${trailerButton}${personalActions(item)}${state.role==='admin'&&['movie','tvshow'].includes(item.kind)?'<button type="button" class="action-button" id="edit-media-button">✎ <span>Modifier la fiche</span></button>':''}${playable?`<button id="open-playback" class="action-button play-target-button" title="Lire sur…" aria-label="Lire sur…" aria-haspopup="dialog" aria-controls="play-dialog">${actionIcon('playtarget')}<span>Lire sur…</span></button>`:''}<span id="writeback-indicators" class="writeback-indicators-container">${writebackIndicatorMarkup(item)}</span><span id="personal-status" class="visually-hidden" role="status" aria-live="polite"></span></div>`;
 }
 function openTrailers() {
   hideRatingPopover();
@@ -1026,6 +1026,7 @@ async function openMediaActions(trigger) {
   const canPlay=admin&&(item.source_types||[]).includes('kodi')&&(item.kind!=='tvshow'||Number(item.episode_count)>0);
   menu.innerHTML=`<div class="media-actions-title" title="${esc(item.title)}">${esc(item.title)}</div>
     <button type="button" data-quick-action="details">▣ Ouvrir la fiche</button>
+    ${admin&&['movie','tvshow'].includes(item.kind)?'<button type="button" data-quick-action="edit-media">✎ Modifier la fiche</button>':''}
     ${admin?mediaWatchActions(item):''}
     ${canPlay?`<button type="button" data-quick-action="play">${actionIcon('playtarget')} Lire sur…</button>`:''}
     <button type="button" data-quick-action="trailer">▷ Bande-annonce YouTube</button>
@@ -1184,6 +1185,7 @@ document.addEventListener('click',async event=>{
   if(manualID){await quickAddToManual(id,manualID);return;}
   if(action==='new-manual'){await createManualCollection(id);return;}
   if(action==='details'){await openDetail(id);return;}
+  if(action==='edit-media'){await openMediaEditor(id);return;}
   if(action==='watch'){await quickWatch(id,entry.dataset.watched==='true');return;}
   if(action==='new-list'){await quickCreateList(id);return;}
   if(action==='trailer'){await quickTrailer(id);return;}
@@ -2198,6 +2200,8 @@ let internalAutoSelectQuery = null;
 function selectInternalTMDB(item, automatically=false) {
   internalSelection=item;
   $('internal-title').value=item.title;
+  $('internal-original-title').value=item.original_title||'';
+  updatePosterSearch('internal-poster-search',item.title);
   $('internal-year').value=item.year||'';
   $('internal-kind').value=item.kind;
   refreshInternalSeasonFields();
@@ -2221,6 +2225,7 @@ $('internal-add-button').addEventListener('click', () => {
   ++internalSearchSerial;
   internalAutoSelectQuery=null;
   $('internal-add-form').reset();
+  updatePosterSearch('internal-poster-search','');
   $('internal-suggestions').replaceChildren();
   $('internal-add-error').textContent = '';
   $('internal-selection').textContent = 'Vous pouvez aussi renseigner le titre manuellement.';
@@ -2361,6 +2366,7 @@ $('internal-add-form').addEventListener('submit', async (event) => {
     id: crypto.randomUUID(),
     kind: $('internal-kind').value,
     title: title,
+    original_title: $('internal-original-title').value.trim()||null,
     year: $('internal-year').value ? Number($('internal-year').value) : null,
     plot: $('internal-plot').value.trim() || null,
     barcode: $('internal-barcode').value.trim() || null,
@@ -2382,11 +2388,13 @@ $('internal-add-form').addEventListener('submit', async (event) => {
   if (internalSelection && internalSelection.title === title &&
       internalSelection.kind === item.kind) {
     item.tmdb_id = internalSelection.tmdb_id;
-    item.original_title = internalSelection.original_title || null;
     item.poster_path = internalSelection.poster_path || null;
     item.rating = internalSelection.rating ?? null;
   }
   try {
+    const uploaded=$('internal-poster-file').files[0];
+    const imageURL=$('internal-poster-url').value.trim();
+    if(uploaded||imageURL)item.poster_jpeg=await readPosterJPEG(uploaded,imageURL);
     const added = await api('internal/items',{method:'POST',body:JSON.stringify(item)});
     $('internal-add-dialog').close();
     toast('Ajouté au catalogue interne.');
@@ -2397,13 +2405,240 @@ $('internal-add-form').addEventListener('submit', async (event) => {
   } finally { submit.disabled = false; }
 });
 
+// Advanced catalogue editor. All persistent changes go through the same API as iOS.
+const editorDiscFormats=['DVD','Blu-ray','Blu-ray 3D','4K Ultra HD Blu-ray'];
+const editorHDRFormats=['HDR10','HDR10+','Dolby Vision','HLG'];
+let mediaEditor=null, editionEditor=null;
+function isInternalEditionKey(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value||'');
+}
+function updatePosterSearch(id,title) {
+  const link=$(id);
+  if(!title.trim()){link.hidden=true;link.removeAttribute('href');return;}
+  const search=new URL('https://www.google.com/search');
+  search.searchParams.set('tbm','isch');
+  search.searchParams.set('q',title.trim()+' movie poster');
+  link.href=search.href;link.hidden=false;
+}
+$('internal-title').addEventListener('input',()=>updatePosterSearch('internal-poster-search',$('internal-title').value));
+async function readPosterJPEG(file,imageURL) {
+  const limit=12*1024*1024;
+  let blob=file;
+  if(!blob){
+    const address=internalImageURL(imageURL);
+    if(!address)throw new Error(tr('Saisissez une URL HTTPS directe.'));
+    try {
+      // Browser-side CORS only: do not expose an arbitrary server-side URL fetcher.
+      const response=await fetch(address,{credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(20000)});
+      if(!response.ok||new URL(response.url||address).protocol!=='https:')throw new Error('HTTP');
+      if(Number(response.headers.get('Content-Length'))>limit)throw new Error('size');
+      const reader=response.body?.getReader();
+      if(!reader)throw new Error('body');
+      const parts=[];let size=0;
+      try {
+        while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit)throw new Error('size');parts.push(value);}
+      }finally{await reader.cancel().catch(()=>{});}
+      blob=new Blob(parts,{type:response.headers.get('Content-Type')||'application/octet-stream'});
+    }catch{throw new Error(tr('Image inaccessible. Enregistrez-la sur votre appareil puis sélectionnez le fichier.'));}
+  }
+  if(!blob.size||blob.size>limit)throw new Error(tr('Image trop volumineuse (12 Mo maximum).'));
+  const objectURL=URL.createObjectURL(blob);
+  try{
+    const image=new Image();image.src=objectURL;await image.decode();
+    const ratio=Math.min(1,1200/Math.max(image.naturalWidth,image.naturalHeight));
+    const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(image.naturalWidth*ratio));canvas.height=Math.max(1,Math.round(image.naturalHeight*ratio));
+    const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);
+    for(const quality of [.82,.7,.55,.4]) {
+      const encoded=canvas.toDataURL('image/jpeg',quality).split(',')[1];
+      if(encoded&&encoded.length<=1398100)return encoded;
+    }
+    throw new Error(tr('Impossible de réduire l’image.'));
+  }finally{URL.revokeObjectURL(objectURL);}
+}
+function renderEditorTags(key) {
+  const target=$('media-edit-'+key);target.replaceChildren();
+  for(const [index,value] of mediaEditor[key].entries()){
+    const chip=document.createElement('button');chip.type='button';chip.className='secondary';
+    chip.dataset.editorRemove=key;chip.dataset.index=String(index);
+    const label=document.createElement('span');label.dataset.userContent='';label.textContent=value;
+    chip.append(label,document.createTextNode(' ×'));
+    chip.setAttribute('aria-label',tr('Retirer')+' '+value);
+    target.append(chip);
+  }
+}
+function addEditorTag(key){
+  if(!mediaEditor||!['genres','studios'].includes(key))return;
+  const input=$('media-edit-'+(key==='genres'?'genre':'studio')+'-input');
+  const value=input.value.trim();
+  if(value&&mediaEditor[key].length<100&&!mediaEditor[key].some(v=>v.toLowerCase()===value.toLowerCase()))mediaEditor[key].push(value);
+  input.value='';renderEditorTags(key);
+}
+for(const key of ['genres','studios']){
+  $('media-edit-'+(key==='genres'?'genre':'studio')+'-input').addEventListener('keydown',event=>{
+    if(event.key==='Enter'){event.preventDefault();addEditorTag(key);}
+  });
+}
+$('media-edit-form').addEventListener('click',event=>{
+  const button=event.target.closest('button');if(!button||!mediaEditor)return;
+  if(button.dataset.editorAdd)addEditorTag(button.dataset.editorAdd);
+  if(['genres','studios'].includes(button.dataset.editorRemove)){
+    mediaEditor[button.dataset.editorRemove].splice(Number(button.dataset.index),1);
+    renderEditorTags(button.dataset.editorRemove);
+  }
+});
+async function openMediaEditor(id) {
+  if(state.role!=='admin'||$('media-edit-dialog').open)return;
+  try {
+    const item=await api('media/'+encodeURIComponent(id));
+    if(!['movie','tvshow'].includes(item.kind))return;
+    const form=$('media-edit-form');form.reset();
+    mediaEditor={item,genres:[...(item.genres||[])],studios:[...(item.studios||[])]};
+    for(const key of ['custom_title','original_title','year','runtime_minutes','country','plot'])form.elements.namedItem(key).value=item[key]??'';
+    $('media-edit-source-title').textContent=(item.provider_title||item.title);
+    $('media-edit-error').textContent='';
+    const preview=$('media-edit-poster-preview');
+    if(item.artwork?.poster){preview.src=url(item.artwork.poster);preview.hidden=false;}else{preview.removeAttribute('src');preview.hidden=true;}
+    updatePosterSearch('media-edit-poster-search',item.title);
+    renderEditorTags('genres');renderEditorTags('studios');
+    showDialog('media-edit-dialog');
+  }catch(error){toast(error.message);}
+}
+$('media-edit-form').elements.namedItem('custom_title').addEventListener('input',event=>{
+  if(mediaEditor)updatePosterSearch('media-edit-poster-search',event.target.value||mediaEditor.item.provider_title||mediaEditor.item.title);
+});
+async function refreshEditedMedia(id){
+  await refresh();
+  if(state.detail?.id===id&&$('detail-dialog').open){
+    const latest=await api('media/'+encodeURIComponent(id));
+    renderDetail(latest);
+    if(latest.kind==='tvshow')await loadSeasons(id);
+  }
+}
+function setEditorBusy(form,busy){
+  const dialog=form.closest('dialog');
+  if(busy){
+    dialog.dataset.editorBusy='true';
+    form._disabledBefore=[...dialog.querySelectorAll('button,input,textarea,select')].map(el=>[el,el.disabled]);
+    for(const [el] of form._disabledBefore)el.disabled=true;
+  }else{
+    delete dialog.dataset.editorBusy;
+    for(const [el,disabled] of form._disabledBefore||[])el.disabled=disabled;
+    form._disabledBefore=null;
+  }
+}
+$('media-edit-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const form=event.currentTarget,editor=mediaEditor;
+  if(!editor||state.role!=='admin'||form.closest('dialog').dataset.editorBusy)return;
+  $('media-edit-error').textContent='';
+  const data=new FormData(form);
+  const fields={};
+  for(const key of ['custom_title','original_title','country','plot']){
+    const value=String(data.get(key)||'').trim();
+    if(value!==(editor.item[key]||''))fields[key]=key==='custom_title'&&!value?null:value;
+  }
+  for(const key of ['year','runtime_minutes']){
+    const raw=data.get(key),value=raw===''?null:Number(raw);
+    if(value!==(editor.item[key]??null))fields[key]=value;
+  }
+  for(const key of ['genres','studios'])if(JSON.stringify(editor[key])!==JSON.stringify(editor.item[key]||[]))fields[key]=editor[key];
+  const file=form.elements.namedItem('poster_file').files[0],imageURL=String(data.get('poster_url')||'').trim();
+  setEditorBusy(form,true);
+  let saved=false;
+  try{
+    if(file||imageURL)fields.poster_jpeg=await readPosterJPEG(file,imageURL);
+    if(Object.keys(fields).length){
+      await api('media/'+encodeURIComponent(editor.item.id)+'/metadata',{method:'PATCH',body:JSON.stringify(fields)});
+      saved=true;
+    }
+    $('media-edit-dialog').close();
+    if(saved){toast(tr('Fiche modifiée.'));await refreshEditedMedia(editor.item.id);}
+  }catch(error){if(saved)toast(error.message);else $('media-edit-error').textContent=error.message;}
+  finally{setEditorBusy(form,false);}
+});
+function detectedEditionHDR(edition){
+  const metadata=edition.metadata||{},values=[...(metadata.formats||[])];
+  for(const stream of metadata.video_streams||[])values.push(stream.hdr_type||'',stream.hdr_detail||'');
+  const result=new Set();
+  for(const raw of values){
+    const value=String(raw).toLowerCase().replace(/[\s_-]/g,'');
+    if(value.includes('dolbyvision')||value.includes('dovi')||value==='dv')result.add('Dolby Vision');
+    if(value.includes('hdr10+')||value.includes('hdr10plus'))result.add('HDR10+');
+    else if(value.includes('hdr10'))result.add('HDR10');
+    if(value.includes('hlg'))result.add('HLG');
+  }
+  return [...result];
+}
+function updateHDRControls(){
+  const form=$('edition-edit-form'),active=form.elements.namedItem('override_hdr').checked;
+  for(const check of form.querySelectorAll('[name="hdr_formats"]'))check.disabled=!active;
+}
+$('edition-edit-form').elements.namedItem('override_hdr').addEventListener('change',updateHDRControls);
+function openEditionEditor(item,edition,mode){
+  if(state.role!=='admin'||!['movie','tvshow'].includes(item.kind))return;
+  if(mode==='disc'&&(edition.source_type!=='internal'||!isInternalEditionKey(edition.external_key)))return;
+  const form=$('edition-edit-form');form.reset();editionEditor={item,edition,mode};
+  const m=edition.metadata||{},disc=mode==='disc';
+  $('edition-edit-title').textContent=tr(disc?'Modifier le disque':'Modifier le HDR');
+  $('edition-edit-label').textContent=[item.title,edition.source_name,(m.formats||[]).join(' · '),m.barcode].filter(Boolean).join(' — ');
+  $('edition-edit-disc').hidden=!disc;$('edition-edit-disc').disabled=!disc;
+  $('edition-edit-hdr').hidden=disc;$('edition-edit-hdr').disabled=disc;
+  const format=(m.formats||[]).find(value=>editorDiscFormats.includes(value)||['4K UHD','Blu-ray 4K','4K Blu-ray'].includes(value));
+  form.elements.namedItem('format').value=editorDiscFormats.includes(format)?format:format?'4K Ultra HD Blu-ray':'';
+  form.elements.namedItem('barcode').value=m.barcode||'';
+  const override=Array.isArray(m.hdr_override)?m.hdr_override:null;
+  form.elements.namedItem('override_hdr').checked=override!==null;
+  const hdr=override??detectedEditionHDR(edition);
+  for(const input of form.querySelectorAll('[name="hdr_formats"]'))input.checked=hdr.includes(input.value);
+  updateHDRControls();$('edition-edit-error').textContent='';showDialog('edition-edit-dialog');
+}
+$('edition-edit-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const form=event.currentTarget,editor=editionEditor;
+  if(!editor||state.role!=='admin'||form.closest('dialog').dataset.editorBusy)return;
+  const data=new FormData(form),{item,edition,mode}=editor;
+  const path=mode==='disc'?'internal/items/'+encodeURIComponent(edition.external_key):
+    'media/'+encodeURIComponent(item.id)+'/editions/'+encodeURIComponent(edition.id)+'/hdr';
+  const fields=mode==='disc'?{format:String(data.get('format')||''),barcode:String(data.get('barcode')||'').trim()||null}:
+    {hdr_formats:data.has('override_hdr')?data.getAll('hdr_formats').filter(value=>editorHDRFormats.includes(value)):null};
+  $('edition-edit-error').textContent='';setEditorBusy(form,true);
+  let saved=false;
+  try{
+    await api(path,{method:'PATCH',body:JSON.stringify(fields)});saved=true;
+    $('edition-edit-dialog').close();toast(tr('Édition modifiée.'));await refreshEditedMedia(item.id);
+  }catch(error){if(saved)toast(error.message);else $('edition-edit-error').textContent=error.message;}
+  finally{setEditorBusy(form,false);updateHDRControls();}
+});
+for(const id of ['media-edit-dialog','edition-edit-dialog']){
+  $(id).addEventListener('cancel',event=>{if($(id).dataset.editorBusy)event.preventDefault();});
+}
+async function convertExternalSource(sourceID,button){
+  if(state.role!=='admin'||button.disabled)return;
+  if(!localizedConfirm('Convertir toutes les éditions de cette source en catalogue interne ?'))return;
+  button.disabled=true;
+  const path='sources/'+encodeURIComponent(sourceID)+'/convert-to-internal';
+  try{
+    const result=await api(path,{method:'POST',body:JSON.stringify({remove_source:false})});
+    const message=tr('Conversion terminée :')+' '+result.total+' '+tr('éditions disponibles dans le catalogue interne.');
+    if(localizedConfirm(message+' '+tr('Supprimer la source d’origine pour éviter les doublons ?'))){
+      await api(path,{method:'POST',body:JSON.stringify({remove_source:true})});
+      toast(tr('Conversion terminée, source d’origine supprimée.'));
+    }else toast(message);
+  }catch(error){toast(error.message);}
+  finally{
+    button.disabled=false;
+    try{await refresh();await connections();}catch(error){toast(error.message);}
+  }
+}
+
 function editionMarkup(e) {
-  const m=e.metadata;
+  const m=e.metadata||{};
+  const hdrOverride=Array.isArray(m.hdr_override)?m.hdr_override:null;
   const seasonNumber=Number.isInteger(m.physical_season)?m.physical_season:null;
-  const fields=[['Saison physique',seasonNumber===null?null:'Saison '+seasonNumber],['Format',m.formats?.join(', ')],['Vidéo',m.video_streams?.map(v=>[v.width&&v.height?`${v.width} × ${v.height}`:'',v.codec,v.hdr_type,v.hdr_detail,v.stereo_mode].filter(Boolean).join(' · ')).join(' / ')],['Édition',m.edition||m.version],['Code-barres',m.barcode],['Disques',m.disc_count],['Quantité',m.quantity],['Coffret',m.boxset],['Collection',m.collections?.map(collectionName).join(', ')],['Régions',m.regions?.join(', ')],['Audio',m.audio_tracks?.join(', ')],['Sous-titres',m.subtitles?.join(', ')],['Dernier visionnage',e.last_played?date(e.last_played):null],['Historique CLZ',m.seen_dates?.map(date).join(', ')],['Lectures',e.play_count],['Reprise',e.resume_seconds?`${Math.floor(e.resume_seconds/60)} min`:null],['Fichier',m.file],['Ajout',e.date_added?date(e.date_added):null],['Identifiants',Object.entries(e.identifiers).map(([k,v])=>`${k}: ${v}`).join(' · ')]];
+  const fields=[['Saison physique',seasonNumber===null?null:'Saison '+seasonNumber],['Format',m.formats?.join(', ')],['Vidéo',m.video_streams?.map(v=>[v.width&&v.height?`${v.width} × ${v.height}`:'',v.codec,...(hdrOverride===null?[v.hdr_type,v.hdr_detail]:[]),v.stereo_mode].filter(Boolean).join(' · ')).join(' / ')],['HDR',hdrOverride===null?null:(hdrOverride.join(' · ')||'SDR')],['Édition',m.edition||m.version],['Code-barres',m.barcode],['Disques',m.disc_count],['Quantité',m.quantity],['Coffret',m.boxset],['Collection',m.collections?.map(collectionName).join(', ')],['Régions',m.regions?.join(', ')],['Audio',m.audio_tracks?.join(', ')],['Sous-titres',m.subtitles?.join(', ')],['Dernier visionnage',e.last_played?date(e.last_played):null],['Historique CLZ',m.seen_dates?.map(date).join(', ')],['Lectures',e.play_count],['Reprise',e.resume_seconds?`${Math.floor(e.resume_seconds/60)} min`:null],['Fichier',m.file],['Ajout',e.date_added?date(e.date_added):null],['Identifiants',Object.entries(e.identifiers||{}).map(([k,v])=>`${k}: ${v}`).join(' · ')]];
   const label=(seasonNumber===null?'':'Saison '+seasonNumber+' · ')+
     ((e.source_type==='internal'||collectionTypes.includes(e.source_type))?(m.formats?.join(' / ')||'Édition physique'):(m.version||'Fichier Kodi'));
-  return `<details class="edition"><summary><b>${esc(label)}</b> <span class="muted">· ${sourceIcon(e.source_type)} ${esc(e.source_name)}</span></summary><div class="format-badges edition-formats">${formatBadges(m.formats||[])}</div><dl class="edition-grid">${fields.filter(([,v])=>v!==null&&v!==undefined&&v!=='').map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></details>`;
+  return `<details class="edition"><summary><b>${esc(label)}</b> <span class="muted">· ${sourceIcon(e.source_type)} ${esc(e.source_name)}</span></summary><div class="format-badges edition-formats">${formatBadges(m.formats||[])}</div><dl class="edition-grid">${fields.filter(([,v])=>v!==null&&v!==undefined&&v!=='').map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>${state.role==='admin'&&['movie','tvshow'].includes(state.detail?.kind)?`<div class="edition-edit-actions">${e.source_type==='internal'&&isInternalEditionKey(e.external_key)?`<button type="button" class="secondary" data-edit-disc="${esc(e.id)}">Modifier le disque</button>`:''}<button type="button" class="secondary" data-edit-hdr="${esc(e.id)}">Modifier le HDR</button></div>`:''}</details>`;
 }
 function tmdbAttribution(item) {
   if(!item.enriched_at)return '';
@@ -2567,7 +2802,7 @@ function renderDetail(item) {
   const previousScroll=state.detail?.id===item.id?$('detail-dialog').scrollTop:0;
   hideRatingPopover();
   state.detail=item;
-  $('detail-content').innerHTML=`${metadataAction(item)}<div class="detail-layout"><div class="detail-poster"><button type="button" id="open-artwork-gallery" class="detail-poster-trigger" title="${esc(tr('Agrandir les images du média'))}" aria-label="${esc(tr('Agrandir les images du média'))}" ${mediaArtworkImages(item).length?'':'disabled'}>${poster(item,true)}</button></div><div class="detail-intro"><p class="eyebrow">${esc(kindLabels[item.kind])}</p><div class="detail-heading"><h2><button type="button" id="copy-media-title" class="detail-copy-title" title="${esc(tr('Copier le titre'))}" aria-label="${esc(tr('Copier le titre'))}">${esc(item.title)}</button></h2>${item.original_title&&item.original_title!==item.title?`<p class="original-title">${esc(item.original_title)}</p>`:''}</div><div class="detail-info">${item.year?`<span>${item.year}</span>`:''}${item.runtime_minutes?`<span>${item.runtime_minutes} min</span>`:''}${item.rating?`<span class="score" title="Note publique : ${Number(item.rating).toFixed(1)}/10">★ ${Number(item.rating).toFixed(1)}</span>`:''}</div>${detailActions(item)}<div class="format-badges" aria-label="Formats disponibles selon les éditions">${detailFormatBadges(item)}</div> ${resumeProgress(item)}<div class="detail-meta-row">${watchMarkup(item)}${seriesProgressMarkup(item)}<div class="card-meta">${badges(item)}</div></div>${!item.source_types.includes('kodi')?'<p class="hint">Cette fiche provient uniquement de collections importées. Aucun fichier Kodi ne lui est actuellement associé dans le catalogue.</p>':''}<button id="add-to-list" class="secondary" ${state.role==='admin'?'':'disabled title="Un accès administrateur est nécessaire pour modifier les listes."'}>+ Ajouter à une liste</button>${item.lists?.length?`<p class="hint">Listes : ${item.lists.map(l=>`<button class="text-button" data-open-list="${esc(l.id)}">${esc(l.name)} ↗</button>`).join(' · ')}</p>`:''}${manualMembershipMarkup(item)}</div><div class="detail-body">${item.kind==='episode'&&item.parent_id?`<button class="text-button" type="button" data-return-to-series="${esc(item.parent_id)}" data-return-season="${item.season??0}">← Série · Saison ${item.season??0} · Épisode ${item.episode??0}</button>`:''}<div class="genre-chips">${item.genres.map(g=>`<button data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div><p class="synopsis">${esc(item.plot||'Synopsis non renseigné.')}</p>${detailDatesMarkup(item)}${item.kind==='tvshow'?'<section class="detail-section"><p class="section-label">SAISONS</p><div id="season-list" class="season-links">Chargement…</div><div id="episode-list" class="episode-links"></div></section>':''}${castMarkup(item.people||item.cast)}${trailerThumbnailMarkup(item)}<section class="detail-section"><p class="section-label">FICHIERS & ÉDITIONS · ${item.editions.length}</p>${item.editions.map(editionMarkup).join('')}${state.role==='admin'&&item.kind==='movie'?'<button id="diagnose-kodi" class="secondary" type="button">Vérifier la présence dans la vidéothèque</button><div id="kodi-diagnostic" class="metadata-status" role="status" aria-live="polite" hidden></div>':''}</section>${state.role==='admin'&&item.editions.some(e=>e.source_type==='internal')?
+  $('detail-content').innerHTML=`${metadataAction(item)}<div class="detail-layout"><div class="detail-poster"><button type="button" id="open-artwork-gallery" class="detail-poster-trigger" title="${esc(tr('Agrandir les images du média'))}" aria-label="${esc(tr('Agrandir les images du média'))}" ${mediaArtworkImages(item).length?'':'disabled'}>${poster(item,true)}</button></div><div class="detail-intro"><p class="eyebrow">${esc(kindLabels[item.kind])}</p><div class="detail-heading"><h2><button type="button" id="copy-media-title" class="detail-copy-title" title="${esc(tr('Copier le titre'))}" aria-label="${esc(tr('Copier le titre'))}">${esc(item.title)}</button></h2>${item.original_title&&item.original_title!==item.title?`<p class="original-title">${esc(item.original_title)}</p>`:''}</div><div class="detail-info">${item.year?`<span>${item.year}</span>`:''}${item.runtime_minutes?`<span>${item.runtime_minutes} min</span>`:''}${item.rating?`<span class="score" title="Note publique : ${Number(item.rating).toFixed(1)}/10">★ ${Number(item.rating).toFixed(1)}</span>`:''}</div>${detailActions(item)}<div class="format-badges" aria-label="Formats disponibles selon les éditions">${detailFormatBadges(item)}</div> ${resumeProgress(item)}<div class="detail-meta-row">${watchMarkup(item)}${seriesProgressMarkup(item)}<div class="card-meta">${badges(item)}</div></div>${!item.source_types.includes('kodi')?'<p class="hint">Cette fiche provient uniquement de collections importées. Aucun fichier Kodi ne lui est actuellement associé dans le catalogue.</p>':''}<button id="add-to-list" class="secondary" ${state.role==='admin'?'':'disabled title="Un accès administrateur est nécessaire pour modifier les listes."'}>+ Ajouter à une liste</button>${item.lists?.length?`<p class="hint">Listes : ${item.lists.map(l=>`<button class="text-button" data-open-list="${esc(l.id)}">${esc(l.name)} ↗</button>`).join(' · ')}</p>`:''}${manualMembershipMarkup(item)}</div><div class="detail-body">${item.kind==='episode'&&item.parent_id?`<button class="text-button" type="button" data-return-to-series="${esc(item.parent_id)}" data-return-season="${item.season??0}">← Série · Saison ${item.season??0} · Épisode ${item.episode??0}</button>`:''}<div class="genre-chips">${item.genres.map(g=>`<button data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div>${item.country?`<p class="hint">Pays : <span data-user-content>${esc(item.country)}</span></p>`:''}${item.studios?.length?`<p class="hint">Studios : <span data-user-content>${esc(item.studios.join(' · '))}</span></p>`:''}<p class="synopsis">${esc(item.plot||'Synopsis non renseigné.')}</p>${detailDatesMarkup(item)}${item.kind==='tvshow'?'<section class="detail-section"><p class="section-label">SAISONS</p><div id="season-list" class="season-links">Chargement…</div><div id="episode-list" class="episode-links"></div></section>':''}${castMarkup(item.people||item.cast)}${trailerThumbnailMarkup(item)}<section class="detail-section"><p class="section-label">FICHIERS & ÉDITIONS · ${item.editions.length}</p>${item.editions.map(editionMarkup).join('')}${state.role==='admin'&&item.kind==='movie'?'<button id="diagnose-kodi" class="secondary" type="button">Vérifier la présence dans la vidéothèque</button><div id="kodi-diagnostic" class="metadata-status" role="status" aria-live="polite" hidden></div>':''}</section>${state.role==='admin'&&item.editions.some(e=>e.source_type==='internal')?
   '<section class="detail-section internal-delete-section"><button id="remove-internal-edition" class="secondary" type="button">Supprimer une édition du catalogue interne…</button></section>':''}${tmdbAttribution(item)}</div></div>`;
   attachImageFallbacks($('detail-content'));syncPersonalControls();$('detail-dialog').scrollTop=previousScroll;
 }
@@ -3807,7 +4042,7 @@ async function connections() {
 <p class="hint wide" id="ai-settings-result" role="status"></p>
 <button type="button" class="secondary wide" id="ai-test-connection" ${aiSettings?.configured?'':'disabled'}>Tester le modèle IA</button>
 <p class="hint wide">Teste le modèle sélectionné, et aussi les embeddings si OpenAI est actif. Enregistrez les changements avant le test.</p>
-<div class="wide" id="ai-connection-result" role="status" aria-live="polite"></div></form></section><h3 class="connection-subheading">Métadonnées et portraits · TMDB</h3><section class="metadata-status"><p>${state.tmdbAvailable?'TMDB est configuré. Les fiches récupèrent automatiquement le casting, les portraits et les bandes-annonces disponibles.':'TMDB n’est pas configuré. Renseignez TMDB_API_TOKEN dans .env, puis relancez rebuild.sh.'}</p><p class="hint">Fiches physiques en attente de métadonnées TMDB : <strong>${Number(status.tmdb_enrichment?.pending||0)}</strong>${status.tmdb_enrichment?.running?' · synchronisation en cours':''}.</p>${status.tmdb_enrichment?.retry_at?`<p class="error-text" role="status">Limitation TMDB (HTTP 429). Reprise automatique programmée : ${esc(new Date(status.tmdb_enrichment.retry_at).toLocaleString(displayLocale()))}. Les informations déjà téléchargées sont conservées.</p>`:''}<p class="hint">Utilisez le jeton de lecture API ou la clé API v3 depuis <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer">les paramètres API de votre compte TMDB ↗</a>. Le secret reste sur le serveur. Il n’est pas nécessaire de réimporter la bibliothèque pour activer TMDB.</p><button id="test-tmdb" class="secondary" ${state.tmdbAvailable?'':'disabled'}>Tester la connexion TMDB</button><p id="tmdb-test-result" class="hint play-status" role="status"></p></section><h3 class="connection-subheading">Sauvegarde JSON de la bibliothèque</h3><section class="metadata-status"><p>Exportez les médias, notes, visionnages et listes pour restaurer le catalogue sur ce serveur ou un autre. Les mots de passe et jetons d’appairage ne sont pas exportés.</p><div class="connection-actions"><button type="button" class="secondary" id="backup-export">Exporter en JSON</button><label class="secondary backup-file-picker" for="backup-import-file">Importer un JSON</label><input type="file" id="backup-import-file" accept=".json,application/json" hidden></div><p class="hint">L’import remplace tout le catalogue et ses listes. Les appareils appairés sur ce serveur restent autorisés. Les vignettes sont régénérées.</p></section><h3 class="connection-subheading">Maintenance de la base du catalogue</h3><section class="metadata-status"><p>Analyse et nettoyage des doublons de sources (connexion MariaDB/Kodi ou type CLZ, My Movies, Filmotech) et des enregistrements orphelins. Kodi MyVideos n’est jamais modifié.</p><div class="connection-actions"><button type="button" class="secondary" id="catalogue-db-preview">Analyser la base</button><button type="button" class="secondary" id="kodi-catalogue-clean" ${state.role==='admin'?'':'disabled'}>Nettoyer Kodi puis le catalogue</button><button type="button" class="secondary" id="catalogue-db-clean" ${state.role==='admin'?'':'disabled'}>Nettoyer la base</button><button type="button" id="catalogue-db-reset" ${state.role==='admin'?'':'disabled'}>Réinitialiser la base</button></div><p id="catalogue-db-preview-result" class="hint" role="status" aria-live="polite"></p><p class="hint">La réinitialisation efface le catalogue du serveur, ses sources, listes, notes et historiques de synchronisation. Les autorisations d’accès et emplacements de lecture réseau sont conservés.</p></section><h3 class="connection-subheading">Sources du catalogue</h3>${sources.map(s=>`<div class="connection-card${s.type==='kodi'?' kodi-source-card':''}"><div><strong>${sourceIcon(s.type)} ${esc(s.name)}</strong><p>${s.type==='kodi'?'Kodi JSON-RPC · MariaDB facultatif':sourceName(s.type)} · ${['discogs','clz_music','music_csv'].includes(s.type)?`${s.music_count||0} albums`:`${s.item_count} entrées`}${s.last_sync?` · ${date(s.last_sync)}`:''}${!s.enabled?' · Désactivée':''}</p>${sourceJobs.get(s.id)?.result?.database?`<p class="hint">Base synchronisée : <strong>${esc(sourceJobs.get(s.id).result.database)}</strong> · ${s.config?.database?'sélection explicite':'détection automatique'}</p>`:''}${sourceJobs.get(s.id)&&['pending','running'].includes(sourceJobs.get(s.id).status)?`<div class="source-progress">${jobProgressMarkup(sourceJobs.get(s.id))}</div>`:''}${s.last_error && String(s.last_error).trim()!==String(sourceJobs.get(s.id)?.error||'').trim()?`<p class="error-text">${esc(s.last_error)}</p>`:''}</div><div class="connection-actions">${s.type==='kodi'?`<button type="button" data-sync="${esc(s.id)}">Synchroniser la médiathèque</button><button type="button" data-scan-kodi="${esc(s.id)}">Analyser Kodi + synchroniser</button><button data-edit-source="${esc(s.id)}">Modifier</button><button data-writeback-history="${esc(s.id)}">Historique des écritures</button>`:s.type==='mymovies'?`<button data-configure-mymovies="${esc(s.id)}">Configurer l’API</button>`:''}<button data-remove-source="${esc(s.id)}">Retirer</button></div>${s.type==='kodi'?`<section class="source-kodi-instances" data-kodi-instances-for="${esc(s.id)}"><div class="source-kodi-instances-heading"><strong>Instances Kodi · JSON-RPC</strong><button type="button" class="secondary" data-add-player-source="${esc(s.id)}">+ Ajouter une instance</button></div>${players.filter(p=>p.source_id===s.id).map(p=>`<div class="connection-card kodi-instance-row"><div><strong>${esc(p.name)}</strong><p>${esc(p.host)}:${esc(p.port)} · HTTP JSON-RPC</p><p id="player-result-${esc(p.id)}" class="hint play-status" role="status"></p></div><div class="connection-actions"><button type="button" data-test-player="${esc(p.id)}">Tester</button><button type="button" data-edit-player="${esc(p.id)}">Modifier</button><button type="button" data-remove-player="${esc(p.id)}">Retirer</button></div></div>`).join('')||'<p class="hint">Aucune instance associée. Ajoutez un lecteur Kodi pour utiliser la télécommande.</p>'}</section>`:''}</div>`).join('')||'<p class="hint">Aucune source configurée.</p>'}<details><summary class="text-button">+ Connecter une instance Kodi</summary><form id="kodi-form" class="connection-form"><input type="hidden" name="id"><input type="hidden" name="player_id"><label class="wide">Nom<input name="name" required placeholder="Kodi — Salon"></label><p class="hint wide">Connexion principale : JSON-RPC. Kodi peut utiliser sa base locale SQLite. MariaDB est facultatif.</p><label>Hôte Kodi JSON-RPC (facultatif)<input name="kodi_host" placeholder="192.168.1.20"></label><label>Port HTTP Kodi<input name="kodi_port" type="number" min="1" max="65535" value="8080" required></label><label>Utilisateur HTTP<input name="kodi_username" autocomplete="off"></label><label>Mot de passe HTTP<input name="kodi_password" type="password" autocomplete="new-password" placeholder="Vide : conserver le mot de passe"></label><label>Port WebSocket<input name="websocket_port" type="number" min="1" max="65535" value="9090"></label><label>Adresse MAC · Wake-on-LAN<input name="kodi_mac" placeholder="AA:BB:CC:DD:EE:FF"></label><label class="check-label"><input name="kodi_tls" type="checkbox">HTTPS Kodi</label><button type="button" class="secondary wide" data-test-primary-kodi>Tester Kodi JSON-RPC</button><p id="kodi-primary-result" class="connection-result wide" role="status" aria-live="polite" hidden></p><details class="wide mariadb-fallback-settings"><summary>Accès MariaDB facultatif (Kodi éteint)</summary><p class="hint">Lorsque Kodi ne répond pas, le serveur lit cette base après une seconde maximum. Une autorisation d'écriture séparée est nécessaire pour mettre à jour les états distants.</p><div class="connection-form"><label>Hôte MariaDB<input name="host" placeholder="192.168.1.10"></label><label>Port SQL<input name="port" type="number" min="1" max="65535" value="3306"></label><label>Base MyVideos<input name="database" placeholder="Automatique, ou MyVideos…"></label><div class="wide mariadb-database-picker"><button type="button" class="secondary" data-discover-mariadb>Rechercher les bases MyVideos</button><select id="mariadb-database-choices" aria-label="Bases MyVideos disponibles" hidden><option value="">Sélectionner une base…</option></select><p id="mariadb-database-result" class="hint" role="status" aria-live="polite"></p></div><label>Utilisateur MariaDB<input name="username" autocomplete="off" placeholder="home_media_catalog"></label><label>Mot de passe<input name="password" type="password" autocomplete="new-password"></label><label class="check-label wide"><input name="tls" type="checkbox">Connexion MariaDB avec TLS</label><label class="check-label wide"><input name="mariadb_write_enabled" type="checkbox">Autoriser le repli en écriture MariaDB si Kodi JSON-RPC est inaccessible</label><p class="hint wide">Le repli en lecture est disponible dès que MariaDB est configuré. Le repli en écriture reste désactivé par défaut et nécessite des droits UPDATE. Une base vide utilise automatiquement le MyVideos le plus récent, y compris pour les écritures. Choisissez explicitement la bonne base si plusieurs sont présentes. Une écriture SQL ne produit pas de notification Kodi.</p><p class="hint wide">Le repli MariaDB ne nécessite qu'un compte SELECT pour importer lorsque Kodi est éteint.</p><button class="secondary wide" type="button" data-test-connection="kodi-form">Tester le repli MariaDB</button><p id="kodi-form-result" class="connection-result wide" role="status" aria-live="polite" hidden></p></div></details><button class="primary wide" type="submit">Enregistrer et synchroniser</button></form></details><h3 class="connection-subheading">Importer une collection</h3><form id="collection-form" class="upload-row"><label>Type de collection<select name="collection_type">${collectionTypes.map(type=>`<option value="${type}">${sourceName(type)}</option>`).join('')}</select></label><label>Collection<select name="source_id" aria-label="Collection"><option value="">Nouvelle collection…</option></select></label><input name="file" type="file" accept=".xml,application/xml,text/xml" required aria-label="Export XML de la collection"><button class="secondary" type="submit">Importer l’export XML</button><p class="hint">Un nouvel import remplace uniquement la collection choisie et conserve les autres sources. Utilisez un export XML Filmotech ou My Movies Collection Management.</p></form><details id="mymovies-api-details"><summary class="text-button">+ My Movies : synchronisation des visionnages (API professionnelle)</summary><form id="mymovies-api-form" class="connection-form"><label>Collection My Movies<select name="source_id" required>${collections.filter(s=>s.type==='mymovies').map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select></label><label>Hôte du serveur My Movies<input name="remote_host" placeholder="192.168.1.10"></label><label>Port Remote Data API<input name="remote_port" type="number" min="1" max="65535" value="51414"></label><label>Clé API<input name="remote_api_key" type="password" autocomplete="new-password" placeholder="Vide = conserver la clé existante"></label><label class="check-label wide"><input type="checkbox" name="remote_enabled">Activer l’écriture vu/non vu</label><p class="hint wide">API Remote Server professionnelle de My Movies, réservée aux installations autorisées. L’export XML est conservé en lecture seule. Aucun transfert des notes personnelles n’est possible via cette API. La clé transite via HTTP : à utiliser sur un réseau de confiance uniquement.</p><button type="submit" class="primary wide">Enregistrer la configuration</button></form></details><h3 class="connection-subheading">Synchronisations vers Kodi et services tiers</h3><section class="metadata-status"><p id="writeback-summary" role="status">Chargement des synchronisations...</p><p class="hint">Seules les modifications explicites d’une fiche déclenchent une écriture distante. Les imports et actualisations de catalogue restent en lecture seule.</p><div id="writeback-queue"></div><details class="writeback-recent-details"><summary>Synchronisations distantes récentes</summary><div id="writeback-recent" aria-live="polite"></div></details><div id="writeback-source-history" class="writeback-source-history" hidden></div><button id="retry-all-writebacks" class="secondary" type="button" ${state.role==='admin'?'':'disabled'}>Rejouer toutes les synchronisations en échec</button></section><div id="job-status" class="job-status" role="status" hidden></div>${kodi.length?`<details id="player-details" class="source-player-editor" hidden><summary class="text-button">+ Ajouter une instance Kodi</summary><form id="player-form" class="connection-form"><input type="hidden" name="id"><label>Nom<input name="name" required placeholder="Kodi — Salon"></label><label>Médiathèque Kodi associée<select name="source_id">${kodi.map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select></label><p class="hint wide">Cette connexion JSON-RPC appartient à l’instance Kodi. La source associée définit l’accès MariaDB, sans dupliquer les identifiants HTTP. Plusieurs instances peuvent partager la même source.</p><label>Hôte Kodi<input name="host" required placeholder="192.168.1.20"></label><label>Port HTTP<input name="port" type="number" value="8080" min="1" max="65535" required></label><label>Port WebSocket Kodi (notifications de scan)<input name="websocket_port" type="number" value="9090" min="1" max="65535" required></label><label>Adresse MAC · Wake-on-LAN<input name="mac" placeholder="AA:BB:CC:DD:EE:FF"></label><label>Utilisateur HTTP<input name="username" autocomplete="off"></label><label>Mot de passe HTTP<input name="password" type="password" autocomplete="new-password"></label><label class="check-label wide"><input name="tls" type="checkbox">HTTPS sur Kodi</label><p class="hint wide">Ce formulaire contacte l’API HTTP de Kodi, pas MariaDB. Kodi doit être démarré, avec le contrôle distant HTTP activé, et utiliser la base MyVideos choisie.</p><button class="secondary wide" type="button" data-test-connection="player-form">Tester la connexion Kodi</button><p id="player-form-result" class="connection-result wide" role="status" aria-live="polite" hidden></p><button type="submit" class="primary wide">Enregistrer l’instance</button></form></details>`:''}`;
+<div class="wide" id="ai-connection-result" role="status" aria-live="polite"></div></form></section><h3 class="connection-subheading">Métadonnées et portraits · TMDB</h3><section class="metadata-status"><p>${state.tmdbAvailable?'TMDB est configuré. Les fiches récupèrent automatiquement le casting, les portraits et les bandes-annonces disponibles.':'TMDB n’est pas configuré. Renseignez TMDB_API_TOKEN dans .env, puis relancez rebuild.sh.'}</p><p class="hint">Fiches physiques en attente de métadonnées TMDB : <strong>${Number(status.tmdb_enrichment?.pending||0)}</strong>${status.tmdb_enrichment?.running?' · synchronisation en cours':''}.</p>${status.tmdb_enrichment?.retry_at?`<p class="error-text" role="status">Limitation TMDB (HTTP 429). Reprise automatique programmée : ${esc(new Date(status.tmdb_enrichment.retry_at).toLocaleString(displayLocale()))}. Les informations déjà téléchargées sont conservées.</p>`:''}<p class="hint">Utilisez le jeton de lecture API ou la clé API v3 depuis <a href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer">les paramètres API de votre compte TMDB ↗</a>. Le secret reste sur le serveur. Il n’est pas nécessaire de réimporter la bibliothèque pour activer TMDB.</p><button id="test-tmdb" class="secondary" ${state.tmdbAvailable?'':'disabled'}>Tester la connexion TMDB</button><p id="tmdb-test-result" class="hint play-status" role="status"></p></section><h3 class="connection-subheading">Sauvegarde JSON de la bibliothèque</h3><section class="metadata-status"><p>Exportez les médias, notes, visionnages et listes pour restaurer le catalogue sur ce serveur ou un autre. Les mots de passe et jetons d’appairage ne sont pas exportés.</p><div class="connection-actions"><button type="button" class="secondary" id="backup-export">Exporter en JSON</button><label class="secondary backup-file-picker" for="backup-import-file">Importer un JSON</label><input type="file" id="backup-import-file" accept=".json,application/json" hidden></div><p class="hint">L’import remplace tout le catalogue et ses listes. Les appareils appairés sur ce serveur restent autorisés. Les vignettes sont régénérées.</p></section><h3 class="connection-subheading">Maintenance de la base du catalogue</h3><section class="metadata-status"><p>Analyse et nettoyage des doublons de sources (connexion MariaDB/Kodi ou type CLZ, My Movies, Filmotech) et des enregistrements orphelins. Kodi MyVideos n’est jamais modifié.</p><div class="connection-actions"><button type="button" class="secondary" id="catalogue-db-preview">Analyser la base</button><button type="button" class="secondary" id="kodi-catalogue-clean" ${state.role==='admin'?'':'disabled'}>Nettoyer Kodi puis le catalogue</button><button type="button" class="secondary" id="catalogue-db-clean" ${state.role==='admin'?'':'disabled'}>Nettoyer la base</button><button type="button" id="catalogue-db-reset" ${state.role==='admin'?'':'disabled'}>Réinitialiser la base</button></div><p id="catalogue-db-preview-result" class="hint" role="status" aria-live="polite"></p><p class="hint">La réinitialisation efface le catalogue du serveur, ses sources, listes, notes et historiques de synchronisation. Les autorisations d’accès et emplacements de lecture réseau sont conservés.</p></section><h3 class="connection-subheading">Sources du catalogue</h3>${sources.map(s=>`<div class="connection-card${s.type==='kodi'?' kodi-source-card':''}"><div><strong>${sourceIcon(s.type)} ${esc(s.name)}</strong><p>${s.type==='kodi'?'Kodi JSON-RPC · MariaDB facultatif':sourceName(s.type)} · ${['discogs','clz_music','music_csv'].includes(s.type)?`${s.music_count||0} albums`:`${s.item_count} entrées`}${s.last_sync?` · ${date(s.last_sync)}`:''}${!s.enabled?' · Désactivée':''}</p>${sourceJobs.get(s.id)?.result?.database?`<p class="hint">Base synchronisée : <strong>${esc(sourceJobs.get(s.id).result.database)}</strong> · ${s.config?.database?'sélection explicite':'détection automatique'}</p>`:''}${sourceJobs.get(s.id)&&['pending','running'].includes(sourceJobs.get(s.id).status)?`<div class="source-progress">${jobProgressMarkup(sourceJobs.get(s.id))}</div>`:''}${s.last_error && String(s.last_error).trim()!==String(sourceJobs.get(s.id)?.error||'').trim()?`<p class="error-text">${esc(s.last_error)}</p>`:''}</div><div class="connection-actions">${s.type==='kodi'?`<button type="button" data-sync="${esc(s.id)}">Synchroniser la médiathèque</button><button type="button" data-scan-kodi="${esc(s.id)}">Analyser Kodi + synchroniser</button><button data-edit-source="${esc(s.id)}">Modifier</button><button data-writeback-history="${esc(s.id)}">Historique des écritures</button>`:s.type==='mymovies'?`<button data-configure-mymovies="${esc(s.id)}">Configurer l’API</button>`:''}${state.role==='admin'&&collectionTypes.includes(s.type)?`<button type="button" data-convert-source="${esc(s.id)}">Convertir en catalogue interne</button>`:''}<button data-remove-source="${esc(s.id)}">Retirer</button></div>${s.type==='kodi'?`<section class="source-kodi-instances" data-kodi-instances-for="${esc(s.id)}"><div class="source-kodi-instances-heading"><strong>Instances Kodi · JSON-RPC</strong><button type="button" class="secondary" data-add-player-source="${esc(s.id)}">+ Ajouter une instance</button></div>${players.filter(p=>p.source_id===s.id).map(p=>`<div class="connection-card kodi-instance-row"><div><strong>${esc(p.name)}</strong><p>${esc(p.host)}:${esc(p.port)} · HTTP JSON-RPC</p><p id="player-result-${esc(p.id)}" class="hint play-status" role="status"></p></div><div class="connection-actions"><button type="button" data-test-player="${esc(p.id)}">Tester</button><button type="button" data-edit-player="${esc(p.id)}">Modifier</button><button type="button" data-remove-player="${esc(p.id)}">Retirer</button></div></div>`).join('')||'<p class="hint">Aucune instance associée. Ajoutez un lecteur Kodi pour utiliser la télécommande.</p>'}</section>`:''}</div>`).join('')||'<p class="hint">Aucune source configurée.</p>'}<details><summary class="text-button">+ Connecter une instance Kodi</summary><form id="kodi-form" class="connection-form"><input type="hidden" name="id"><input type="hidden" name="player_id"><label class="wide">Nom<input name="name" required placeholder="Kodi — Salon"></label><p class="hint wide">Connexion principale : JSON-RPC. Kodi peut utiliser sa base locale SQLite. MariaDB est facultatif.</p><label>Hôte Kodi JSON-RPC (facultatif)<input name="kodi_host" placeholder="192.168.1.20"></label><label>Port HTTP Kodi<input name="kodi_port" type="number" min="1" max="65535" value="8080" required></label><label>Utilisateur HTTP<input name="kodi_username" autocomplete="off"></label><label>Mot de passe HTTP<input name="kodi_password" type="password" autocomplete="new-password" placeholder="Vide : conserver le mot de passe"></label><label>Port WebSocket<input name="websocket_port" type="number" min="1" max="65535" value="9090"></label><label>Adresse MAC · Wake-on-LAN<input name="kodi_mac" placeholder="AA:BB:CC:DD:EE:FF"></label><label class="check-label"><input name="kodi_tls" type="checkbox">HTTPS Kodi</label><button type="button" class="secondary wide" data-test-primary-kodi>Tester Kodi JSON-RPC</button><p id="kodi-primary-result" class="connection-result wide" role="status" aria-live="polite" hidden></p><details class="wide mariadb-fallback-settings"><summary>Accès MariaDB facultatif (Kodi éteint)</summary><p class="hint">Lorsque Kodi ne répond pas, le serveur lit cette base après une seconde maximum. Une autorisation d'écriture séparée est nécessaire pour mettre à jour les états distants.</p><div class="connection-form"><label>Hôte MariaDB<input name="host" placeholder="192.168.1.10"></label><label>Port SQL<input name="port" type="number" min="1" max="65535" value="3306"></label><label>Base MyVideos<input name="database" placeholder="Automatique, ou MyVideos…"></label><div class="wide mariadb-database-picker"><button type="button" class="secondary" data-discover-mariadb>Rechercher les bases MyVideos</button><select id="mariadb-database-choices" aria-label="Bases MyVideos disponibles" hidden><option value="">Sélectionner une base…</option></select><p id="mariadb-database-result" class="hint" role="status" aria-live="polite"></p></div><label>Utilisateur MariaDB<input name="username" autocomplete="off" placeholder="home_media_catalog"></label><label>Mot de passe<input name="password" type="password" autocomplete="new-password"></label><label class="check-label wide"><input name="tls" type="checkbox">Connexion MariaDB avec TLS</label><label class="check-label wide"><input name="mariadb_write_enabled" type="checkbox">Autoriser le repli en écriture MariaDB si Kodi JSON-RPC est inaccessible</label><p class="hint wide">Le repli en lecture est disponible dès que MariaDB est configuré. Le repli en écriture reste désactivé par défaut et nécessite des droits UPDATE. Une base vide utilise automatiquement le MyVideos le plus récent, y compris pour les écritures. Choisissez explicitement la bonne base si plusieurs sont présentes. Une écriture SQL ne produit pas de notification Kodi.</p><p class="hint wide">Le repli MariaDB ne nécessite qu'un compte SELECT pour importer lorsque Kodi est éteint.</p><button class="secondary wide" type="button" data-test-connection="kodi-form">Tester le repli MariaDB</button><p id="kodi-form-result" class="connection-result wide" role="status" aria-live="polite" hidden></p></div></details><button class="primary wide" type="submit">Enregistrer et synchroniser</button></form></details><h3 class="connection-subheading">Importer une collection</h3><form id="collection-form" class="upload-row"><label>Type de collection<select name="collection_type">${collectionTypes.map(type=>`<option value="${type}">${sourceName(type)}</option>`).join('')}</select></label><label>Collection<select name="source_id" aria-label="Collection"><option value="">Nouvelle collection…</option></select></label><input name="file" type="file" accept=".xml,application/xml,text/xml" required aria-label="Export XML de la collection"><button class="secondary" type="submit">Importer l’export XML</button><p class="hint">Un nouvel import remplace uniquement la collection choisie et conserve les autres sources. Utilisez un export XML Filmotech ou My Movies Collection Management.</p></form><details id="mymovies-api-details"><summary class="text-button">+ My Movies : synchronisation des visionnages (API professionnelle)</summary><form id="mymovies-api-form" class="connection-form"><label>Collection My Movies<select name="source_id" required>${collections.filter(s=>s.type==='mymovies').map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select></label><label>Hôte du serveur My Movies<input name="remote_host" placeholder="192.168.1.10"></label><label>Port Remote Data API<input name="remote_port" type="number" min="1" max="65535" value="51414"></label><label>Clé API<input name="remote_api_key" type="password" autocomplete="new-password" placeholder="Vide = conserver la clé existante"></label><label class="check-label wide"><input type="checkbox" name="remote_enabled">Activer l’écriture vu/non vu</label><p class="hint wide">API Remote Server professionnelle de My Movies, réservée aux installations autorisées. L’export XML est conservé en lecture seule. Aucun transfert des notes personnelles n’est possible via cette API. La clé transite via HTTP : à utiliser sur un réseau de confiance uniquement.</p><button type="submit" class="primary wide">Enregistrer la configuration</button></form></details><h3 class="connection-subheading">Synchronisations vers Kodi et services tiers</h3><section class="metadata-status"><p id="writeback-summary" role="status">Chargement des synchronisations...</p><p class="hint">Seules les modifications explicites d’une fiche déclenchent une écriture distante. Les imports et actualisations de catalogue restent en lecture seule.</p><div id="writeback-queue"></div><details class="writeback-recent-details"><summary>Synchronisations distantes récentes</summary><div id="writeback-recent" aria-live="polite"></div></details><div id="writeback-source-history" class="writeback-source-history" hidden></div><button id="retry-all-writebacks" class="secondary" type="button" ${state.role==='admin'?'':'disabled'}>Rejouer toutes les synchronisations en échec</button></section><div id="job-status" class="job-status" role="status" hidden></div>${kodi.length?`<details id="player-details" class="source-player-editor" hidden><summary class="text-button">+ Ajouter une instance Kodi</summary><form id="player-form" class="connection-form"><input type="hidden" name="id"><label>Nom<input name="name" required placeholder="Kodi — Salon"></label><label>Médiathèque Kodi associée<select name="source_id">${kodi.map(s=>`<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select></label><p class="hint wide">Cette connexion JSON-RPC appartient à l’instance Kodi. La source associée définit l’accès MariaDB, sans dupliquer les identifiants HTTP. Plusieurs instances peuvent partager la même source.</p><label>Hôte Kodi<input name="host" required placeholder="192.168.1.20"></label><label>Port HTTP<input name="port" type="number" value="8080" min="1" max="65535" required></label><label>Port WebSocket Kodi (notifications de scan)<input name="websocket_port" type="number" value="9090" min="1" max="65535" required></label><label>Adresse MAC · Wake-on-LAN<input name="mac" placeholder="AA:BB:CC:DD:EE:FF"></label><label>Utilisateur HTTP<input name="username" autocomplete="off"></label><label>Mot de passe HTTP<input name="password" type="password" autocomplete="new-password"></label><label class="check-label wide"><input name="tls" type="checkbox">HTTPS sur Kodi</label><p class="hint wide">Ce formulaire contacte l’API HTTP de Kodi, pas MariaDB. Kodi doit être démarré, avec le contrôle distant HTTP activé, et utiliser la base MyVideos choisie.</p><button class="secondary wide" type="button" data-test-connection="player-form">Tester la connexion Kodi</button><p id="player-form-result" class="connection-result wide" role="status" aria-live="polite" hidden></p><button type="submit" class="primary wide">Enregistrer l’instance</button></form></details>`:''}`;
     void renderPlaybackCloudSettings();
     void renderPlaybackNetworkSettings();
     organizeConnectionSettingsTabs();
@@ -3996,6 +4231,13 @@ document.addEventListener('submit',async event=>{
 });
 document.addEventListener('click',async event=>{
   const button=event.target.closest('button'); if(!button) return;
+  if(button.dataset.convertSource){await convertExternalSource(button.dataset.convertSource,button);return;}
+  if(button.id==='edit-media-button'&&state.detail?.id){await openMediaEditor(state.detail.id);return;}
+  if(button.dataset.editDisc||button.dataset.editHdr){
+    const edition=state.detail?.editions?.find(e=>e.id===(button.dataset.editDisc||button.dataset.editHdr));
+    if(edition)openEditionEditor(state.detail,edition,button.dataset.editDisc?'disc':'hdr');
+    return;
+  }
   if(button.id==='detail-add-manual'&&state.detail?.id){openManualChoice(state.detail.id);return;}
   if(button.dataset.openManual){await openManualCollectionPopup(button.dataset.openManual);return;}
   if(button.dataset.manualChoice) {
@@ -4460,7 +4702,7 @@ $('load-more').addEventListener('click',()=>loadMedia({append:state.items.length
 document.addEventListener('keydown',event=>{if(event.key==='/'&&!['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName)&&!$('app').hidden&&!document.querySelector('dialog[open]')){event.preventDefault();$('search').focus();}});
 for(const dialog of document.querySelectorAll('dialog')) {
   dialog.addEventListener('close',releasePage);
-  dialog.addEventListener('click',event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)dialog.close();}});
+  dialog.addEventListener('click',event=>{if(event.target===dialog&&!dialog.dataset.editorBusy){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)dialog.close();}});
 }
 async function enrichDetail(force) {
   const id=state.detail?.id;if(!id||state.enrichingIds.has(id))return;
