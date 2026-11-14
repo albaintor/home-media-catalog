@@ -7,6 +7,8 @@ import hashlib
 import json
 import logging
 import math
+import os
+import tempfile
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -166,6 +168,15 @@ def unsecret(model) -> dict:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.validate()
+    # An explicitly configured environment credential always wins. The
+    # provisioned secret lives outside catalogue DB, exports and static files.
+    tmdb_secret_path = settings.data_dir / "tmdb-device-token"
+    if not settings.tmdb_api_token.strip():
+        try:
+            settings.tmdb_api_token = tmdb_secret_path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            pass
+    tmdb_credential_lock = asyncio.Lock()
     store = Store(settings.data_dir / "catalogue.db")
     sync = SyncManager(store, settings)
     auth = Auth(settings, store)
@@ -420,6 +431,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "playback_cloud_oauth",
                 "kodi_clean",
                 "media_details_batch",
+                "tmdb_device_credentials",
             ],
         }
 
@@ -819,6 +831,71 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def tmdb_key_fingerprint() -> str | None:
         token = settings.tmdb_api_token.strip().removeprefix("Bearer ").strip()
         return hashlib.sha256(token.encode("utf-8")).hexdigest() if token else None
+
+    def require_secure_tmdb_device(request: Request, principal: Principal) -> None:
+        # The bundled TLS relay forwards from a dedicated loopback address.
+        # Never trust a caller-supplied Forwarded/X-Forwarded-Proto header.
+        relay = (os.getenv("HMC_TLS_RELAY_ACTIVE") == "1"
+                 and request.client is not None and request.client.host == "127.0.0.2")
+        if request.url.scheme != "https" and not relay:
+            raise HTTPException(403, "TMDB credential synchronization requires HTTPS.")
+        if principal.role != "admin" or principal.via != "bearer":
+            raise HTTPException(403, "TMDB credentials require an administrator bearer token.")
+
+    def private_credential_response(response: Response) -> None:
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+
+    @app.get(API + "/catalogue/tmdb/device-credentials", include_in_schema=False)
+    def read_tmdb_device_credential(
+        request: Request, response: Response, principal: Principal = Depends(authenticated)
+    ):
+        require_secure_tmdb_device(request, principal)
+        private_credential_response(response)
+        token = settings.tmdb_api_token.strip().removeprefix("Bearer ").strip()
+        return {"token": token or None}
+
+    @app.put(API + "/catalogue/tmdb/device-credentials", include_in_schema=False)
+    async def provision_tmdb_device_credential(
+        request: Request, response: Response, principal: Principal = Depends(authenticated)
+    ):
+        require_secure_tmdb_device(request, principal)
+        private_credential_response(response)
+        # An upload only fills a missing credential. Never overwrite an
+        # independently configured server key, including concurrent uploads.
+        async with tmdb_credential_lock:
+            if settings.tmdb_api_token.strip():
+                return {"configured": True, "imported": False}
+            try:
+                raw = await request.json()
+            except (ValueError, UnicodeError):
+                raise HTTPException(422, "Invalid TMDB credential request.") from None
+            token = raw.get("token") if isinstance(raw, dict) else None
+            if not isinstance(token, str):
+                raise HTTPException(422, "Invalid TMDB credential.")
+            token = token.strip().removeprefix("Bearer ").strip()
+            if not (1 <= len(token) <= 4096) or any(not 33 <= ord(ch) <= 126 for ch in token):
+                raise HTTPException(422, "Invalid TMDB credential.")
+            try:
+                await probe_tmdb(token)
+            except (ConnectorError, ValueError, httpx.HTTPError):
+                raise HTTPException(422, "Unable to validate the TMDB credential.") from None
+            # Atomic private file, separate from .env and all catalogue data.
+            settings.data_dir.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(prefix=".tmdb-token-", dir=settings.data_dir)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(token)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp_name, tmdb_secret_path)
+            finally:
+                if os.path.exists(temp_name):
+                    os.unlink(temp_name)
+            settings.tmdb_api_token = token
+            start_artwork_repair()
+            tmdb_wakeup.set()
+            return {"configured": True, "imported": True}
 
     @app.get(
         API + "/catalogue/enrichment/coordination",
