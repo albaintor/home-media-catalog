@@ -1062,6 +1062,31 @@ class Store:
             work_id = current["work_id"]
         return {"id": work_id, "item_id": external_key}
 
+    def set_custom_title(self, work_id: str, title: str | None) -> None:
+        """A display override does not replace source titles or provider identifiers."""
+        title = title.strip() if title else None
+        if title and len(title) > 300:
+            raise ValueError("Title exceeds 300 characters.")
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT kind FROM works WHERE id=?", (work_id,)).fetchone()
+            if row is None:
+                raise KeyError(work_id)
+            if row["kind"] not in ("movie", "tvshow"):
+                raise ValueError("Only movies and series support custom titles.")
+            previous = conn.execute("SELECT payload FROM enrichment WHERE work_id=?",
+                                    (work_id,)).fetchone()
+            payload = json.loads(previous["payload"]) if previous else {}
+            # Keep an explicit cleared value through reconciliation.
+            payload["custom_title"] = title or None
+            conn.execute(
+                "INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(work_id) DO UPDATE SET payload=excluded.payload,"
+                "updated_at=excluded.updated_at",
+                (work_id, encode(payload), now()),
+            )
+            self._rebuild(conn, work_id)
+
     def update_internal_edition(
         self, external_key: str, disc_format: str, barcode: str | None,
         manual: dict[str, Any] | None = None,
@@ -1736,15 +1761,20 @@ class Store:
         # A validated TMDB repair must also supersede a broken CLZ/Kodi
         # reference. Keep source URLs as fallbacks, not as the primary poster.
         # Repairs survive source reimports without mutating source records.
+        custom_title = None
         if enrichment:
-            repaired = json.loads(enrichment["payload"]).get("poster")
+            enriched = json.loads(enrichment["payload"])
+            custom_title = enriched.get("custom_title")
+            if custom_title:
+                search_text += " " + custom_title
+            repaired = enriched.get("poster")
             if isinstance(repaired, str) and repaired:
                 posters = [repaired, *(p for p in posters if p != repaired)]
         fanarts = list(dict.fromkeys(v for p, _ in entries for v in p.get("fanart", [])))
         values = {
             "kind": primary["kind"],
             "title": choose("title"),
-            "sort_title": fold(choose("sort_title") or choose("title") or ""),
+            "sort_title": fold(custom_title or choose("sort_title") or choose("title") or ""),
             **{
                 n: choose(n)
                 for n in (
@@ -1795,7 +1825,7 @@ class Store:
         )
         conn.execute(
             "INSERT INTO works_title_fts(work_id,titles) VALUES(?,?)",
-            (work_id, fold(title_text)),
+            (work_id, fold(title_text + " " + (custom_title or ""))),
         )
         Store._sync_collections(conn, work_id)
         for payload, _ in entries:
@@ -1971,6 +2001,17 @@ class Store:
         ids = [row["id"] for row in rows]
         by_work = cls._sources_for_works(conn, ids)
         collection_sources = cls._collection_sources_for_works(conn, ids)
+        custom_titles = {}
+        if ids:
+            slots = ",".join("?" for _ in ids)
+            custom_titles = {
+                r["work_id"]: r["custom_title"]
+                for r in conn.execute(
+                    "SELECT work_id,json_extract(payload,'$.custom_title') AS custom_title "
+                    f"FROM enrichment WHERE work_id IN ({slots}) "
+                    "AND json_type(payload,'$.custom_title')='text'", ids
+                )
+            }
         # Replicate only credit names, not full cast/crew payloads, so native
         # local-first advanced search can find directors and actors offline.
         searchable_people: dict[str, set[str]] = defaultdict(set)
@@ -2026,6 +2067,10 @@ class Store:
                 cls._summary(row), resumes.get(row["id"])
             )
             item.update(progress.get(row["id"], {}))
+            if title := custom_titles.get(row["id"]):
+                item["provider_title"] = item["title"]
+                item["custom_title"] = title
+                item["title"] = title
             item["media_sources"] = by_work.get(row["id"], [])
             item["search_people"] = sorted(searchable_people.get(row["id"], set()))
             manual = manual_memberships.get(row["id"])
@@ -3139,8 +3184,10 @@ class Store:
             # Refreshing credits must not erase an uploaded/repaired poster.
             if previous:
                 old_payload = json.loads(previous["payload"])
+                if "custom_title" in old_payload:
+                    payload = {**payload, "custom_title": old_payload["custom_title"]}
                 old_poster = old_payload.get("poster")
-                if old_poster and not payload.get("poster"):
+                if old_poster and (old_poster.startswith("hmc-poster://") or not payload.get("poster")):
                     payload = {**payload, "poster": old_poster}
                 # A credits/trailer refresh must not drop downloaded season guides.
                 if old_payload.get("season_guides") and "season_guides" not in payload:

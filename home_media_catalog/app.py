@@ -80,6 +80,7 @@ from .list_thumbnails import CollectionThumbnails, ListThumbnails
 from .models import (
     CatalogueStatus,
     ConnectionResult,
+    CustomTitleInput,
     EpisodeWatchInput,
     EpisodeWatchResult,
     ErrorResponse,
@@ -1345,6 +1346,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         start_ai_index()
         tmdb_wakeup.set()
         return saved
+
+    @app.patch(
+        API + "/media/{media_id}/custom-title",
+        response_model=MediaDetail,
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+    )
+    async def update_custom_title(media_id: str, data: CustomTitleInput):
+        try:
+            await asyncio.to_thread(store.set_custom_title, media_id, data.custom_title)
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown media.") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        start_ai_index()
+        return media_detail(media_id)
 
     @app.patch(
         API + "/internal/items/{item_id}",

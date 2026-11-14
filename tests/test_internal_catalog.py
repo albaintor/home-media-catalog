@@ -441,3 +441,22 @@ def test_manual_internal_work_metadata_is_editable_without_tmdb(client, admin):
     assert detail["plot"] == "Manual synopsis"
     assert client.get("/api/v1/media/" + work_id + "/artwork/poster",
                       headers=admin).content == image.getvalue()
+
+
+def test_custom_title_preserves_provider_identity_and_search(client, admin):
+    store = client.app.state.store
+    value = entry(title="Quebec title")
+    created = client.post("/api/v1/internal/items", json=value, headers=admin)
+    work_id = created.json()["id"]
+    endpoint = "/api/v1/media/" + work_id + "/custom-title"
+    response = client.patch(endpoint, headers=admin, json={"custom_title": "French title"})
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "French title"
+    assert response.json()["provider_title"] == "Quebec title"
+    assert response.json()["identifiers"]["tmdb"] == [value["tmdb_id"]]
+    assert store.media(q="French title")["total"] == 1
+    assert store.media(q="Quebec title")["total"] == 1
+    store.save_enrichment(work_id, {"people": [], "trailers": []})
+    assert store.detail(work_id)["title"] == "French title"
+    reset = client.patch(endpoint, headers=admin, json={"custom_title": None})
+    assert reset.json()["title"] == "Quebec title"

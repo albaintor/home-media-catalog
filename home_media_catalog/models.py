@@ -87,6 +87,10 @@ class ManualCollectionItemsInput(StrictModel):
     media_ids: list[str] = Field(min_length=1, max_length=200)
 
 
+class CustomTitleInput(StrictModel):
+    custom_title: str | None = Field(default=None, max_length=300)
+
+
 class ManualInternalMetadata(StrictModel):
     title: str = Field(min_length=1, max_length=300)
     original_title: str | None = Field(default=None, max_length=300)
@@ -194,6 +198,8 @@ class MediaSummary(BaseModel):
     id: str
     kind: Kind
     title: str
+    custom_title: str | None = None
+    provider_title: str | None = None
     original_title: str | None = None
     year: int | None = None
     plot: str | None = None
