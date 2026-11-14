@@ -2364,12 +2364,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request.headers.get("content-length", "").isdigit()
             and int(request.headers["content-length"]) > MAX_BACKUP_BYTES
         ):
-            raise HTTPException(413, "Backup exceeds 100 MiB.")
-        payload = await request.body()
-        if len(payload) > MAX_BACKUP_BYTES:
-            raise HTTPException(413, "Backup exceeds 100 MiB.")
+            raise HTTPException(413, "Backup exceeds 512 MiB.")
+        # Bound chunked uploads before accumulating the entire request.
+        payload = bytearray()
+        async for chunk in request.stream():
+            if len(payload) + len(chunk) > MAX_BACKUP_BYTES:
+                raise HTTPException(413, "Backup exceeds 512 MiB.")
+            payload.extend(chunk)
         try:
-            document = json.loads(payload)
+            document = await asyncio.to_thread(json.loads, payload)
+            del payload
             async with personal_edit_lock:
                 previous, restored = await asyncio.to_thread(import_backup, store, document)
         except (ValueError, UnicodeError) as exc:

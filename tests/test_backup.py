@@ -186,3 +186,19 @@ def test_catalogue_reset_preserves_access_but_clears_catalogue(client, admin):
     assert "backup" not in response.json()
     assert not list(store.path.parent.glob("catalogue.before-reset.*.db"))
     assert client.get("/api/v1/auth/session", headers=admin).status_code == 200
+
+
+
+def test_backup_limit_and_bounded_upload(client, admin, monkeypatch):
+    import importlib
+    from home_media_catalog.backup import MAX_BACKUP_BYTES
+
+    assert MAX_BACKUP_BYTES == 512 * 1024 * 1024
+    module = importlib.import_module("home_media_catalog.app")
+    monkeypatch.setattr(module, "MAX_BACKUP_BYTES", 32)
+    headers = {**admin, "Content-Type": "application/json"}
+    assert client.post("/api/v1/backup", headers=headers, content=b" " * 33).status_code == 413
+    response = client.post(
+        "/api/v1/backup", headers=headers, content=iter([b" " * 20, b" " * 20])
+    )
+    assert response.status_code == 413

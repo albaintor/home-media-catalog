@@ -4977,14 +4977,13 @@ document.addEventListener('change',async event=>{
   event.target.value='';
   if(!file)return;
   if(state.role!=='admin'){toast('Accès administrateur nécessaire.');return;}
-  if(file.size>100*1024*1024){toast('Le fichier JSON dépasse 100 Mio.');return;}
+  if(file.size>512*1024*1024){toast('Le fichier JSON dépasse 512 Mio.');return;}
   if(!localizedConfirm('Importer cette sauvegarde et remplacer tout le catalogue, ses notes, visionnages et listes ?'))return;
   const button=$('backup-export');
   if(button)button.disabled=true;
   try {
-    const content=await file.text();
-    const backup=JSON.parse(content);
-    const result=await api('backup',{method:'POST',body:JSON.stringify(backup)});
+    // Let the server validate the archive without multiple in-browser copies.
+    const result=await api('backup',{method:'POST',body:file});
     toast('Catalogue restauré : '+result.media+' médias et '+result.lists+' listes. Vignettes en régénération.');
     await refresh();
     await refreshHomeListThumbnails();

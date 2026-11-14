@@ -8,7 +8,7 @@ from .utils import fold, now
 FORMAT = "home-kodi-library"
 FORMAT_VERSION = 1
 SCHEMA_VERSION = 2
-MAX_BACKUP_BYTES = 100 * 1024 * 1024
+MAX_BACKUP_BYTES = 512 * 1024 * 1024
 
 # Parent rows precede dependants; generated FTS and transient state are rebuilt.
 TABLES = (
