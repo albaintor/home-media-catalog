@@ -161,6 +161,78 @@ def test_public_barcode_provider_fallback_does_not_depend_on_region(monkeypatch)
     assert result["providers_unavailable"] == ["upcitemdb"]
 
 
+def test_barcode_aliases_include_zero_padded_gtin14():
+    aliases = internal_catalog.barcode_variants("00036000291452")
+    assert "036000291452" in aliases
+    assert "0036000291452" in aliases
+    assert "00036000291452" in internal_catalog.barcode_variants("036000291452")
+
+
+def test_parallel_barcode_providers_prefer_disc_and_share_alias_cache(monkeypatch):
+    internal_catalog._CACHE.clear()
+    calls = []
+
+    async def movie(value, client):
+        calls.append(("movie", value))
+        return {"found": True, "title": "Movie - Blu-ray", "source": "upcmdb", "items": []}
+
+    async def generic(value, client):
+        calls.append(("generic", value))
+        return {"found": True, "title": "Generic product", "source": "upcitemdb", "items": []}
+
+    async def bnf(value, client):
+        calls.append(("bnf", value))
+        return None
+
+    monkeypatch.setattr(internal_catalog, "_lookup_upcmdb", movie)
+    monkeypatch.setattr(internal_catalog, "_lookup_upcitemdb", generic)
+    monkeypatch.setattr(internal_catalog, "_lookup_bnf", bnf)
+    first = asyncio.run(internal_catalog.lookup_disc_barcode("036000291452"))
+    second = asyncio.run(internal_catalog.lookup_disc_barcode("0036000291452"))
+    assert first["source"] == "upcmdb"
+    assert second["barcode"] == "0036000291452"
+    assert second["source"] == "upcmdb"
+    assert len(calls) == 3
+    internal_catalog._CACHE.clear()
+
+
+def test_barcode_fallback_uses_open_products_facts_after_primary_miss(monkeypatch):
+    internal_catalog._CACHE.clear()
+
+    async def miss(value, client):
+        return None
+
+    async def products(value, client):
+        return {"found": True, "title": "Film DVD", "source": "openproductsfacts", "items": []}
+
+    monkeypatch.setattr(internal_catalog, "_lookup_upcitemdb", miss)
+    monkeypatch.setattr(internal_catalog, "_lookup_bnf", miss)
+    monkeypatch.setattr(internal_catalog, "_lookup_openproductsfacts", products)
+    monkeypatch.setattr(internal_catalog, "_lookup_wikidata", miss)
+    monkeypatch.delenv("BARCODELOOKUP_API_KEY", raising=False)
+    result = asyncio.run(internal_catalog.lookup_disc_barcode("4006381333931"))
+    assert result["source"] == "openproductsfacts"
+    assert result["providers_checked"] == ["upcitemdb", "bnf", "openproductsfacts", "wikidata"]
+    internal_catalog._CACHE.clear()
+
+
+def test_upcmdb_parses_title_format_and_imdb_reference():
+    def handler(request):
+        assert request.url.path == "/api/v1/lookup/883929264483"
+        return httpx.Response(200, json={
+            "status": "success",
+            "data": {"title": "The Matrix", "format": "Blu-ray", "imdbID": "tt0133093"},
+        })
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await internal_catalog._lookup_upcmdb("883929264483", client)
+
+    result = asyncio.run(run())
+    assert result["title"] == "The Matrix - Blu-ray"
+    assert result["items"][0]["imdb_id"] == "tt0133093"
+
+
 def test_bnf_sru_response_extracts_physical_title_without_scraping():
     xml = b'''<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/"
         xmlns:dc="http://purl.org/dc/elements/1.1/">
