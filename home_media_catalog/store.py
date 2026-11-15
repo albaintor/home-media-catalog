@@ -1192,7 +1192,7 @@ class Store:
             source = conn.execute("SELECT type FROM sources WHERE id=?", (source_id,)).fetchone()
             if source is None:
                 raise KeyError(source_id)
-            if source["type"] not in tuple(t for t in DEVICE_COLLECTION_TYPES if t not in ("letterboxd", "imdb")):
+            if source["type"] not in DEVICE_COLLECTION_TYPES:
                 raise ValueError("Only imported movie collection sources can be converted.")
             rows = conn.execute(
                 "SELECT id,work_id,external_key,payload FROM records WHERE source_id=?", (source_id,)
@@ -1382,9 +1382,21 @@ class Store:
         return False
 
     def apply_device_collection(self, source_id: str, name: str, source_type: str,
-                                enabled: bool, records: list[Record]) -> dict[str, Any]:
-        if source_type not in DEVICE_COLLECTION_TYPES or not records:
+                                enabled: bool, records: list[Record] | None) -> dict[str, Any]:
+        if source_type not in DEVICE_COLLECTION_TYPES or records == []:
             raise ValueError("Unsupported or empty device collection.")
+        if records is None:
+            # Configuration-only updates must not erase an existing source or its credentials.
+            with self.connect() as conn:
+                previous = conn.execute("SELECT type FROM sources WHERE id=?", (source_id,)).fetchone()
+                if previous and previous["type"] != source_type:
+                    raise ValueError("The source type cannot be changed.")
+                conn.execute(
+                    "INSERT INTO sources(id,name,type,enabled,config) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name,enabled=excluded.enabled",
+                    (source_id, name, source_type, enabled, "{}"),
+                )
+            return {"configured": True}
         return self.apply_snapshot(source_id, records, device_source=(name, source_type, enabled))
 
     def apply_snapshot(self, source_id: str, records: list[Record], *,

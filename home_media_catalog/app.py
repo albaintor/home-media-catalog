@@ -3708,7 +3708,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data = DeviceCollectionSnapshot.model_validate_json(b"".join(chunks))
         except ValueError as exc:
             raise HTTPException(422, "Invalid device collection snapshot.") from exc
-        keys = [item.external_key for item in data.records]
+        keys = [item.external_key for item in (data.records or [])]
         if len(set(keys)) != len(keys):
             raise HTTPException(422, "Duplicate edition identifiers.")
         sid = str(source_id).lower()
@@ -3719,7 +3719,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if sid in sync.active:
             raise HTTPException(409, "A source job is already running.")
         records = []
-        for item in data.records:
+        for item in (data.records or []):
             payload = item.model_dump()
             identifiers = payload["identifiers"]
             if any(
@@ -3731,9 +3731,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(422, "Invalid media identifier.")
             records.append(Record(**payload))
         try:
-            return await asyncio.to_thread(
-                store.apply_device_collection, sid, data.name, data.type, data.enabled, records
-            )
+            sync.active.add(sid)
+            try:
+                result = await asyncio.to_thread(
+                    store.apply_device_collection, sid, data.name, data.type, data.enabled,
+                    records if data.records is not None else None
+                )
+                if result.get("rebuilt_works") and sync.on_catalog_changed:
+                    try:
+                        sync.on_catalog_changed()
+                    except Exception:
+                        logging.exception("Failed to schedule semantic indexing")
+                return result
+            finally:
+                sync.active.discard(sid)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
@@ -3758,6 +3769,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tags=["Imports"],
         dependencies=[Depends(writable)],
     )
+    @app.post(API + "/imports/icollect", response_model=JobView, status_code=202,
+              tags=["Imports"], dependencies=[Depends(writable)])
+    @app.post(API + "/imports/bluraycom", response_model=JobView, status_code=202,
+              tags=["Imports"], dependencies=[Depends(writable)])
+    @app.post(API + "/imports/moviebuddy", response_model=JobView, status_code=202,
+              tags=["Imports"], dependencies=[Depends(writable)])
+    @app.post(API + "/imports/dvdprofiler", response_model=JobView, status_code=202,
+              tags=["Imports"], dependencies=[Depends(writable)])
+    @app.post(API + "/imports/letterboxd", response_model=JobView, status_code=202,
+              tags=["Imports"], dependencies=[Depends(writable)])
+    @app.post(API + "/imports/imdb", response_model=JobView, status_code=202,
+              tags=["Imports"], dependencies=[Depends(writable)])
     async def import_collection(
         request: Request,
         file: UploadFile = File(...),
@@ -3769,18 +3792,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Unknown source.")
         if source["type"] != collection_type:
             raise HTTPException(422, "The export type must match the selected collection source.")
+        filename = file.filename or ""
         chunks, length = [], 0
         while chunk := await file.read(65536):
             length += len(chunk)
             if length > settings.max_import_bytes:
                 await file.close()
-                raise HTTPException(413, "The XML export exceeds the 20 MiB import limit.")
+                raise HTTPException(413, "The collection export exceeds the 20 MiB import limit.")
             chunks.append(chunk)
         await file.close()
         if not length:
-            raise HTTPException(422, "Upload a non-empty XML file.")
+            raise HTTPException(422, "Upload a non-empty collection file.")
         try:
-            return await sync.submit(source_id, b"".join(chunks))
+            return await sync.submit(source_id, b"".join(chunks), filename=filename)
         except BusyError as exc:
             raise HTTPException(409, str(exc)) from exc
         except ValueError as exc:

@@ -179,7 +179,7 @@ class DeviceCollectionSnapshot(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     type: Literal["clz", "mymovies", "filmotech", "icollect", "bluraycom", "moviebuddy", "dvdprofiler", "letterboxd", "imdb"]
     enabled: bool = True
-    records: list[DeviceCollectionRecord] = Field(min_length=1, max_length=100000)
+    records: list[DeviceCollectionRecord] | None = Field(default=None, min_length=1, max_length=100000)
 
 
 class MariaDBConnectionInput(StrictModel):

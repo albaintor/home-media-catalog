@@ -8,7 +8,8 @@ from typing import Any
 
 from .connectors.base import ConnectorError
 from .connectors.clz import parse_clz
-from .connectors.collection_xml import COLLECTION_TYPES, parse_collection
+from .connectors.collection_xml import DEVICE_COLLECTION_TYPES, parse_collection
+from .connectors.collection_files import CSV_TYPES, parse_csv, parse_dvdprofiler
 from .connectors.kodi import KodiConnector
 from .connectors.kodi_jsonrpc import fetch_kodi_snapshot
 from .connectors.kodi_music import KodiMusicConnector, fetch_kodi_music_snapshot
@@ -36,7 +37,7 @@ class SyncManager:
         self.last_reachable_kodi_players: dict[str, str] = {}
 
     async def submit(self, source_id: str, xml: bytes | None = None, *,
-                     mariadb_only: bool = False) -> dict[str, Any]:
+                     mariadb_only: bool = False, filename: str = "") -> dict[str, Any]:
         if source_id in self.active:
             raise BusyError("An import or synchronization is already running for this source.")
         source = await asyncio.to_thread(self.store.source, source_id, private=True)
@@ -46,7 +47,7 @@ class SyncManager:
             raise ValueError("Music collections are refreshed by uploading their export.")
         if xml is None and source["type"] != "kodi":
             raise ValueError("Collection sources are refreshed by uploading an XML export.")
-        if xml is not None and source["type"] not in COLLECTION_TYPES:
+        if xml is not None and source["type"] not in DEVICE_COLLECTION_TYPES:
             raise ValueError("XML imports require a collection source.")
         if mariadb_only and (xml is not None or source["type"] != "kodi"):
             raise ValueError("MariaDB-only refresh is available for Kodi sources only.")
@@ -69,7 +70,7 @@ class SyncManager:
         except Exception:
             self.active.remove(source_id)
             raise
-        task = asyncio.create_task(self._run(job, source, xml, mariadb_only=mariadb_only))
+        task = asyncio.create_task(self._run(job, source, xml, mariadb_only=mariadb_only, filename=filename))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         return job
@@ -243,6 +244,7 @@ class SyncManager:
         scan_info: dict | None = None,
         offline_player_ids: set[str] | None = None,
         mariadb_only: bool = False,
+        filename: str = "",
     ):
         try:
             await asyncio.to_thread(self.store.start_job, job["id"])
@@ -250,10 +252,15 @@ class SyncManager:
                 await asyncio.to_thread(
                     self.store.update_job_progress, job["id"], f"parsing_{source['type']}"
                 )
-                if source["type"] == "clz":
+                provider = source["type"]
+                if provider in CSV_TYPES and (filename.lower().endswith(".csv") or provider not in {"mymovies", "filmotech"}):
+                    records = await asyncio.to_thread(parse_csv, xml, provider, filename)
+                elif provider == "dvdprofiler":
+                    records = await asyncio.to_thread(parse_dvdprofiler, xml)
+                elif provider == "clz":
                     records = await asyncio.to_thread(parse_clz, xml)
                 else:
-                    records = await asyncio.to_thread(parse_collection, xml, source["type"])
+                    records = await asyncio.to_thread(parse_collection, xml, provider)
                 database = None
             else:
                 database = None
