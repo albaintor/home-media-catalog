@@ -135,3 +135,17 @@ def test_device_diagnostics_preserve_conflicting_identity(store):
     result = store.merge_device_tmdb_enrichment([_device_item(movie_id)], diagnostics=True)
     assert result["reasons"] == {movie_id: "identity_mismatch"}
     assert result["rejected"] == [movie_id]
+
+
+def test_device_upload_accepts_large_movie_credits(store):
+    source = store.save_source({"name": "CLZ", "type": "clz"})["id"]
+    store.apply_snapshot(source, [Record(
+        "disc", "movie", "Large cast and crew",
+        identifiers={"imdb": "tt1234567", "tmdb": "4400"}
+    )])
+    movie_id = store.media(source_type="clz")["items"][0]["id"]
+    people = [{"name": f"Crew member {i}", "category": "crew", "photos": [],
+               "tmdb_id": str(i + 1)} for i in range(350)]
+    result = store.merge_device_tmdb_enrichment([_device_item(movie_id, people=people)])
+    assert result["accepted"] == [movie_id]
+    assert len(store.detail(movie_id)["people"]) == 350

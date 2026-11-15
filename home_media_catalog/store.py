@@ -3924,6 +3924,8 @@ class Store:
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError("Each enrichment item must be an object.")
                 work_id = item.get("media_id")
                 original_id = work_id
                 tmdb_id = item.get("tmdb_id")
@@ -3933,8 +3935,9 @@ class Store:
                 if (not isinstance(work_id, str) or len(work_id) > 128
                     or not isinstance(tmdb_id, str) or not tmdb_id.isdigit()
                     or len(tmdb_id) > 24
-                    or not isinstance(people, list) or len(people) > 300
-                    or not isinstance(trailers, list) or len(trailers) > 40):
+                    # Complete movie credits may contain hundreds of crew members.
+                    or not isinstance(people, list) or len(people) > 2000
+                    or not isinstance(trailers, list) or len(trailers) > 100):
                     rejected.append(work_id)
                     if isinstance(work_id, str):
                         reasons[work_id] = "invalid_metadata"

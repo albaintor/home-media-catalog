@@ -976,6 +976,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Only canonical works with matching provider identities can be changed.
         The server merges rather than replacing previously enriched metadata.
         """
+        body = await request.body()
+        if len(body) > 32 * 1024 * 1024:
+            raise HTTPException(413, "TMDB enrichment batch exceeds 32 MiB.")
         data = await request.json()
         items = data.get("items") if isinstance(data, dict) else None
         if not isinstance(items, list):
