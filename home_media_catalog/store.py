@@ -13,7 +13,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .connectors.base import Record
-from .connectors.collection_xml import COLLECTION_TYPES, SOURCE_TYPES
+from .connectors.collection_xml import COLLECTION_TYPES, DEVICE_COLLECTION_TYPES, SOURCE_TYPES
 from .media_formats import canonical_format, canonical_source_format
 from .people import category as credit_category
 from .people import person_view, youtube_url
@@ -1192,7 +1192,7 @@ class Store:
             source = conn.execute("SELECT type FROM sources WHERE id=?", (source_id,)).fetchone()
             if source is None:
                 raise KeyError(source_id)
-            if source["type"] not in ("clz", "mymovies", "filmotech"):
+            if source["type"] not in tuple(t for t in DEVICE_COLLECTION_TYPES if t not in ("letterboxd", "imdb")):
                 raise ValueError("Only imported movie collection sources can be converted.")
             rows = conn.execute(
                 "SELECT id,work_id,external_key,payload FROM records WHERE source_id=?", (source_id,)
@@ -1381,9 +1381,26 @@ class Store:
             movies.add(movie_id)
         return False
 
-    def apply_snapshot(self, source_id: str, records: list[Record]) -> dict[str, Any]:
+    def apply_device_collection(self, source_id: str, name: str, source_type: str,
+                                enabled: bool, records: list[Record]) -> dict[str, Any]:
+        if source_type not in DEVICE_COLLECTION_TYPES or not records:
+            raise ValueError("Unsupported or empty device collection.")
+        return self.apply_snapshot(source_id, records, device_source=(name, source_type, enabled))
+
+    def apply_snapshot(self, source_id: str, records: list[Record], *,
+                       device_source: tuple[str, str, bool] | None = None) -> dict[str, Any]:
         """Atomic replacement per source; stable edition IDs across subsequent imports."""
         with self.connect() as conn:
+            if device_source is not None:
+                name, source_type, enabled = device_source
+                previous = conn.execute("SELECT type FROM sources WHERE id=?", (source_id,)).fetchone()
+                if previous and previous["type"] != source_type:
+                    raise ValueError("The source type cannot be changed.")
+                conn.execute(
+                    "INSERT INTO sources(id,name,type,enabled,config) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name,enabled=excluded.enabled",
+                    (source_id, name, source_type, enabled, "{}"),
+                )
             source = conn.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
             if not source:
                 raise ValueError("Source no longer exists.")

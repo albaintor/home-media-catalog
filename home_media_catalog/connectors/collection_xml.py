@@ -12,7 +12,8 @@ from ..utils import date_value, fold, formats, identifiers, integer, plain_text,
 from .base import ConnectorError, Record
 
 COLLECTION_TYPES = ("clz", "mymovies", "filmotech")
-SOURCE_TYPES = ("kodi", "internal", *COLLECTION_TYPES)
+DEVICE_COLLECTION_TYPES = (*COLLECTION_TYPES, "icollect", "bluraycom", "moviebuddy", "dvdprofiler", "letterboxd", "imdb")
+SOURCE_TYPES = ("kodi", "internal", *DEVICE_COLLECTION_TYPES)
 
 
 def name(value: str) -> str:

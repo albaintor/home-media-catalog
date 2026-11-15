@@ -152,9 +152,34 @@ class InternalMediaInput(StrictModel):
 
 class SourceInput(StrictModel):
     name: str = Field(min_length=1, max_length=120)
-    type: Literal["kodi", "clz", "mymovies", "filmotech", "music_csv", "discogs", "clz_music"]
+    type: Literal["kodi", "clz", "mymovies", "filmotech", "icollect", "bluraycom", "moviebuddy", "dvdprofiler", "letterboxd", "imdb", "music_csv", "discogs", "clz_music"]
     config: SourceConfig = Field(default_factory=SourceConfig)
     enabled: bool = True
+
+
+class DeviceCollectionRecord(StrictModel):
+    external_key: str = Field(min_length=1, max_length=2048)
+    kind: Literal["movie", "tvshow"]
+    title: str = Field(min_length=1, max_length=2048)
+    original_title: str | None = None
+    year: int | None = Field(default=None, ge=0, le=9999)
+    plot: str | None = None
+    runtime_minutes: int | None = Field(default=None, ge=0)
+    rating: float | None = Field(default=None, ge=0, le=10)
+    user_rating: float | None = Field(default=None, ge=0, le=10)
+    watched: bool | None = None
+    genres: list[str] = Field(default_factory=list)
+    formats: list[str] = Field(default_factory=list)
+    collections: list[str] = Field(default_factory=list)
+    identifiers: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeviceCollectionSnapshot(StrictModel):
+    name: str = Field(min_length=1, max_length=120)
+    type: Literal["clz", "mymovies", "filmotech", "icollect", "bluraycom", "moviebuddy", "dvdprofiler", "letterboxd", "imdb"]
+    enabled: bool = True
+    records: list[DeviceCollectionRecord] = Field(min_length=1, max_length=100000)
 
 
 class MariaDBConnectionInput(StrictModel):
@@ -196,7 +221,7 @@ class ConnectionResult(BaseModel):
 class SourceView(BaseModel):
     id: str
     name: str
-    type: Literal["kodi", "clz", "mymovies", "filmotech", "internal", "music_csv", "discogs", "clz_music"]
+    type: Literal["kodi", "clz", "mymovies", "filmotech", "icollect", "bluraycom", "moviebuddy", "dvdprofiler", "letterboxd", "imdb", "internal", "music_csv", "discogs", "clz_music"]
     enabled: bool
     config: dict[str, Any]
     last_sync: str | None = None

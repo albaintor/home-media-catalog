@@ -60,7 +60,7 @@ from .artwork import Artwork, ArtworkError
 from .auth import COOKIE, Auth, Principal, authenticated, secure_equal, writable
 from .backup import MAX_BACKUP_BYTES, export_backup, import_backup
 from .compatibility import mobile_compatibility
-from .connectors.base import ConnectorError
+from .connectors.base import ConnectorError, Record
 from .connectors.kodi import KodiConnector
 from .enrichment import (
     TmdbRateLimited,
@@ -84,6 +84,7 @@ from .models import (
     ConnectionResult,
     CustomTitleInput,
     EditionHDRInput,
+    DeviceCollectionSnapshot,
     EpisodeWatchInput,
     EpisodeWatchResult,
     ErrorResponse,
@@ -1536,7 +1537,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         format: list[str] | None = Query(None),
         collection: list[str] | None = Query(None, max_length=40),
         collection_id: str | None = Query(None, max_length=120),
-        source_type: list[Literal["kodi", "clz", "mymovies", "filmotech", "internal"]] | None = Query(None),
+        source_type: list[Literal["kodi", "clz", "mymovies", "filmotech", "icollect", "bluraycom", "moviebuddy", "dvdprofiler", "letterboxd", "imdb", "internal"]] | None = Query(None),
         source_id: str | None = None,
         parent_id: str | None = None,
         season: int | None = Query(None, ge=0, le=10000),
@@ -3687,6 +3688,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not store.source(source_id):
             raise HTTPException(404, "Unknown source.")
         return store.writeback_history(source_id=source_id, limit=limit)
+
+    @app.put(
+        API + "/imports/device-collection/{source_id}",
+        tags=["Imports"],
+        dependencies=[Depends(writable)],
+    )
+    async def publish_device_collection(source_id: UUID, request: Request):
+        # Only normalized, already imported device records are accepted here.
+        # Restrict the size before parsing; do not invoke a third-party parser,
+        # fetch remote artwork, or write back to the original provider.
+        chunks, length = [], 0
+        async for chunk in request.stream():
+            length += len(chunk)
+            if length > max(settings.max_import_bytes * 4, 80 * 1024 * 1024):
+                raise HTTPException(413, "Device collection exceeds the synchronization limit.")
+            chunks.append(chunk)
+        try:
+            data = DeviceCollectionSnapshot.model_validate_json(b"".join(chunks))
+        except ValueError as exc:
+            raise HTTPException(422, "Invalid device collection snapshot.") from exc
+        keys = [item.external_key for item in data.records]
+        if len(set(keys)) != len(keys):
+            raise HTTPException(422, "Duplicate edition identifiers.")
+        sid = str(source_id).lower()
+        # Preserve the spelling of existing UUIDs if an older client supplied it.
+        raw_id = request.url.path.rsplit("/", 1)[-1]
+        if raw_id != sid and await asyncio.to_thread(store.source, raw_id):
+            sid = raw_id
+        if sid in sync.active:
+            raise HTTPException(409, "A source job is already running.")
+        records = []
+        for item in data.records:
+            payload = item.model_dump()
+            identifiers = payload["identifiers"]
+            if any(
+                key not in {"imdb", "tmdb"} or
+                (key == "imdb" and not (value.startswith("tt") and value[2:].isdigit())) or
+                (key == "tmdb" and not value.isdigit())
+                for key, value in identifiers.items()
+            ):
+                raise HTTPException(422, "Invalid media identifier.")
+            records.append(Record(**payload))
+        try:
+            return await asyncio.to_thread(
+                store.apply_device_collection, sid, data.name, data.type, data.enabled, records
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.post(
         API + "/imports/clz",
