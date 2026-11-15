@@ -164,7 +164,7 @@ for component details and unresolved compliance checks.
 ### iOS/iPadOS without a server
 
 1. Build/install the mobile app from the App Store
-2. Add a Kodi instance via local-network discovery or its hostname/IP address. Enable and configure Kodi's **HTTP JSON-RPC remote control**. Import the library directly from Kodi; an external MariaDB database is **not required** for the normal JSON-RPC import.
+2. Add a Kodi instance via local-network discovery or its hostname/IP address. Enable and configure Kodi's **HTTP JSON-RPC remote control** using the [Kodi setup guide](docs/kodi-setup.md). Import the library directly from Kodi; an external MariaDB database is **not required** for the normal JSON-RPC import.
 3. Alternatively, import a compatible CLZ Movies, My Movies or Filmotech XML collection. Configure media playback sources separately as needed. AI search and browser access are unavailable without a server.
 
 ### Shared web + iOS/iPadOS catalogue (optional)
