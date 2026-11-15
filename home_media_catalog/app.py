@@ -768,6 +768,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         skips = {work_id: expires for work_id, expires in skips.items()
                                  if work_id in pending}
                         saved["skipped"] = skips
+                        errors = {key: value for key, value in (saved.get("skip_errors") or {}).items()
+                                  if key in pending}
+                        saved["skip_errors"] = errors
                         tmdb_worker_status["running"] = bool(eligible)
                         limited = False
                         for media_id in eligible[:20]:
@@ -785,6 +788,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                         datetime.now(UTC).isoformat())
                                     tmdb_worker_status["last_error"] = None
                                     skips.pop(media_id, None)
+                                    errors.pop(media_id, None)
                                 except TmdbRateLimited as exc:
                                     saved["retry_at"] = (
                                         datetime.now(UTC) +
@@ -800,6 +804,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     skips[media_id] = (
                                         datetime.now(UTC) + timedelta(hours=24)
                                     ).isoformat()
+                                    errors[media_id] = str(exc)
                                     tmdb_worker_status["last_error"] = str(exc)
                             await asyncio.to_thread(store.save_tmdb_retry_state, saved)
                         tmdb_worker_status["running"] = False
@@ -965,7 +970,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tags=["Enrichment"],
         dependencies=[Depends(writable)],
     )
-    async def publish_device_tmdb_enrichment(request: Request):
+    async def publish_device_tmdb_enrichment(request: Request, diagnostics: bool = False):
         """Accept pending iOS metadata without importing physical editions.
 
         Only canonical works with matching provider identities can be changed.
@@ -976,12 +981,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not isinstance(items, list):
             raise HTTPException(422, "Expected an items array.")
         try:
-            outcome = await asyncio.to_thread(store.merge_device_tmdb_enrichment, items)
+            outcome = await asyncio.to_thread(store.merge_device_tmdb_enrichment, items, diagnostics=diagnostics)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         if outcome["accepted"]:
             start_ai_index()
         return outcome
+
+    @app.get(
+        API + "/catalogue/enrichment/pending",
+        tags=["Enrichment"],
+        dependencies=[Depends(authenticated)],
+    )
+    async def pending_tmdb_enrichment():
+        saved = await asyncio.to_thread(store.tmdb_retry_state)
+        pending = await asyncio.to_thread(store.tmdb_enrichment_candidates)
+        items = []
+        for media_id in pending:
+            detail = await asyncio.to_thread(store.detail, media_id)
+            if not detail:
+                continue
+            items.append({
+                "id": media_id, "title": detail["title"],
+                "poster": detail.get("artwork", {}).get("poster"),
+                "reason": (saved.get("skip_errors") or {}).get(media_id),
+                "retry_at": (saved.get("skipped") or {}).get(media_id) or saved.get("retry_at"),
+            })
+        return {"items": items, "retry_at": saved.get("retry_at")}
+
+    @app.post(
+        API + "/catalogue/enrichment/pending/retry",
+        tags=["Enrichment"],
+        dependencies=[Depends(writable)],
+    )
+    async def retry_pending_tmdb_enrichment(media_id: str | None = None):
+        # Retry per-work cooldowns but never override a provider HTTP 429.
+        async with enrichment_lock:
+            saved = await asyncio.to_thread(store.tmdb_retry_state)
+            skips = saved.get("skipped") or {}
+            errors = saved.get("skip_errors") or {}
+            if media_id is None:
+                skips.clear()
+                errors.clear()
+            else:
+                skips.pop(media_id, None)
+                errors.pop(media_id, None)
+            saved["skipped"] = skips
+            saved["skip_errors"] = errors
+            await asyncio.to_thread(store.save_tmdb_retry_state, saved)
+        tmdb_wakeup.set()
+        return {"queued": True}
 
     @app.get(
         API + "/catalogue/enrichment/revisions",

@@ -3910,7 +3910,7 @@ class Store:
         return [{"media_id": row["work_id"], "updated_at": row["updated_at"]}
                 for row in rows]
 
-    def merge_device_tmdb_enrichment(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+    def merge_device_tmdb_enrichment(self, items: list[dict[str, Any]], *, diagnostics: bool = False) -> dict[str, Any]:
         """Merge authenticated device enrichment by canonical work identity.
 
         Never trust a device's local UUID as evidence of a TMDB match: an
@@ -3920,10 +3920,12 @@ class Store:
         if not 1 <= len(items) <= 100:
             raise ValueError("Supply between 1 and 100 enriched media items.")
         accepted, unchanged, rejected = [], [], []
+        reasons, remapped = {}, {}
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             for item in items:
                 work_id = item.get("media_id")
+                original_id = work_id
                 tmdb_id = item.get("tmdb_id")
                 imdb_id = item.get("imdb_id")
                 people = item.get("people")
@@ -3934,6 +3936,8 @@ class Store:
                     or not isinstance(people, list) or len(people) > 300
                     or not isinstance(trailers, list) or len(trailers) > 40):
                     rejected.append(work_id)
+                    if isinstance(work_id, str):
+                        reasons[work_id] = "invalid_metadata"
                     continue
                 poster = item.get("poster")
                 valid_poster = poster is None or (
@@ -3957,12 +3961,36 @@ class Store:
                     or any(not isinstance(url, str) or
                            len(url) > 255 or not youtube_url(url) for url in trailers)):
                     rejected.append(work_id)
+                    reasons[work_id] = "invalid_artwork_or_credits"
                     continue
                 row = conn.execute(
                     "SELECT kind FROM works WHERE id=?", (work_id,)
                 ).fetchone()
+                if not row and item.get("kind") in ("movie", "tvshow"):
+                    # A removed canonical UUID can result from a catalogue
+                    # merge. Only reconcile an exact, unique provider match.
+                    kind = item["kind"]
+                    matches = conn.execute(
+                        "SELECT DISTINCT i.work_id FROM identifiers i "
+                        "WHERE i.kind=? AND i.namespace='tmdb' AND i.value=?",
+                        (kind, tmdb_id),
+                    ).fetchall()
+                    if not matches and isinstance(imdb_id, str) and re.fullmatch(r"tt\d+", imdb_id):
+                        matches = conn.execute(
+                            "SELECT DISTINCT i.work_id FROM identifiers i "
+                            "WHERE i.kind=? AND i.namespace='imdb' AND i.value=?",
+                            (kind, imdb_id),
+                        ).fetchall()
+                    if len(matches) == 1:
+                        work_id = matches[0]["work_id"]
+                        row = conn.execute("SELECT kind FROM works WHERE id=?", (work_id,)).fetchone()
+                    elif len(matches) > 1:
+                        rejected.append(original_id)
+                        reasons[original_id] = "ambiguous_identity"
+                        continue
                 if not row or row["kind"] not in ("movie", "tvshow"):
-                    rejected.append(work_id)
+                    rejected.append(original_id)
+                    reasons[original_id] = "unknown_media"
                     continue
                 identifiers = {
                     (r["namespace"], r["value"]) for r in conn.execute(
@@ -3977,9 +4005,15 @@ class Store:
                     ((tmdb_id in known_tmdb) or
                      (isinstance(imdb_id, str) and imdb_id in known_imdb))
                 )
-                if not identity_ok:
-                    rejected.append(work_id)
+                if not identity_ok or (
+                    original_id != work_id and isinstance(imdb_id, str)
+                    and known_imdb and imdb_id not in known_imdb
+                ) or (item.get("kind") is not None and item["kind"] != row["kind"]):
+                    rejected.append(original_id)
+                    reasons[original_id] = "identity_mismatch"
                     continue
+                if original_id != work_id:
+                    remapped[original_id] = work_id
                 cached = conn.execute(
                     "SELECT payload FROM enrichment WHERE work_id=?", (work_id,)
                 ).fetchone()
@@ -4007,7 +4041,7 @@ class Store:
                         " VALUES(?,?,'tmdb',?)", (work_id, row["kind"], tmdb_id)
                     )
                 if payload == old:
-                    unchanged.append(work_id)
+                    unchanged.append(original_id)
                     continue
                 missing_poster = not json.loads(conn.execute(
                     "SELECT poster FROM works WHERE id=?", (work_id,)
@@ -4035,8 +4069,11 @@ class Store:
                         "INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
                         (work_id, now()),
                     )
-                accepted.append(work_id)
-        return {"accepted": accepted, "unchanged": unchanged, "rejected": rejected}
+                accepted.append(original_id)
+        result = {"accepted": accepted, "unchanged": unchanged, "rejected": rejected}
+        if diagnostics:
+            result.update(reasons=reasons, remapped=remapped)
+        return result
 
     def tmdb_retry_state(self) -> dict[str, Any]:
         """Persistent queue checkpoints, including a provider-wide 429 cooldown."""

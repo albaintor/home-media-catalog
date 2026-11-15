@@ -109,3 +109,29 @@ def test_coordination_only_shares_same_tmdb_key(client, admin):
     assert response.status_code == 200
     assert response.json()["shared"] is False
     assert client.app.state.store.tmdb_retry_state()["retry_at"] is None
+
+
+def test_device_upload_reconciles_removed_uuid_by_unique_provider_identity(store):
+    source = store.save_source({"name": "CLZ", "type": "clz"})["id"]
+    store.apply_snapshot(source, [Record(
+        "disc", "movie", "Merged film",
+        identifiers={"imdb": "tt1234567", "tmdb": "4400"}
+    )])
+    movie_id = store.media(source_type="clz")["items"][0]["id"]
+    result = store.merge_device_tmdb_enrichment([
+        _device_item("obsolete-uuid", kind="movie")
+    ], diagnostics=True)
+    assert result["accepted"] == ["obsolete-uuid"]
+    assert result["remapped"] == {"obsolete-uuid": movie_id}
+    assert store.detail(movie_id)["enriched_at"] is not None
+
+
+def test_device_diagnostics_preserve_conflicting_identity(store):
+    source = store.save_source({"name": "CLZ", "type": "clz"})["id"]
+    store.apply_snapshot(source, [Record(
+        "disc", "movie", "Other film", identifiers={"tmdb": "999"}
+    )])
+    movie_id = store.media(source_type="clz")["items"][0]["id"]
+    result = store.merge_device_tmdb_enrichment([_device_item(movie_id)], diagnostics=True)
+    assert result["reasons"] == {movie_id: "identity_mismatch"}
+    assert result["rejected"] == [movie_id]
