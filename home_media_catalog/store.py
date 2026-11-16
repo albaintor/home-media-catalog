@@ -924,6 +924,9 @@ class Store:
 
     def delete_source(self, source_id: str) -> None:
         with self.connect() as conn:
+            # Lock the affected record set before reading it so concurrent
+            # imports cannot add works between enumeration and deletion.
+            conn.execute("BEGIN IMMEDIATE")
             affected = [
                 r[0]
                 for r in conn.execute(

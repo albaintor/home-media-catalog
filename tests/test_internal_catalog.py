@@ -590,3 +590,34 @@ def test_remove_custom_poster_restores_provider_or_leaves_no_poster(store):
     store.update_media_metadata(other["id"], {"remove_poster": True})
     assert store.artwork(other["id"], "poster") == []
     assert not store.detail(other["id"])["has_custom_poster"]
+
+
+@pytest.mark.parametrize("operation", ["convert", "convert_and_remove", "delete"])
+def test_source_mutations_rollback_on_rebuild_failure(store, monkeypatch, operation):
+    source_id = store.save_source({"name": "Discs", "type": "clz", "config": {}})["id"]
+    store.apply_snapshot(source_id, [
+        Record("disc-1", "movie", "Example disc", identifiers={"tmdb": "12345"})
+    ])
+    work_id = store.media()["items"][0]["id"]
+    original = store.detail(work_id)["editions"]
+    with monkeypatch.context() as patch:
+        def fail_rebuild(*args, **kwargs):
+            raise RuntimeError("simulated interrupted transaction")
+        patch.setattr(store, "_rebuild", fail_rebuild)
+        with pytest.raises(RuntimeError, match="simulated interrupted transaction"):
+            if operation == "delete":
+                store.delete_source(source_id)
+            else:
+                store.convert_source_to_internal(source_id, operation == "convert_and_remove")
+
+    assert store.source(source_id) is not None
+    assert store.detail(work_id)["editions"] == original
+    if operation != "delete":
+        assert store.convert_source_to_internal(source_id)["copied"] == 1
+        assert store.convert_source_to_internal(source_id)["copied"] == 0
+        store.convert_source_to_internal(source_id, True)
+        assert store.source(source_id) is None
+        assert [e["source_type"] for e in store.detail(work_id)["editions"]] == ["internal"]
+    else:
+        store.delete_source(source_id)
+        assert store.source(source_id) is None
