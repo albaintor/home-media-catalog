@@ -72,6 +72,29 @@ def barcode_variants(value: str) -> tuple[str, ...]:
         aliases.append(base.zfill(14))
     return tuple(dict.fromkeys(aliases))
 
+def canonical_gtin(value: str | None) -> str | None:
+    """Compare validated GS1 identifiers independently of zero padding.
+
+    Prefer GTIN-8 over ambiguous UPC-E; camera UPC-E is expanded before save.
+    A nonzero GTIN-14 packaging indicator remains significant.
+    """
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if _valid_gtin(value):
+        return value.zfill(14)
+    expanded = expand_upce(value)
+    return expanded.zfill(14) if expanded else None
+
+
+def edition_gtin(metadata: dict) -> str | None:
+    for name in ("barcode", "ean", "upc"):
+        result = canonical_gtin(metadata.get(name))
+        if result:
+            return result
+    return None
+
+
 async def find_tmdb(query: str, token: str) -> list[dict]:
     if len(query.strip()) < 2:
         return []

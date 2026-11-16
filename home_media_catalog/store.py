@@ -982,7 +982,7 @@ class Store:
         The UUID belongs to the edition, never the TMDB work. Retrying the same
         POST is a no-op; physical editions of one film share a catalogue work.
         """
-        from .internal_catalog import physical_season_in_title, valid_barcode
+        from .internal_catalog import physical_season_in_title, valid_barcode, canonical_gtin, edition_gtin
         from .media_formats import merge_disc_formats
 
         barcode = data.get("barcode")
@@ -1013,6 +1013,26 @@ class Store:
                 "SELECT work_id FROM records WHERE source_id='internal' AND external_key=?",
                 (external_key,),
             ).fetchone()
+            if not existing and barcode and not data.get("allow_duplicate"):
+                gtin = canonical_gtin(barcode)
+                for row in conn.execute(
+                    "SELECT work_id,external_key,payload FROM records WHERE source_id='internal'"
+                ):
+                    record = json.loads(row["payload"])
+                    metadata = record.get("metadata") or {}
+                    if edition_gtin(metadata) != gtin:
+                        continue
+                    # Do not silently identify different seasons/works as one.
+                    ids = record.get("identifiers") or {}
+                    if any(data.get(field) and ids.get(key) and
+                           str(data[field]) != str(ids[key])
+                           for field, key in (("tmdb_id", "tmdb"), ("imdb_id", "imdb"))):
+                        continue
+                    if record.get("kind") != kind:
+                        continue
+                    if physical_season is not None and metadata.get("physical_season") is not None and physical_season != metadata["physical_season"]:
+                        continue
+                    return {"id": row["work_id"], "item_id": row["external_key"]}
             if not existing:
                 ids = {kind: value for kind, value in
                        (("tmdb", data.get("tmdb_id")), ("imdb", data.get("imdb_id")))
@@ -1038,6 +1058,7 @@ class Store:
                     poster=poster,
                     metadata={
                         "barcode": barcode, "internal": True,
+                        **({"intentional_copy": True} if data.get("allow_duplicate") else {}),
                         **({
                             "physical_season": physical_season,
                             "physical_title": physical_title or title,

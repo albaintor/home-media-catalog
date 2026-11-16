@@ -133,6 +133,7 @@ class InternalEditionUpdate(StrictModel):
 
 class InternalMediaInput(StrictModel):
     """One physical edition, identified by a client-generated idempotency UUID."""
+    allow_duplicate: bool = False
     id: str = Field(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
     kind: Literal["movie", "tvshow"] = "movie"
     title: str = Field(min_length=1, max_length=300)

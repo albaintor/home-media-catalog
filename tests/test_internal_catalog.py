@@ -57,7 +57,7 @@ def test_internal_edition_merges_with_external_without_mutating_it(store):
 
 def test_internal_multiple_physical_editions_share_one_work(store):
     first = store.save_internal_media(entry(id=str(uuid4()), format="DVD"))
-    second = store.save_internal_media(entry(id=str(uuid4()), format="Blu-ray 3D"))
+    second = store.save_internal_media(entry(id=str(uuid4()), format="Blu-ray 3D", barcode=None))
     assert first["id"] == second["id"]
     assert store.media(source_type="internal")["total"] == 1
     assert len(store.detail(first["id"])["editions"]) == 2
@@ -69,7 +69,7 @@ def test_manual_editions_without_provider_ids_join_only_matching_title_and_year(
                                               format="Blu-ray", barcode=None))
     assert first["id"] == second["id"]
     remake = store.save_internal_media(entry(id=str(uuid4()), tmdb_id=None,
-                                              format="DVD", year=2025))
+                                              format="DVD", year=2025, barcode=None))
     assert remake["id"] != first["id"]
     assert store.media(source_type="internal")["total"] == 2
 
@@ -567,7 +567,7 @@ def test_photographed_cover_overrides_tmdb_and_survives_enrichment(store):
     original = "https://image.tmdb.org/t/p/w500/provider.jpg"
     store.save_enrichment(work_id, {"people": [], "trailers": [], "poster": original})
     photo = "hmc-poster://" + "a" * 64
-    second = store.save_internal_media(entry(_poster_reference=photo, format="DVD"))
+    second = store.save_internal_media(entry(_poster_reference=photo, format="DVD", barcode=None))
     assert second["id"] == work_id
     assert store.detail(work_id)["identifiers"]["tmdb"] == ["554433"]
     assert store.artwork(work_id, "poster")[0] == photo
@@ -586,7 +586,7 @@ def test_remove_custom_poster_restores_provider_or_leaves_no_poster(store):
     assert store.artwork(work_id, "poster") == [provider]
     assert not store.detail(work_id)["has_custom_poster"]
     assert store.detail(work_id)["identifiers"]["tmdb"] == ["554433"]
-    other = store.save_internal_media(entry(title="No match", tmdb_id=None, _poster_reference=photo))
+    other = store.save_internal_media(entry(title="No match", tmdb_id=None, _poster_reference=photo, barcode=None))
     store.update_media_metadata(other["id"], {"remove_poster": True})
     assert store.artwork(other["id"], "poster") == []
     assert not store.detail(other["id"])["has_custom_poster"]
@@ -680,3 +680,13 @@ def test_disc_refresh_does_not_override_manual_hdr(store):
     assert "Dolby Atmos" in metadata["formats"]
     store.set_edition_hdr(work, edition, None)
     assert "HDR10" not in store.detail(work)["editions"][0]["metadata"]["formats"]
+
+def test_internal_gtin_aliases_are_idempotent_with_distinct_client_ids(store):
+    first = store.save_internal_media(entry(barcode="036000291452"))
+    for alias in ("0036000291452", "00036000291452"):
+        assert store.save_internal_media(entry(barcode=alias)) == first
+    assert len(store.detail(first["id"])["editions"]) == 1
+    copy = store.save_internal_media(entry(barcode="0036000291452", allow_duplicate=True))
+    assert copy["item_id"] != first["item_id"]
+    assert len(store.detail(first["id"])["editions"]) == 2
+    assert internal_catalog.canonical_gtin("036000291452") == internal_catalog.canonical_gtin("0036000291452")
