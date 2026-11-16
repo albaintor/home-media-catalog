@@ -643,3 +643,40 @@ def test_ultra_hd_disc_filter_matches_internal_and_legacy_labels(store):
         assert any(row["id"] == disc["id"] for row in rows)
     assert {row["title"] for row in store.media(format="4K")["items"]} == {"Digital 4K"}
     assert store.media(format=["Blu-ray 4K", "4K"])["total"] == 0
+
+
+def test_disc_technical_metadata_local_first_replay(client, admin):
+    endpoint = "/api/v1/internal/items"
+    item = entry(format="4K Ultra HD Blu-ray", technical_formats=["4K", "Dolby Vision"])
+    created = client.post(endpoint, headers=admin, json=item)
+    assert created.status_code == 201, created.text
+    detail_path = "/api/v1/media/" + created.json()["id"]
+    patch = {"format": "DVD", "barcode": item["barcode"], "fill_missing_only": True,
+             "technical_formats": ["1080p", "HDR10", "DTS-HD MA", "Dolby Atmos"]}
+    for _ in range(2):  # replay must be idempotent
+        response = client.patch(endpoint + "/" + item["id"], headers=admin, json=patch)
+        assert response.status_code == 200, response.text
+    detail = client.get(detail_path, headers=admin).json()
+    formats = set(detail["editions"][0]["metadata"]["formats"])
+    assert {"4K", "Dolby Vision", "DTS-HD MA", "Dolby Atmos"} <= formats
+    assert not formats.intersection({"DVD", "1080p", "HDR10"})
+    assert {"4K", "Dolby Vision", "DTS-HD MA", "Dolby Atmos"} <= set(detail["formats"])
+    bad = client.patch(endpoint + "/" + item["id"], headers=admin,
+                       json={**patch, "barcode": "036000291452"})
+    assert bad.status_code == 422
+    assert client.get(detail_path, headers=admin).json()["editions"][0]["metadata"]["barcode"] == item["barcode"]
+
+
+def test_disc_refresh_does_not_override_manual_hdr(store):
+    item = entry(format="4K Ultra HD Blu-ray")
+    work = store.save_internal_media(item)["id"]
+    edition = store.detail(work)["editions"][0]["id"]
+    store.set_edition_hdr(work, edition, [])
+    store.update_internal_edition(item["id"], item["format"], item["barcode"],
+                                  technical=["HDR10", "Dolby Atmos"], fill_missing_only=True)
+    metadata = store.detail(work)["editions"][0]["metadata"]
+    assert metadata["hdr_override"] == []
+    assert "HDR10" not in metadata["formats"]
+    assert "Dolby Atmos" in metadata["formats"]
+    store.set_edition_hdr(work, edition, None)
+    assert "HDR10" not in store.detail(work)["editions"][0]["metadata"]["formats"]
