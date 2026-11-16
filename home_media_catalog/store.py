@@ -1445,7 +1445,40 @@ class Store:
             elif (metadata.get("barcode") or metadata.get("ean") or metadata.get("upc")) != barcode:
                 raise ValueError("Edition barcode changed; refresh again.")
             for key, value in self._physical_edition_fields(edition_details).items():
-                if not metadata.get(key):
+                if fill_missing_only and key == "audio_streams":
+                    raw = metadata.get(key) or []
+                    if not isinstance(raw, list):
+                        continue
+                    existing = list(raw)
+                    # Retain the original dictionaries and their unknown fields.
+                    # Do not merge ordinary and accessibility tracks.
+                    def same_text(a, b):
+                        return str(a or "").casefold() == str(b or "").casefold()
+                    for track in value:
+                        if len(existing) >= 128:
+                            break
+                        if not any(isinstance(old, dict)
+                                   and same_text(old.get("name"), track.get("name"))
+                                   and all(same_text(old.get(k), v) for k, v in track.items())
+                                   for old in existing):
+                            existing.append(track)
+                    if existing:
+                        metadata[key] = existing
+                elif fill_missing_only and key == "subtitles":
+                    current = metadata.get(key) or []
+                    if not isinstance(current, list):
+                        continue
+                    existing = list(current)
+                    known = {x.casefold() for x in existing if isinstance(x, str)}
+                    for subtitle in value:
+                        if len(existing) >= 128:
+                            break
+                        if subtitle.casefold() not in known:
+                            existing.append(subtitle)
+                            known.add(subtitle.casefold())
+                    if existing:
+                        metadata[key] = existing
+                elif not metadata.get(key):
                     metadata[key] = value
             payload["metadata"] = metadata
             conn.execute("UPDATE records SET payload=? WHERE id=?",
