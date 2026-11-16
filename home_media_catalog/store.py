@@ -1057,6 +1057,7 @@ class Store:
                     date_added=now(),
                     poster=poster,
                     metadata={
+                        **self._physical_edition_fields(data.get("edition_details")),
                         "barcode": barcode, "internal": True,
                         **({"intentional_copy": True} if data.get("allow_duplicate") else {}),
                         **({
@@ -1326,10 +1327,45 @@ class Store:
             )
             self._rebuild(conn, work_id)
 
+    @staticmethod
+    def _physical_edition_fields(details: dict | None) -> dict:
+        """Validate bounded track facts before storing in the edition record."""
+        if not details:
+            return {}
+        allowed = {"audio_streams": {"language", "codec", "channels", "name"},
+                   "video_streams": {"resolution", "aspect", "codec", "hdr_type", "name"}}
+        result = {}
+        for key, keys in allowed.items():
+            rows = details.get(key) or []
+            if not isinstance(rows, list):
+                continue
+            clean = []
+            for row in rows[:128]:
+                if not isinstance(row, dict):
+                    continue
+                item = {field: val.strip()[:160] for field, val in row.items()
+                        if field in keys and isinstance(val, str) and val.strip()}
+                if item and item not in clean:
+                    clean.append(item)
+            if clean:
+                result[key] = clean
+        subtitles = details.get("subtitles") or []
+        if isinstance(subtitles, list):
+            result["subtitles"] = list(dict.fromkeys(x.strip()[:100] for x in subtitles[:128]
+                                                      if isinstance(x, str) and x.strip()))
+            if not result["subtitles"]:
+                result.pop("subtitles")
+        for key in ("region", "disc_count", "disc_release_date", "disc_metadata_source"):
+            value = details.get(key)
+            if isinstance(value, str) and value.strip():
+                result[key] = value.strip()[:300]
+        return result
+
     def update_internal_edition(
         self, external_key: str, disc_format: str, barcode: str | None,
         manual: dict[str, Any] | None = None,
         technical: list[str] | None = None, fill_missing_only: bool = False,
+        edition_details: dict | None = None,
     ) -> dict[str, Any]:
         """Edit the existing record, retaining its work and edition identities."""
         from .internal_catalog import valid_barcode
@@ -1408,6 +1444,9 @@ class Store:
                 metadata["barcode"] = barcode or None
             elif (metadata.get("barcode") or metadata.get("ean") or metadata.get("upc")) != barcode:
                 raise ValueError("Edition barcode changed; refresh again.")
+            for key, value in self._physical_edition_fields(edition_details).items():
+                if not metadata.get(key):
+                    metadata[key] = value
             payload["metadata"] = metadata
             conn.execute("UPDATE records SET payload=? WHERE id=?",
                          (encode(payload), row["id"]))

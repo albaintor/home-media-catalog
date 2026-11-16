@@ -122,12 +122,24 @@ class ManualInternalMetadata(StrictModel):
     poster_jpeg: str | None = Field(default=None, max_length=1400000)
 
 
+class PhysicalEditionDetails(StrictModel):
+    """Edition-level facts, never personal or work-level metadata."""
+    audio_streams: list[dict[str, str]] = Field(default_factory=list, max_length=128)
+    video_streams: list[dict[str, str]] = Field(default_factory=list, max_length=128)
+    subtitles: list[str] = Field(default_factory=list, max_length=128)
+    region: str | None = Field(default=None, max_length=80)
+    disc_count: str | None = Field(default=None, max_length=20)
+    disc_release_date: str | None = Field(default=None, max_length=40)
+    disc_metadata_source: str | None = Field(default=None, max_length=300)
+
+
 class InternalEditionUpdate(StrictModel):
     """Editable physical properties and optional manual work metadata."""
     format: Literal["", "DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray"]
     barcode: str | None = Field(default=None, pattern=r"^[0-9]{8}$|^[0-9]{12,14}$")
     manual_metadata: ManualInternalMetadata | None = None
     technical_formats: list[Literal["480p", "480i", "576p", "576i", "720p", "1080p", "1080i", "4K", "HDR10", "HDR10+", "Dolby Vision", "HLG", "Dolby Atmos", "DTS:X", "Dolby TrueHD", "DTS-HD MA", "DTS-HD", "DTS-HD HR", "Dolby Digital+", "Dolby Digital", "DTS", "LPCM", "PCM", "Auro-3D"]] = Field(default_factory=list, max_length=32)
+    edition_details: PhysicalEditionDetails | None = None
     fill_missing_only: bool = False
 
 
@@ -146,6 +158,7 @@ class InternalMediaInput(StrictModel):
     barcode: str | None = Field(default=None, pattern=r"^[0-9]{8}$|^[0-9]{12,14}$")
     format: Literal["", "DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray"] = ""
     technical_formats: list[Literal["480p", "480i", "576p", "576i", "720p", "1080p", "1080i", "4K", "HDR10", "HDR10+", "Dolby Vision", "HLG", "Dolby Atmos", "DTS:X", "Dolby TrueHD", "DTS-HD MA", "DTS-HD", "DTS-HD HR", "Dolby Digital+", "Dolby Digital", "DTS", "LPCM", "PCM", "Auro-3D"]] = Field(default_factory=list, max_length=32)
+    edition_details: PhysicalEditionDetails | None = None
     poster_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
     physical_season: int | None = Field(default=None, ge=0, le=10000)
     physical_title: str | None = Field(default=None, max_length=300)

@@ -704,3 +704,15 @@ def test_convert_source_reuses_equivalent_existing_internal_gtin(store):
     assert len(editions) == 1
     assert editions[0]["external_key"] == existing["item_id"]
     assert "Blu-ray" in editions[0]["formats"]
+
+
+def test_rich_disc_details_are_saved_and_only_missing_fields_enriched(store):
+    item = entry(edition_details={"audio_streams": [{"language": "French", "codec": "DTS", "channels": "5.1"}]})
+    created = store.save_internal_media(item)
+    store.update_internal_edition(item["id"], "Blu-ray", item["barcode"], fill_missing_only=True,
+                                  edition_details={"audio_streams": [{"language": "English"}],
+                                                   "subtitles": ["French", "English"], "region": "B"})
+    metadata = store.detail(created["id"])["editions"][0]["metadata"]
+    assert metadata["audio_streams"] == [{"language": "French", "codec": "DTS", "channels": "5.1"}]
+    assert metadata["subtitles"] == ["French", "English"]
+    assert metadata["region"] == "B"
