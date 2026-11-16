@@ -1,28 +1,27 @@
-# <img src="home_media_catalog/static/cinema.svg" width="36" alt=""> Home Media Catalog
+# <img src="home_media_catalog/static/cinema.svg" width="36" alt=""> Home Media Catalog & Player
 
 **Your movie library, network videos and advanced playback — all in one place.**
 
-Home Media Catalog combines a responsive, self-hosted **web application** with a native **iOS/iPadOS app**. The iOS app can manage a catalogue **standalone, without installing a server**. A Docker server is optional for a shared catalogue, web access and AI features; it runs on Linux, macOS/Windows with Docker Desktop, a home server or a NAS.
+Home Media Catalog combines a responsive, self-hosted **web application** with a native **iOS/iPadOS app**. The iOS app can manage a catalogue **standalone, without any server or (paid) Cloud service**. 
+A Docker server is optional for a shared catalogue, web access and AI features; it runs on Linux, macOS/Windows with Docker Desktop, a home server or a NAS.
 
 
 ## Highlights
 
-- **Combine** Kodi and CLZ Movies, My Movies, or Filmotech (XML imports), with editions from different sources grouped into the same film or TV-series record when a reliable match exists.
+- **Combine** Kodi and CLZ, My Movies, Filmotech, iCollect, Blue-ray.com, MovieBuddy, DVD Profiler, Letterboxd with editions from different sources grouped into the same film or TV-series record when a reliable match exists.
 - **Maintain an internal catalogue:** manually add movies, TV series, DVDs, Blu-rays and 4K UHD Blu-rays without importing a file or requiring Kodi.
-- **Identify discs by barcode or title:** scan an EAN/UPC/GTIN with the iPhone/iPad camera, or enter a barcode or search by title. Select from TMDB results with artwork previews; a barcode match can preselect a TMDB result for review. Public barcode databases cannot identify every commercial release.
-- **Browse by collections:** switch between poster grid, list and collection-grouped navigation, including collection artwork and browsing the titles inside each group.
+- **Identify discs by barcode or title:** scan an EAN/UPC/GTIN with the iPhone/iPad camera, or search by title. Select from TMDB results with artwork previews; a barcode match can preselect a TMDB result for review. Public barcode databases cannot identify every commercial release.
+- **Browse by collections:** switch between poster grid, list and collection-grouped navigation.
 - **Explore** movies, TV shows and episodes with posters, cast, formats, advanced filters and optional TMDB metadata.
 - **Organize** your collection using custom lists, personal ratings and watched status.
-- **Play** selected titles on an existing Kodi player, with advanced playback controls and media information.
+- **Play** selected titles directly on your device or on an existing Kodi player, with advanced playback controls and media information.
 - **Stream across your network:** browse and play SMB, NFS, FTP, SFTP and OneDrive sources on iPhone/iPad.
-- **Enjoy advanced video playback:** AVC/H.264, HEVC/H.265 and VC-1 where supported, selectable audio/subtitle tracks, compatible multichannel Dolby Atmos audio, and smooth 48/60 fps MEMC motion interpolation.
+- **Enjoy advanced video playback:** AVC/H.264, HEVC/H.265 and VC-1, selectable audio/subtitle tracks, compatible multichannel Dolby Atmos audio, and smooth 48/60 fps MEMC motion interpolation.
 - **Play Blu-ray content:** access compatible ISO images and BDMV folder structures with disc-aware playback and track selection.
-- **Access** your collection on iOS/iPadOS alone, or via a shared server and web interface.
 - **Search with AI (optional, server required)** using OpenAI, Anthropic Claude or Google Gemini. OpenAI retains its optional semantic/vector search; Claude and Gemini use the selected language model with local full-text/metadata retrieval and relevance checking. No parallel multi-model inference is required.
 - **Choose standalone or server mode:** in standalone mode the iOS app imports and synchronizes Kodi directly, without Docker. In server mode it synchronizes catalogue metadata with the server while Kodi remote commands are sent directly from the iPhone.
 - **Music** : synchronize your Kodi music library and navigate and play your albums, artists, playlists
 
-Collection-only catalogues and manually maintained internal entries do not require Kodi. The internal catalogue is available in both the browser and the native iOS/iPadOS app; the latter also works in standalone mode without the server.
 
 ### Web interface
 
@@ -36,15 +35,17 @@ Collection-only catalogues and manually maintained internal entries do not requi
 ### iOS interface
 
 <img width="300" alt="image" src="https://github.com/user-attachments/assets/d104a967-75d8-412f-9a92-2b184563fdde" />
-<img width="300" alt="image" src="https://github.com/user-attachments/assets/01d21701-3361-4055-8f92-3906b409841b" />
+<img width="300" alt="image" src="https://github.com/user-attachments/assets/c56f591d-adec-4196-b874-8c4524a43058" />
 <img width="300" alt="image" src="https://github.com/user-attachments/assets/16a8a792-6931-42de-934c-65f4947ef564" />
-<img width="250" alt="image" src="https://github.com/user-attachments/assets/c74639b9-a45e-4f1c-87f0-9998220aecbc" />
+<p align="center">
+<img width="600" alt="image" src="https://github.com/user-attachments/assets/50ad13d5-e046-4362-aed7-e66629b6e460" />
+</p>
 
 
 
 ### Internal catalogue, disc barcodes and collections
 
-The **internal catalogue** is a first-class source alongside Kodi, CLZ Movies, My Movies and Filmotech. It is designed for films, TV series and physical editions you want to catalogue.
+The **internal catalogue** is a first-class source alongside Kodi, CLZ, My Movies, Filmotech, iCollect, Blue-ray.com, MovieBuddy, DVD Profiler, Letterboxd. It is designed for films, TV series and physical editions you want to catalogue.
 
 - **Web:** use **+ Add to catalog** in the video library. Search TMDB by film/series title or enter an EAN/UPC/GTIN barcode. The form shows cover thumbnails, selects a matching TMDB result after a successful barcode lookup, and lets you review or change the match before saving. Entering a barcode in the web interface does not require a camera.
 - **iPhone/iPad:** use the **+** action in the catalogue toolbar. Search by title, type a barcode, or **scan the barcode with the camera**. Results include available cover artwork, and a barcode search automatically preselects an available TMDB match for review. A configured TMDB token is needed for TMDB search in standalone mode.
