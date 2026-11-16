@@ -621,3 +621,25 @@ def test_source_mutations_rollback_on_rebuild_failure(store, monkeypatch, operat
     else:
         store.delete_source(source_id)
         assert store.source(source_id) is None
+
+
+def test_ultra_hd_disc_filter_matches_internal_and_legacy_labels(store):
+    disc = store.save_internal_media(entry(
+        format="4K Ultra HD Blu-ray", tmdb_id="900001", title="UHD disc"
+    ))
+    legacy = store.save_source({"name": "Legacy CLZ", "type": "clz"})["id"]
+    store.apply_snapshot(legacy, [
+        Record("disc", "movie", "Legacy UHD", identifiers={"tmdb": "900002"},
+               formats=["Blu-ray 4K"])
+    ])
+    kodi = store.save_source({"name": "Kodi", "type": "kodi"})["id"]
+    store.apply_snapshot(kodi, [
+        Record("movie:1", "movie", "Digital 4K", identifiers={"tmdb": "900003"},
+               formats=["4K"])
+    ])
+    for label in ("Blu-ray 4K", "4K Ultra HD Blu-ray", "Ultra HD Blu-ray"):
+        rows = store.media(format=label)["items"]
+        assert {row["title"] for row in rows} == {"UHD disc", "Legacy UHD"}
+        assert any(row["id"] == disc["id"] for row in rows)
+    assert {row["title"] for row in store.media(format="4K")["items"]} == {"Digital 4K"}
+    assert store.media(format=["Blu-ray 4K", "4K"])["total"] == 0

@@ -2771,13 +2771,22 @@ class Store:
             for label in requested_formats
         ):
             raise ValueError("Invalid format filters.")
+        # The internal catalog stores the explicit Ultra HD disc name; older
+        # imported snapshots may use one of its legacy labels. Keep their
+        # filter identity separate from 4K video resolution.
+        uhd_disc_aliases = (
+            "Blu-ray 4K", "4K UHD", "4K Ultra HD Blu-ray", "4K Blu-ray",
+            "UHD Blu-ray", "Ultra HD Blu-ray", "BluRay 4K", "4K BluRay",
+            "UHD BluRay", "4K Ultra HD BluRay", "Ultra HD BluRay",
+            "4K Ultra HD Blu Ray", "Ultra HD Blu Ray",
+        )
+        uhd_disc_keys = {value.casefold() for value in uhd_disc_aliases}
         for label in dict.fromkeys(
-            canonical_source_format(value, "clz")
-            if value.strip().casefold() == "4k uhd"
+            "Blu-ray 4K" if value.strip().casefold() in uhd_disc_keys
             else canonical_format(value)
             for value in requested_formats
         ):
-            aliases = ("Blu-ray 4K", "4K UHD") if label == "Blu-ray 4K" else (label,)
+            aliases = uhd_disc_aliases if label == "Blu-ray 4K" else (label,)
             placeholders = ",".join("?" for _ in aliases)
             clauses.append(
                 f"EXISTS(SELECT 1 FROM json_each(w.formats) "
