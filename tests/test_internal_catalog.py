@@ -690,3 +690,17 @@ def test_internal_gtin_aliases_are_idempotent_with_distinct_client_ids(store):
     assert copy["item_id"] != first["item_id"]
     assert len(store.detail(first["id"])["editions"]) == 2
     assert internal_catalog.canonical_gtin("036000291452") == internal_catalog.canonical_gtin("0036000291452")
+
+def test_convert_source_reuses_equivalent_existing_internal_gtin(store):
+    existing = store.save_internal_media(entry(barcode="036000291452", format=""))
+    source = store.save_source({"name": "Collection", "type": "clz"})["id"]
+    store.apply_snapshot(source, [
+        Record("disc", "movie", "Internal Example", year=2024,
+               identifiers={"tmdb": "554433"}, formats=["Blu-ray"],
+               metadata={"barcode": "0036000291452"})
+    ])
+    store.convert_source_to_internal(source, remove_source=True)
+    editions = store.detail(existing["id"])["editions"]
+    assert len(editions) == 1
+    assert editions[0]["external_key"] == existing["item_id"]
+    assert "Blu-ray" in editions[0]["formats"]

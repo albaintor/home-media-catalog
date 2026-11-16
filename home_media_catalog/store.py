@@ -1212,6 +1212,7 @@ class Store:
 
     def convert_source_to_internal(self, source_id: str, remove_source: bool = False) -> dict:
         """Copy complete imported disc records onto their existing canonical work IDs."""
+        from .internal_catalog import edition_gtin
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             source = conn.execute("SELECT type FROM sources WHERE id=?", (source_id,)).fetchone()
@@ -1251,6 +1252,37 @@ class Store:
                     "4K Ultra HD Blu-ray" if canonical_source_format(f, source["type"]) == "Blu-ray 4K"
                     else canonical_source_format(f, source["type"]) for f in value.get("formats", [])
                 ]
+                gtin = edition_gtin(metadata)
+                equivalent = None
+                if gtin:
+                    for candidate in conn.execute(
+                        "SELECT id,payload FROM records WHERE source_id='internal' AND work_id=?",
+                        (row["work_id"],)
+                    ):
+                        previous = json.loads(candidate["payload"])
+                        known = previous.get("metadata") or {}
+                        season, other = metadata.get("physical_season"), known.get("physical_season")
+                        if edition_gtin(known) == gtin and (season is None or other is None or season == other):
+                            equivalent = (candidate["id"], previous)
+                            break
+                if equivalent:
+                    existing_id, previous = equivalent
+                    known = previous.get("metadata") or {}
+                    for field, field_value in metadata.items():
+                        if known.get(field) is None:
+                            known[field] = field_value
+                    previous["metadata"] = known
+                    if not previous.get("formats"):
+                        previous["formats"] = value.get("formats", [])
+                    conn.execute("UPDATE records SET payload=? WHERE id=?", (encode(previous), existing_id))
+                    editor = self._editor_payload(conn, row["work_id"])
+                    hdr = editor.get("edition_hdr_overrides") or {}
+                    if row["id"] in hdr and existing_id not in hdr:
+                        hdr[existing_id] = hdr[row["id"]]
+                        editor["edition_hdr_overrides"] = hdr
+                        self._save_editor_payload(conn, row["work_id"], editor)
+                    affected.add(row["work_id"])
+                    continue
                 new_id = str(uuid4())
                 conn.execute("INSERT INTO records(id,work_id,source_id,external_key,payload) VALUES(?,?,?,?,?)",
                              (new_id, row["work_id"], "internal", key, encode(value)))
