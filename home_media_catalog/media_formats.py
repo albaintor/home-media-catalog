@@ -152,3 +152,28 @@ def stream_metadata(rows: list[dict], filename: str | None = None) -> dict:
             | ({"3D"} if confirmed_3d else set())
         ),
     }
+
+
+# Keep edition-derived labels separate from the physical support identity.
+DISC_TECHNICAL_GROUPS = (
+    frozenset({"480p", "480i", "576p", "576i", "720p", "1080p", "1080i", "4K", "2160p", "8K", "4320p", "HD", "SD", "UHD", "Full HD"}),
+    frozenset({"HDR10", "HDR10+", "Dolby Vision", "HLG", "HDR", "SDR"}),
+    frozenset({"Dolby Atmos", "DTS:X", "Dolby TrueHD", "DTS-HD MA", "DTS-HD", "DTS-HD HR", "Dolby Digital+", "Dolby Digital", "DTS", "LPCM", "PCM", "Auro-3D", "AAC", "FLAC", "TrueHD", "AC3", "EAC3"}),
+)
+DISC_LABELS = frozenset({"DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray", "Blu-ray 4K", "4K UHD", "UHD Blu-ray", "Ultra HD Blu-ray", "4K Blu-ray"})
+
+
+def merge_disc_formats(existing: list[str], support: str, technical: list[str], *, fill_missing_only: bool = False, hdr_override: bool = False) -> list[str]:
+    """Add explicit edition evidence; never replace a populated category on refresh."""
+    result = list(existing)
+    if not fill_missing_only or not any(x.casefold() in {v.casefold() for v in DISC_LABELS} for x in result):
+        result = [x for x in result if x.casefold() not in {v.casefold() for v in DISC_LABELS}]
+        if support:
+            result.append(support)
+    for index, group in enumerate(DISC_TECHNICAL_GROUPS):
+        if index == 1 and hdr_override:
+            continue
+        if fill_missing_only and any(x.casefold() in {v.casefold() for v in group} or (index == 2 and bool(technical_formats([x]) and set(technical_formats([x])) & group)) for x in existing):
+            continue
+        result.extend(x for x in technical if x in group)
+    return list(dict.fromkeys(result))

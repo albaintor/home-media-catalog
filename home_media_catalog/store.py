@@ -983,6 +983,7 @@ class Store:
         POST is a no-op; physical editions of one film share a catalogue work.
         """
         from .internal_catalog import physical_season_in_title, valid_barcode
+        from .media_formats import merge_disc_formats
 
         barcode = data.get("barcode")
         if barcode and not valid_barcode(barcode):
@@ -1032,7 +1033,7 @@ class Store:
                     year=data.get("year"),
                     plot=data.get("plot"),
                     rating=data.get("rating"),
-                    formats=[data["format"]] if data.get("format") else [],
+                    formats=merge_disc_formats([], data.get("format", ""), data.get("technical_formats") or []),
                     date_added=now(),
                     poster=poster,
                     metadata={
@@ -1275,6 +1276,7 @@ class Store:
     def update_internal_edition(
         self, external_key: str, disc_format: str, barcode: str | None,
         manual: dict[str, Any] | None = None,
+        technical: list[str] | None = None, fill_missing_only: bool = False,
     ) -> dict[str, Any]:
         """Edit the existing record, retaining its work and edition identities."""
         from .internal_catalog import valid_barcode
@@ -1341,11 +1343,18 @@ class Store:
                                  (row["work_id"], now()))
             else:
                 payload = json.loads(row["payload"])
-            disc_labels = {"DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray", "Blu-ray 4K", "4K UHD"}
-            remaining = [f for f in payload.get("formats", []) if f not in disc_labels]
-            payload["formats"] = list(dict.fromkeys(remaining + ([disc_format] if disc_format else [])))
+            from .media_formats import merge_disc_formats
+            editor = self._editor_payload(conn, row["work_id"])
+            overrides = editor.get("edition_hdr_overrides") or {}
+            payload["formats"] = merge_disc_formats(
+                payload.get("formats", []), disc_format, technical or [],
+                fill_missing_only=fill_missing_only, hdr_override=row["id"] in overrides,
+            )
             metadata = payload.get("metadata") or {}
-            metadata["barcode"] = barcode or None
+            if not fill_missing_only:
+                metadata["barcode"] = barcode or None
+            elif (metadata.get("barcode") or metadata.get("ean") or metadata.get("upc")) != barcode:
+                raise ValueError("Edition barcode changed; refresh again.")
             payload["metadata"] = metadata
             conn.execute("UPDATE records SET payload=? WHERE id=?",
                          (encode(payload), row["id"]))

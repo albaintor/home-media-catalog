@@ -1546,7 +1546,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     str(item_id), data.manual_metadata.poster_jpeg
                 )
             saved = await asyncio.to_thread(
-                store.update_internal_edition, str(item_id), data.format, data.barcode, manual
+                store.update_internal_edition, str(item_id), data.format, data.barcode, manual,
+                data.technical_formats, data.fill_missing_only
             )
         except KeyError as exc:
             raise HTTPException(404, "Internal edition not found.") from exc
