@@ -3,6 +3,8 @@
  * preferences or the explicit language selector. Persist the user's choice.
  */
 const EN = {
+  "Home Media Catalog sur iPhone et iPad": "Home Media Catalog on iPhone and iPad",
+  "Télécharger Home Media Catalog sur l’App Store": "Download Home Media Catalog on the App Store",
   "Modifier la fiche": "Edit media",
   "Modifier le disque": "Edit disc",
   "Modifier le HDR": "Edit HDR",

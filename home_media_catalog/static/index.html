@@ -34,6 +34,11 @@
       <input id="access-token" name="token" type="password" autocomplete="current-password" required placeholder="Votre jeton API">
       <button class="primary" type="submit">Ouvrir la bibliothèque <span aria-hidden="true">→</span></button>
       <p id="login-error" role="alert" class="error-text"></p>
+      <div class="login-store-link">
+        <a href="https://apps.apple.com/app/id6822251437" target="_blank" rel="noopener noreferrer" aria-label="Télécharger Home Media Catalog sur l’App Store">
+          <img src="static/app-store-badge.svg" alt="" width="150" height="50">
+        </a>
+      </div>
     </form>
   </section>
   <main id="app" hidden>
@@ -62,6 +67,12 @@
         <button id="logout-button" class="icon-button" aria-label="Se déconnecter">↪</button>
       </nav>
     </header>
+    <aside class="app-store-promo" aria-label="Application iOS et iPadOS">
+      <span>Home Media Catalog sur iPhone et iPad</span>
+      <a href="https://apps.apple.com/app/id6822251437" target="_blank" rel="noopener noreferrer" aria-label="Télécharger Home Media Catalog sur l’App Store">
+        <img src="static/app-store-badge.svg" alt="" width="135" height="45">
+      </a>
+    </aside>
     <section id="video-page" class="catalogue">
       <div class="heading-row"><p id="catalogue-status" class="muted">Chargement du catalogue…</p><button id="manual-create-button" class="secondary" type="button" hidden>＋ Nouvelle collection</button><button id="internal-add-button" class="primary" type="button" hidden>＋ Ajouter au catalogue</button><div class="view-switch" aria-label="Mode d’affichage"><button id="grid-view" aria-label="Vue pochettes" aria-pressed="true">▦</button><button id="list-view" aria-label="Vue liste" aria-pressed="false">☷</button></div></div>
       <section class="network-home" aria-labelledby="network-home-title">

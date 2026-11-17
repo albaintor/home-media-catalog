@@ -6,6 +6,8 @@ Home Media Catalog combines a responsive, self-hosted **web application** with a
 A Docker server is optional for a shared catalogue, web access and AI features; it runs on Linux, macOS/Windows with Docker Desktop, a home server or a NAS.
 
 
+<a href="https://apps.apple.com/app/id6822251437"><img src="home_media_catalog/static/app-store-badge.svg" alt="Download Home Media Catalog on the App Store" width="150"></a>
+
 ## Highlights
 
 - **Combine** Kodi and CLZ, My Movies, Filmotech, iCollect, Blue-ray.com, MovieBuddy, DVD Profiler, Letterboxd with editions from different sources grouped into the same film or TV-series record when a reliable match exists.
