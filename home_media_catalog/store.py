@@ -1368,7 +1368,7 @@ class Store:
         edition_details: dict | None = None,
     ) -> dict[str, Any]:
         """Edit the existing record, retaining its work and edition identities."""
-        from .internal_catalog import valid_barcode
+        from .internal_catalog import valid_barcode, canonical_gtin, edition_gtin
 
         if barcode and not valid_barcode(barcode):
             raise ValueError("Invalid barcode check digit.")
@@ -1442,7 +1442,9 @@ class Store:
             metadata = payload.get("metadata") or {}
             if not fill_missing_only:
                 metadata["barcode"] = barcode or None
-            elif (metadata.get("barcode") or metadata.get("ean") or metadata.get("upc")) != barcode:
+            elif not barcode or edition_gtin(metadata) != canonical_gtin(barcode):
+                # GTIN-12 / EAN-13 / zero-padded GTIN-14 identify the same
+                # disc. Reject genuine barcode changes, not representation aliases.
                 raise ValueError("Edition barcode changed; refresh again.")
             for key, value in self._physical_edition_fields(edition_details).items():
                 if fill_missing_only and key == "audio_streams":
