@@ -60,6 +60,9 @@
         </button>
         <button id="kodi-remote-button" class="quiet kodi-header-button" type="button" aria-label="Ouvrir Kodi Remote"><img src="static/kodi-logo.svg" width="19" height="19" alt="">Kodi</button>
         <a class="quiet" href="docs" target="_blank" rel="noopener">API</a>
+        <a class="header-app-store" href="https://apps.apple.com/app/id6822251437" target="_blank" rel="noopener noreferrer" aria-label="Télécharger Home Media Catalog sur l’App Store" title="Télécharger sur l’App Store">
+          <img src="static/app-store-badge.svg" alt="" width="96" height="32">
+        </a>
         <button id="activity-indicator" class="activity-indicator" type="button" aria-live="polite" aria-label="Activité des synchronisations et imports" hidden><span class="activity-spinner" aria-hidden="true"></span><span id="activity-label">Synchronisation…</span><progress id="activity-progress" class="header-progress" value="0" max="100" hidden></progress></button>
         <button id="personal-update-indicator" class="personal-update-indicator" type="button" aria-live="polite" aria-label="État des modifications" hidden><span id="personal-update-icon" aria-hidden="true"></span><span id="personal-update-label">Enregistrement…</span></button>
         <button id="scan-all-kodi" type="button" class="icon-button header-scan-button" title="Analyser les vidéothèques Kodi puis synchroniser MariaDB" aria-label="Analyser les vidéothèques Kodi puis synchroniser MariaDB" data-tooltip="Analyser les vidéothèques Kodi puis synchroniser MariaDB" hidden><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8m-4-4 4 4 4-4"/></svg></button>
@@ -67,12 +70,6 @@
         <button id="logout-button" class="icon-button" aria-label="Se déconnecter">↪</button>
       </nav>
     </header>
-    <aside class="app-store-promo" aria-label="Application iOS et iPadOS">
-      <span>Home Media Catalog sur iPhone et iPad</span>
-      <a href="https://apps.apple.com/app/id6822251437" target="_blank" rel="noopener noreferrer" aria-label="Télécharger Home Media Catalog sur l’App Store">
-        <img src="static/app-store-badge.svg" alt="" width="135" height="45">
-      </a>
-    </aside>
     <section id="video-page" class="catalogue">
       <div class="heading-row"><p id="catalogue-status" class="muted">Chargement du catalogue…</p><button id="manual-create-button" class="secondary" type="button" hidden>＋ Nouvelle collection</button><button id="internal-add-button" class="primary" type="button" hidden>＋ Ajouter au catalogue</button><div class="view-switch" aria-label="Mode d’affichage"><button id="grid-view" aria-label="Vue pochettes" aria-pressed="true">▦</button><button id="list-view" aria-label="Vue liste" aria-pressed="false">☷</button></div></div>
       <section class="network-home" aria-labelledby="network-home-title">
