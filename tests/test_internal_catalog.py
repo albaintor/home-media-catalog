@@ -74,6 +74,30 @@ def test_manual_editions_without_provider_ids_join_only_matching_title_and_year(
     assert store.media(source_type="internal")["total"] == 2
 
 
+
+def test_enrichment_accepts_gtin_alias_but_rejects_different_disc(store):
+    """Replay may use a padded EAN after importing the equivalent UPC-A."""
+    item = entry(barcode="036000291452")
+    created = store.save_internal_media(item)
+    result = store.update_internal_edition(
+        item["id"], "Blu-ray", "0036000291452", fill_missing_only=True,
+        edition_details={"region": "B"},
+    )
+    assert result["id"] == created["id"]
+    detail = store.detail(created["id"])
+    edition = next(e for e in detail["editions"] if e["source_type"] == "internal")
+    assert edition["metadata"]["barcode"] == "036000291452"
+    assert edition["metadata"]["region"] == "B"
+    with pytest.raises(ValueError, match="Edition barcode changed"):
+        store.update_internal_edition(
+            item["id"], "Blu-ray", "4006381333931", fill_missing_only=True,
+            edition_details={"region": "A"},
+        )
+    edition = next(e for e in store.detail(created["id"])["editions"]
+                   if e["source_type"] == "internal")
+    assert edition["metadata"]["barcode"] == "036000291452"
+    assert edition["metadata"]["region"] == "B"
+
 def test_internal_invalid_barcode_does_not_persist(store):
     with pytest.raises(ValueError, match="barcode"):
         store.save_internal_media(entry(barcode="4006381333932"))
