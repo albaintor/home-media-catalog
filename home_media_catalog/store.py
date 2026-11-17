@@ -1368,7 +1368,7 @@ class Store:
         edition_details: dict | None = None,
     ) -> dict[str, Any]:
         """Edit the existing record, retaining its work and edition identities."""
-        from .internal_catalog import valid_barcode, canonical_gtin, edition_gtin
+        from .internal_catalog import canonical_gtin, edition_gtin, valid_barcode
 
         if barcode and not valid_barcode(barcode):
             raise ValueError("Invalid barcode check digit.")
