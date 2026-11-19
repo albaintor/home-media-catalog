@@ -2327,6 +2327,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(429, str(exc)) from exc
             except ConnectorError as exc:
                 raise HTTPException(502, str(exc)) from exc
+            if refresh and payload.get("tmdb_rating") is not None:
+                # An explicit refresh replaces the public rating with the
+                # current TMDB vote; automatic enrichment only fills gaps.
+                payload["tmdb_rating_refreshed_at"] = datetime.now(UTC).isoformat(timespec="seconds")
             if not await asyncio.to_thread(store.save_enrichment, media_id, payload):
                 raise HTTPException(404, "Media was removed during enrichment.")
             if payload.get("poster") and not detail.get("artwork", {}).get("poster"):

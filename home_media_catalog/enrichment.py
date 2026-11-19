@@ -107,6 +107,13 @@ async def resolve_tmdb_poster(detail: dict, token: str) -> str | None:
         return tmdb_poster_reference(data.get("poster_path"))
 
 
+def tmdb_rating(value) -> float | None:
+    """TMDB public vote average on a 0-10 scale; zero means no votes yet."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return round(float(value), 1) if 0 < value <= 10 else None
+
+
 async def enrich_tmdb(detail: dict, token: str) -> dict:
     kind = {"movie": "movie", "tvshow": "tv"}.get(detail["kind"])
     if not kind:
@@ -189,6 +196,7 @@ async def enrich_tmdb(detail: dict, token: str) -> dict:
                 "people": people,
                 "trailers": list(dict.fromkeys(trailers)),
                 "tmdb_id": tmdb_id,
+                **({"tmdb_rating": rating} if (rating := tmdb_rating(data.get("vote_average"))) is not None else {}),
                 **({"poster": poster} if (poster := tmdb_poster_reference(data.get("poster_path"))) else {}),
                 **({"season_posters": season_posters} if kind == "tv" else {}),
             }

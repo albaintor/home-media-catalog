@@ -1996,6 +1996,12 @@ class Store:
         )
 
     @staticmethod
+    def _tmdb_rating(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        return float(value) if 0 < value <= 10 else None
+
+    @staticmethod
     def _rebuild(conn: sqlite3.Connection, work_id: str) -> None:
         rows = conn.execute(
             "SELECT r.id,r.payload,s.type FROM records r JOIN sources s ON s.id=r.source_id WHERE r.work_id=?",
@@ -2166,7 +2172,16 @@ class Store:
             "fanart": encode(fanarts),
             "search_text": fold(search_text),
         }
-        for field in ("original_title", "year", "runtime_minutes", "plot"):
+        if enrichment:
+            enriched = json.loads(enrichment["payload"])
+            tmdb_rating = Store._tmdb_rating(enriched.get("tmdb_rating"))
+            # An explicitly refreshed TMDB vote supersedes source ratings;
+            # otherwise TMDB only fills a missing public rating.
+            if tmdb_rating is not None and (
+                enriched.get("tmdb_rating_refreshed_at") or values["rating"] is None
+            ):
+                values["rating"] = tmdb_rating
+        for field in ("original_title", "year", "runtime_minutes", "plot", "rating"):
             if field in overrides:
                 values[field] = overrides[field]
         values["search_text"] = fold(search_text + " " + " ".join(
@@ -3576,6 +3591,11 @@ class Store:
                 for field in ("custom_title", "metadata_overrides", "edition_hdr_overrides"):
                     if field in old_payload:
                         payload = {**payload, field: old_payload[field]}
+                # A lookup without a TMDB vote keeps the last known rating.
+                if "tmdb_rating" not in payload:
+                    for field in ("tmdb_rating", "tmdb_rating_refreshed_at"):
+                        if field in old_payload:
+                            payload = {**payload, field: old_payload[field]}
                 old_poster = old_payload.get("poster")
                 if old_payload.get("poster_fallback"):
                     payload = {**payload, "poster_fallback": old_payload["poster_fallback"]}
@@ -4058,6 +4078,16 @@ class Store:
         return [{"media_id": row["work_id"], "updated_at": row["updated_at"]}
                 for row in rows]
 
+    @staticmethod
+    def _timestamp(value: Any) -> datetime | None:
+        if not isinstance(value, str) or len(value) > 40:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else None
+
     def merge_device_tmdb_enrichment(self, items: list[dict[str, Any]], *, diagnostics: bool = False) -> dict[str, Any]:
         """Merge authenticated device enrichment by canonical work identity.
 
@@ -4184,6 +4214,20 @@ class Store:
                     payload["tmdb_id"] = tmdb_id
                 if poster and not payload.get("poster"):
                     payload["poster"] = poster
+                # Local-first rating refresh: the most recent explicit refresh
+                # wins, whether it ran on the server or on a device.
+                rating = self._tmdb_rating(item.get("tmdb_rating"))
+                refreshed = self._timestamp(item.get("tmdb_rating_refreshed_at"))
+                if refreshed:
+                    # A device clock running ahead must not pin its rating.
+                    refreshed = min(refreshed, datetime.now(UTC))
+                if rating is not None:
+                    current = self._timestamp(payload.get("tmdb_rating_refreshed_at"))
+                    if refreshed and (current is None or refreshed > current):
+                        payload["tmdb_rating"] = rating
+                        payload["tmdb_rating_refreshed_at"] = refreshed.isoformat(timespec="seconds")
+                    elif payload.get("tmdb_rating") is None:
+                        payload["tmdb_rating"] = rating
                 # An exact IMDb match established the work's canonical identity;
                 # retain its new TMDB identifier for future direct lookups.
                 if not known_tmdb and isinstance(imdb_id, str) and imdb_id in known_imdb:
