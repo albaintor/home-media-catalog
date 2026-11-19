@@ -101,3 +101,108 @@ def test_invalid_device_rating_is_ignored(store):
     store.merge_device_tmdb_enrichment([_device_item(
         movie, tmdb_rating=42, tmdb_rating_refreshed_at=_iso())])
     assert store.detail(movie)["rating"] == 5.0
+
+
+def test_device_rating_publication_and_change_feed(store):
+    movie = _movie(store, rating=5.0)
+    assert store.rating_changes()["changes"] == []
+    result = store.merge_device_tmdb_ratings([
+        {"media_id": movie, "tmdb_rating": 7.6, "tmdb_rating_refreshed_at": _iso()},
+        {"media_id": "unknown", "tmdb_rating": 7.0, "tmdb_rating_refreshed_at": _iso()},
+        {"media_id": movie, "tmdb_rating": 99, "tmdb_rating_refreshed_at": _iso()},
+    ])
+    assert result["accepted"] == [movie]
+    assert result["rejected"] == ["unknown", movie]
+    assert store.detail(movie)["rating"] == 7.6
+    feed = store.rating_changes()
+    assert feed["changes"] == [{"media_id": movie, "rating": 7.6}]
+    assert store.rating_changes(feed["cursor"])["changes"] == []
+    # A rating-only row is not a rich enrichment: credits are still fetched.
+    assert store.detail(movie)["enriched_at"] is None
+    assert movie in store.tmdb_enrichment_candidates()
+
+
+def test_device_rating_with_conflicting_tmdb_identity_is_rejected(store):
+    source = store.save_source({"name": "CLZ", "type": "clz"})["id"]
+    store.apply_snapshot(source, [Record(
+        "disc", "movie", "Known film", identifiers={"tmdb": "100"})])
+    movie = store.media(source_type="clz")["items"][0]["id"]
+    result = store.merge_device_tmdb_ratings([{
+        "media_id": movie, "tmdb_id": "200", "tmdb_rating": 6.0,
+        "tmdb_rating_refreshed_at": _iso()}])
+    assert result["rejected"] == [movie]
+
+
+def test_unchanged_rating_is_not_published_again(store):
+    movie = _movie(store)
+    assert store.save_tmdb_rating(movie, 6.4) == "accepted"
+    assert store.save_tmdb_rating(movie, 6.4) == "unchanged"
+    assert len(store.rating_changes()["changes"]) == 1
+
+
+def _rating_client(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from home_media_catalog.app import create_app
+    from home_media_catalog.settings import Settings
+    from tests.conftest import ADMIN, INGRESS, READ
+
+    return TestClient(create_app(Settings(
+        data_dir=tmp_path, api_token=ADMIN, read_token=READ,
+        ingress_token=INGRESS, tmdb_api_token="test-tmdb-token")))
+
+
+def test_server_rating_job_runs_stops_and_resumes(tmp_path, admin):
+    import time
+    from unittest.mock import patch
+
+    import httpx
+
+    def upstream(request):
+        if "/find/" in request.url.path:
+            return httpx.Response(200, json={"movie_results": [{"id": 4400}]})
+        return httpx.Response(200, json={"id": 4400, "vote_average": 8.3})
+
+    original = httpx.AsyncClient
+
+    def session(**kwargs):
+        return original(**kwargs, transport=httpx.MockTransport(upstream))
+
+    with patch("home_media_catalog.enrichment.httpx.AsyncClient", side_effect=session), \
+            _rating_client(tmp_path) as client:
+        store = client.app.state.store
+        movie = _movie(store, rating=5.0)
+        path = "/api/v1/catalogue/ratings/refresh"
+        assert client.post(path).status_code == 401
+        started = client.post(path, headers=admin).json()
+        assert started["status"] == "running" and started["total"] == 1
+        for _ in range(50):
+            status = client.get(path, headers=admin).json()
+            if status["status"] == "completed":
+                break
+            time.sleep(0.1)
+        assert status["status"] == "completed"
+        assert status["updated"] == 1 and status["remaining"] == 0
+        assert store.detail(movie)["rating"] == 8.3
+        changes = client.get("/api/v1/catalogue/ratings/changes", headers=admin).json()
+        assert changes["changes"][0]["media_id"] == movie
+
+        # Stop keeps the remaining queue; resume continues from it.
+        job = store.tmdb_rating_job()
+        job.update(status="running", queue=["missing-work"], started_at="x")
+        store.save_tmdb_rating_job(job)
+        assert client.delete(path, headers=admin).json()["status"] == "stopped"
+        assert store.tmdb_rating_job()["queue"] == ["missing-work"]
+        assert client.post(path, headers=admin).json()["remaining"] == 1
+
+
+def test_device_rating_endpoint_and_capability(client, admin):
+    store = client.app.state.store
+    movie = _movie(store, rating=5.0)
+    discovery = client.get("/api/v1/discovery").json()
+    assert "tmdb_rating_refresh" in discovery["capabilities"]
+    path = "/api/v1/catalogue/ratings/device"
+    body = {"items": [{"media_id": movie, "tmdb_rating": 6.9, "tmdb_rating_refreshed_at": _iso()}]}
+    assert client.post(path, json=body).status_code == 401
+    assert client.post(path, json=body, headers=admin).json()["accepted"] == [movie]
+    assert client.post(path, json={"items": []}, headers=admin).status_code == 422

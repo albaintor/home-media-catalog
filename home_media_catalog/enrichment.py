@@ -206,6 +206,37 @@ async def enrich_tmdb(detail: dict, token: str) -> dict:
         ) from exc
 
 
+async def tmdb_rating_lookup(get, detail: dict) -> tuple[str, float | None] | None:
+    """Current TMDB vote for one work: a single lightweight details request.
+
+    No credits, videos or artwork are requested. Returns None when the work
+    has no unambiguous TMDB identity or TMDB no longer knows it.
+    """
+    kind = {"movie": "movie", "tvshow": "tv"}.get(detail.get("kind"))
+    if not kind:
+        return None
+    ids = detail.get("identifiers") or {}
+    tmdb = ids.get("tmdb", [])
+    try:
+        if len(tmdb) == 1 and re.fullmatch(r"\d+", tmdb[0]):
+            tmdb_id = tmdb[0]
+        else:
+            imdb = ids.get("imdb", [])
+            if len(imdb) != 1 or not re.fullmatch(r"tt\d+", imdb[0]):
+                return None
+            found = await get("find/" + imdb[0], external_source="imdb_id")
+            matches = found.get("movie_results" if kind == "movie" else "tv_results", [])
+            if len(matches) != 1:
+                return None
+            tmdb_id = str(matches[0]["id"])
+        data = await get(f"{kind}/{tmdb_id}")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return None
+        raise
+    return tmdb_id, tmdb_rating(data.get("vote_average"))
+
+
 async def enrich_tmdb_season_guide(detail: dict, season: int, token: str) -> list[dict]:
     """Read-only episode metadata for a physical season without Kodi files.
 

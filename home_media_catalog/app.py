@@ -68,6 +68,8 @@ from .enrichment import (
     enrich_tmdb_season_guide,
     probe_tmdb,
     resolve_tmdb_poster,
+    tmdb_connection,
+    tmdb_rating_lookup,
 )
 from .internal_catalog import (
     find_tmdb,
@@ -205,6 +207,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         start_artwork_repair()
         nonlocal tmdb_worker_task
         tmdb_worker_task = asyncio.create_task(periodic_tmdb_enrichment())
+        # A running bulk rating refresh resumes after a container restart.
+        nonlocal rating_worker_task
+        rating_worker_task = asyncio.create_task(periodic_tmdb_rating_refresh())
         # Network outages, transient TMDB throttling and late imports must not
         # leave a poster permanently missing until a container restart.
         nonlocal artwork_repair_timer
@@ -225,6 +230,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 tmdb_worker_task.cancel()
                 try:
                     await tmdb_worker_task
+                except asyncio.CancelledError:
+                    pass
+            if rating_worker_task and not rating_worker_task.done():
+                rating_worker_task.cancel()
+                try:
+                    await rating_worker_task
                 except asyncio.CancelledError:
                     pass
             if artwork_repair_timer and not artwork_repair_timer.done():
@@ -270,6 +281,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     enrichment_lock = asyncio.Lock()
     tmdb_worker_task: asyncio.Task | None = None
     tmdb_wakeup = asyncio.Event()
+    rating_worker_task: asyncio.Task | None = None
+    rating_wakeup = asyncio.Event()
     tmdb_worker_status = {"running": False, "last_media_id": None,
                           "last_completed": None, "last_error": None}
     artwork_repair_task: asyncio.Task | None = None
@@ -433,6 +446,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "kodi_clean",
                 "media_details_batch",
                 "tmdb_device_credentials",
+                "tmdb_rating_refresh",
             ],
         }
 
@@ -827,6 +841,94 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             finally:
                 tmdb_wakeup.clear()
 
+    def tmdb_blocked_until() -> datetime | None:
+        retry_at = store.tmdb_retry_state().get("retry_at")
+        try:
+            blocked = datetime.fromisoformat(retry_at) if retry_at else None
+        except (TypeError, ValueError):
+            return None
+        if blocked and blocked.tzinfo is None:
+            blocked = blocked.replace(tzinfo=UTC)
+        return blocked if blocked and blocked > datetime.now(UTC) else None
+
+    async def periodic_tmdb_rating_refresh():
+        """Resumable bulk refresh of public TMDB ratings, 20 works per checkpoint.
+
+        The persisted queue survives restarts; a stop request is honoured
+        between two works. TMDB 429 cooldowns are shared with enrichment.
+        """
+        while True:
+            pause = 60.0
+            try:
+                job = await asyncio.to_thread(store.tmdb_rating_job)
+                token = settings.tmdb_api_token.strip()
+                if job.get("status") == "running" and token:
+                    blocked = await asyncio.to_thread(tmdb_blocked_until)
+                    queue = list(job.get("queue") or [])
+                    if blocked:
+                        pause = min(60.0, max(1.0, (blocked - datetime.now(UTC)).total_seconds()))
+                    elif not queue:
+                        job.update(status="completed", finished_at=datetime.now(UTC).isoformat(timespec="seconds"))
+                        await asyncio.to_thread(store.save_tmdb_rating_job, job)
+                    else:
+                        done: list[str] = []
+                        counts = {"updated": 0, "unchanged": 0, "failed": 0}
+                        failure: str | None = None
+                        try:
+                            async with tmdb_connection(token) as get:
+                                for media_id in queue[:20]:
+                                    current = await asyncio.to_thread(store.tmdb_rating_job)
+                                    if current.get("status") != "running" or current.get("started_at") != job.get("started_at"):
+                                        break
+                                    detail = await asyncio.to_thread(store.detail, media_id)
+                                    found = None
+                                    if detail:
+                                        async with enrichment_lock:
+                                            found = await tmdb_rating_lookup(get, detail)
+                                    if found and found[1] is not None:
+                                        outcome = await asyncio.to_thread(
+                                            store.save_tmdb_rating, media_id, found[1])
+                                        counts["updated" if outcome == "accepted" else "unchanged"] += 1
+                                    else:
+                                        counts["failed"] += 1
+                                    done.append(media_id)
+                        except TmdbRateLimited as exc:
+                            state = await asyncio.to_thread(store.tmdb_retry_state)
+                            state["retry_at"] = (datetime.now(UTC) + timedelta(seconds=exc.retry_after)).isoformat()
+                            state["last_error"] = str(exc)
+                            await asyncio.to_thread(store.save_tmdb_retry_state, state)
+                        except ConnectorError as exc:
+                            # Network or TMDB outage: keep the queue and retry later.
+                            failure = str(exc)
+                        # Merge progress into the latest persisted job so a stop
+                        # request made during this batch is never overwritten.
+                        latest = await asyncio.to_thread(store.tmdb_rating_job)
+                        if latest.get("started_at") == job.get("started_at"):
+                            finished = set(done)
+                            latest["queue"] = [m for m in latest.get("queue") or [] if m not in finished]
+                            latest["processed"] = latest.get("processed", 0) + len(done)
+                            for key, value in counts.items():
+                                latest[key] = latest.get(key, 0) + value
+                            if failure:
+                                latest["last_error"] = failure
+                            elif done:
+                                latest.pop("last_error", None)
+                            await asyncio.to_thread(store.save_tmdb_rating_job, latest)
+                        if done and not failure:
+                            pause = 0.0
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOG.exception("TMDB rating refresh pass failed")
+            if pause <= 0:
+                continue
+            try:
+                await asyncio.wait_for(rating_wakeup.wait(), timeout=pause)
+            except TimeoutError:
+                pass
+            finally:
+                rating_wakeup.clear()
+
     def on_catalog_changed() -> None:
         start_ai_index()
         start_artwork_repair()
@@ -1034,6 +1136,92 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await asyncio.to_thread(store.save_tmdb_retry_state, saved)
         tmdb_wakeup.set()
         return {"queued": True}
+
+    def rating_job_summary(job: dict) -> dict:
+        state = store.tmdb_retry_state()
+        return {
+            "status": job.get("status", "idle"),
+            "total": job.get("total", 0),
+            "processed": job.get("processed", 0),
+            "updated": job.get("updated", 0),
+            "unchanged": job.get("unchanged", 0),
+            "failed": job.get("failed", 0),
+            "remaining": len(job.get("queue") or []),
+            "started_at": job.get("started_at"),
+            "finished_at": job.get("finished_at"),
+            "last_error": job.get("last_error"),
+            "retry_at": state.get("retry_at") if tmdb_blocked_until() else None,
+            "tmdb_configured": bool(settings.tmdb_api_token.strip()),
+        }
+
+    @app.get(
+        API + "/catalogue/ratings/refresh",
+        tags=["Enrichment"],
+        dependencies=[Depends(authenticated)],
+    )
+    async def tmdb_rating_refresh_status():
+        job = await asyncio.to_thread(store.tmdb_rating_job)
+        return await asyncio.to_thread(rating_job_summary, job)
+
+    @app.post(
+        API + "/catalogue/ratings/refresh",
+        tags=["Enrichment"],
+        dependencies=[Depends(writable)],
+    )
+    async def start_tmdb_rating_refresh(resume: bool = True):
+        """Start (or resume a stopped) refresh of every public TMDB rating."""
+        if not settings.tmdb_api_token.strip():
+            raise HTTPException(409, "Configure a TMDB API token on the server first.")
+        job = await asyncio.to_thread(store.tmdb_rating_job)
+        if job.get("status") == "running":
+            return await asyncio.to_thread(rating_job_summary, job)
+        if not (resume and job.get("status") == "stopped" and job.get("queue")):
+            queue = await asyncio.to_thread(store.tmdb_rating_candidates)
+            job = {"total": len(queue), "queue": queue, "processed": 0, "updated": 0,
+                   "unchanged": 0, "failed": 0,
+                   "started_at": datetime.now(UTC).isoformat(timespec="seconds")}
+        job["status"] = "running"
+        job.pop("finished_at", None)
+        await asyncio.to_thread(store.save_tmdb_rating_job, job)
+        rating_wakeup.set()
+        return await asyncio.to_thread(rating_job_summary, job)
+
+    @app.delete(
+        API + "/catalogue/ratings/refresh",
+        tags=["Enrichment"],
+        dependencies=[Depends(writable)],
+    )
+    async def stop_tmdb_rating_refresh():
+        job = await asyncio.to_thread(store.tmdb_rating_job)
+        if job.get("status") == "running":
+            job["status"] = "stopped"
+            await asyncio.to_thread(store.save_tmdb_rating_job, job)
+        return await asyncio.to_thread(rating_job_summary, job)
+
+    @app.post(
+        API + "/catalogue/ratings/device",
+        tags=["Enrichment"],
+        dependencies=[Depends(writable)],
+    )
+    async def publish_device_tmdb_ratings(request: Request):
+        """Local-first publication of ratings refreshed on an iOS device."""
+        data = await request.json()
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            raise HTTPException(422, "Expected an items array.")
+        try:
+            return await asyncio.to_thread(store.merge_device_tmdb_ratings, items)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get(
+        API + "/catalogue/ratings/changes",
+        tags=["Enrichment"],
+        dependencies=[Depends(authenticated)],
+    )
+    def tmdb_rating_changes(after: int = Query(0, ge=0)):
+        """Incremental public-rating changes for iOS local-first replicas."""
+        return store.rating_changes(after)
 
     @app.get(
         API + "/catalogue/enrichment/revisions",

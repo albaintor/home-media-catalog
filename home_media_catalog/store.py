@@ -137,6 +137,13 @@ CREATE TABLE IF NOT EXISTS artwork_changes (
  work_id TEXT NOT NULL,
  updated_at TEXT NOT NULL
 );
+-- Monotonic public-rating cursor. Bulk TMDB rating refreshes must not bump
+-- enrichment revisions, which would re-download every rich detail on iOS.
+CREATE TABLE IF NOT EXISTS rating_changes (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ work_id TEXT NOT NULL,
+ updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS playback_locations (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
  target TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -3606,11 +3613,14 @@ class Store:
                 # A credits/trailer refresh must not drop downloaded season guides.
                 if old_payload.get("season_guides") and "season_guides" not in payload:
                     payload = {**payload, "season_guides": old_payload["season_guides"]}
+            old_refresh = json.loads(previous["payload"]).get("tmdb_rating_refreshed_at") if previous else None
             conn.execute(
                 "INSERT INTO enrichment VALUES(?,?,?) ON CONFLICT(work_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",
                 (work_id, encode(payload), now()),
             )
             self._rebuild(conn, work_id)
+            if payload.get("tmdb_rating_refreshed_at") and payload["tmdb_rating_refreshed_at"] != old_refresh:
+                conn.execute("INSERT INTO rating_changes(work_id,updated_at) VALUES(?,?)", (work_id, now()))
             if missing_before and json.loads(conn.execute(
                 "SELECT poster FROM works WHERE id=?", (work_id,)
             ).fetchone()["poster"] or "[]"):
@@ -4226,6 +4236,8 @@ class Store:
                     if refreshed and (current is None or refreshed > current):
                         payload["tmdb_rating"] = rating
                         payload["tmdb_rating_refreshed_at"] = refreshed.isoformat(timespec="seconds")
+                        conn.execute("INSERT INTO rating_changes(work_id,updated_at) VALUES(?,?)",
+                                     (work_id, now()))
                     elif payload.get("tmdb_rating") is None:
                         payload["tmdb_rating"] = rating
                 # An exact IMDb match established the work's canonical identity;
@@ -4269,6 +4281,143 @@ class Store:
         if diagnostics:
             result.update(reasons=reasons, remapped=remapped)
         return result
+
+    # ---- Public TMDB ratings: bulk refresh, device publication, pull feed ----
+
+    RATING_JOB_KEY = "tmdb_rating_refresh_v1"
+
+    def _store_tmdb_rating(self, conn, work_id: str, rating: float,
+                           refreshed: datetime) -> str:
+        """Store a refreshed TMDB vote; the most recent refresh always wins.
+
+        Returns "accepted" when the public rating changed, otherwise "unchanged".
+        The enrichment revision is left untouched on purpose: rating changes
+        are replicated through the lightweight rating_changes cursor.
+        """
+        cached = conn.execute(
+            "SELECT payload FROM enrichment WHERE work_id=?", (work_id,)
+        ).fetchone()
+        old = json.loads(cached["payload"]) if cached else {}
+        current = self._timestamp(old.get("tmdb_rating_refreshed_at"))
+        if current and refreshed <= current:
+            return "unchanged"
+        payload = {**old, "tmdb_rating": rating,
+                   "tmdb_rating_refreshed_at": refreshed.isoformat(timespec="seconds")}
+        if cached:
+            conn.execute("UPDATE enrichment SET payload=? WHERE work_id=?",
+                         (encode(payload), work_id))
+        else:
+            # A rating-only row is not a rich enrichment (no people/trailers),
+            # so it never suppresses the automatic credits/trailers worker.
+            conn.execute("INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?)",
+                         (work_id, encode(payload), now()))
+        before = conn.execute("SELECT rating FROM works WHERE id=?", (work_id,)).fetchone()
+        self._rebuild(conn, work_id)
+        after = conn.execute("SELECT rating FROM works WHERE id=?", (work_id,)).fetchone()
+        if (before and before["rating"]) == (after and after["rating"]):
+            return "unchanged"
+        conn.execute("INSERT INTO rating_changes(work_id,updated_at) VALUES(?,?)",
+                     (work_id, now()))
+        return "accepted"
+
+    def save_tmdb_rating(self, work_id: str, rating: float) -> str:
+        """Server-side bulk refresh result for one canonical work."""
+        value = self._tmdb_rating(rating)
+        if value is None:
+            return "rejected"
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM works WHERE id=?", (work_id,)).fetchone():
+                return "rejected"
+            return self._store_tmdb_rating(conn, work_id, value, datetime.now(UTC))
+
+    def merge_device_tmdb_ratings(self, items: list[dict[str, Any]]) -> dict[str, list[str]]:
+        """Accept ratings refreshed on a device (local-first) by canonical work.
+
+        A device's provider identity must agree with the server's identifiers.
+        The most recent refresh wins; device clocks in the future are clamped.
+        """
+        if not 1 <= len(items) <= 500:
+            raise ValueError("Supply between 1 and 500 ratings.")
+        result: dict[str, list[str]] = {"accepted": [], "unchanged": [], "rejected": []}
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError("Each rating must be an object.")
+                work_id = item.get("media_id")
+                rating = self._tmdb_rating(item.get("tmdb_rating"))
+                refreshed = self._timestamp(item.get("tmdb_rating_refreshed_at"))
+                if not isinstance(work_id, str) or len(work_id) > 128:
+                    continue
+                row = conn.execute("SELECT kind FROM works WHERE id=?", (work_id,)).fetchone()
+                tmdb_id = item.get("tmdb_id")
+                known_tmdb = {r[0] for r in conn.execute(
+                    "SELECT value FROM identifiers WHERE work_id=? AND namespace='tmdb'", (work_id,))}
+                if (rating is None or refreshed is None or not row
+                        or row["kind"] not in ("movie", "tvshow")
+                        or (tmdb_id is not None and not isinstance(tmdb_id, str))
+                        or (known_tmdb and tmdb_id and tmdb_id not in known_tmdb)):
+                    result["rejected"].append(work_id)
+                    continue
+                refreshed = min(refreshed, datetime.now(UTC))
+                result[self._store_tmdb_rating(conn, work_id, rating, refreshed)].append(work_id)
+        return result
+
+    def rating_changes(self, after: int = 0, limit: int = 500) -> dict:
+        """Bounded public-rating changes, including those made by other devices."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT c.id,c.work_id,w.rating FROM rating_changes c "
+                "JOIN works w ON w.id=c.work_id WHERE c.id>? ORDER BY c.id LIMIT ?",
+                (max(0, after), min(500, max(1, limit))),
+            ).fetchall()
+            cursor = conn.execute("SELECT COALESCE(MAX(id),0) FROM rating_changes").fetchone()[0]
+        latest: dict[str, Any] = {}
+        for row in rows:
+            latest[row["work_id"]] = row["rating"]
+        if rows:
+            next_cursor = rows[-1]["id"]
+        elif after > cursor:
+            next_cursor = cursor  # The server catalogue was reset or restored.
+        else:
+            next_cursor = max(after, 0)
+        return {
+            "cursor": next_cursor,
+            "has_more": bool(rows) and rows[-1]["id"] < cursor,
+            "changes": [{"media_id": key, "rating": value} for key, value in latest.items()],
+        }
+
+    def tmdb_rating_candidates(self) -> list[str]:
+        """Movies and series with a TMDB or IMDb identity, in a stable order."""
+        with self.connect() as conn:
+            return [row[0] for row in conn.execute(
+                "SELECT w.id FROM works w WHERE w.kind IN ('movie','tvshow') "
+                "AND EXISTS (SELECT 1 FROM identifiers i WHERE i.work_id=w.id "
+                "AND i.namespace IN ('tmdb','imdb')) ORDER BY w.id"
+            )]
+
+    def tmdb_rating_job(self) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM catalogue_meta WHERE key=?", (self.RATING_JOB_KEY,)
+            ).fetchone()
+        if row:
+            try:
+                job = json.loads(row["value"])
+                if isinstance(job, dict):
+                    return job
+            except (ValueError, TypeError):
+                pass
+        return {"status": "idle"}
+
+    def save_tmdb_rating_job(self, job: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO catalogue_meta(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (self.RATING_JOB_KEY, encode(job)),
+            )
 
     def tmdb_retry_state(self) -> dict[str, Any]:
         """Persistent queue checkpoints, including a provider-wide 429 cooldown."""
