@@ -907,13 +907,18 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 @media(max-width:1200px){.header-app-store{display:none}}
 
 /* Media detail backdrop: the collection mosaic effect, with the iOS entrance
-   (blurred and enlarged artwork settling into place). */
+   (blurred and enlarged artwork settling into place). It stays pinned to the
+   top of the dialog (the scroll container) while the content scrolls over it. */
 .detail-backdrop{
-  position:relative;z-index:0;height:340px;margin:0 0 -340px;
+  position:sticky;top:0;z-index:0;height:min(620px,90dvh);margin:0 0 calc(-1 * min(620px,90dvh));
   overflow:hidden;pointer-events:none;border-radius:20px 20px 0 0;
-  -webkit-mask-image:linear-gradient(to bottom,#000 0%,#0009 45%,transparent 100%);
-  mask-image:linear-gradient(to bottom,#000 0%,#0009 45%,transparent 100%);
+  /* Same falloff as iOS: opaque for 60% of the height, then fades out. */
+  -webkit-mask-image:linear-gradient(to bottom,#000 0%,#000 60%,transparent 100%);
+  mask-image:linear-gradient(to bottom,#000 0%,#000 60%,transparent 100%);
 }
+/* A short card must not become scrollable because of the backdrop height;
+   clip (unlike hidden) keeps the dialog as the sticky scroll container. */
+#detail-content{overflow:clip}
 .detail-backdrop img{
   display:block;width:100%;height:100%;object-fit:cover;
   opacity:0;filter:blur(8px);transform:scale(1.15);
@@ -922,4 +927,3 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .detail-backdrop.is-loaded img{opacity:.38;filter:blur(3px);transform:scale(1.03)}
 .detail-backdrop img.failed{display:none}
 .detail-backdrop+.detail-layout{position:relative;z-index:1}
-@media(max-width:700px){.detail-backdrop{height:240px;margin-bottom:-240px}}
