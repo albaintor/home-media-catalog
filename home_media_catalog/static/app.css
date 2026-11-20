@@ -905,3 +905,21 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .header-app-store img{display:block;width:96px;height:auto}
 .header-app-store:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 @media(max-width:1200px){.header-app-store{display:none}}
+
+/* Media detail backdrop: the collection mosaic effect, with the iOS entrance
+   (blurred and enlarged artwork settling into place). */
+.detail-backdrop{
+  position:relative;z-index:0;height:340px;margin:0 0 -340px;
+  overflow:hidden;pointer-events:none;border-radius:20px 20px 0 0;
+  -webkit-mask-image:linear-gradient(to bottom,#000 0%,#0009 45%,transparent 100%);
+  mask-image:linear-gradient(to bottom,#000 0%,#0009 45%,transparent 100%);
+}
+.detail-backdrop img{
+  display:block;width:100%;height:100%;object-fit:cover;
+  opacity:0;filter:blur(8px);transform:scale(1.15);
+  transition:opacity .45s ease-out,filter .7s cubic-bezier(.22,1,.36,1),transform .7s cubic-bezier(.22,1,.36,1);
+}
+.detail-backdrop.is-loaded img{opacity:.38;filter:blur(3px);transform:scale(1.03)}
+.detail-backdrop img.failed{display:none}
+.detail-backdrop+.detail-layout{position:relative;z-index:1}
+@media(max-width:700px){.detail-backdrop{height:240px;margin-bottom:-240px}}
