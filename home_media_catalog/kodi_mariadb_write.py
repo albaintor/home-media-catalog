@@ -193,8 +193,9 @@ def write_kodi_mariadb(source: dict, detail: dict, editions: list[dict], changes
 
                     rating = changes.get("user_rating")
                     watched = changes.get("watched")
-                    if rating is not None:
-                        rounded = math.floor(float(rating) + 0.5)
+                    if "user_rating" in changes:
+                        # None removes the rating: Kodi stores 0 for "no rating".
+                        rounded = 0 if rating is None else math.floor(float(rating) + 0.5)
                         for kodi_id, _ in targets:
                             cursor.execute(
                                 f"UPDATE {table} SET userrating=%s WHERE {id_col}=%s",

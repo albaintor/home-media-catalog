@@ -107,6 +107,32 @@ def test_movie_rating_and_watched_are_written_to_kodi(client, admin):
     assert len([c for c in calls if c[0] == "VideoLibrary.SetMovieDetails"]) == 1
 
 
+def test_removing_imported_kodi_rating_writes_zero_and_does_not_resurface(client, admin):
+    # The rating (4) comes only from the Kodi import: there is no personal value.
+    _sid, mid = prepare_media(client, admin)
+    calls = []
+
+    def respond(method, params):
+        calls.append((method, params))
+        if method == "JSONRPC.Permission":
+            return {"ReadData": True, "UpdateData": True}
+        if method == "VideoLibrary.GetMovieDetails":
+            return {"moviedetails": {"uniqueid": {"tmdb": "123"}, "title": "Example"}}
+        if method == "VideoLibrary.SetMovieDetails":
+            return "OK"
+        raise AssertionError(method)
+
+    with fake_kodi(respond):
+        response = client.patch(
+            f"/api/v1/media/{mid}/personal", headers=admin, json={"user_rating": None}
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["user_rating"] is None
+    assert response.json()["writeback"][0]["status"] == "updated"
+    assert calls[-1] == ("VideoLibrary.SetMovieDetails", {"movieid": 10, "userrating": 0})
+    assert client.get(f"/api/v1/media/{mid}", headers=admin).json()["user_rating"] is None
+
+
 @pytest.mark.parametrize(
     ("kind", "set_method", "get_method", "id_param"),
     [
@@ -166,7 +192,7 @@ def test_tvshow_and_episode_write_to_correct_jsonrpc_method(
         )
 
 
-def test_no_player_reports_local_only_and_clearing_override_is_local(client, admin):
+def test_no_player_reports_local_only_and_removing_rating_is_propagated(client, admin):
     _sid, mid = prepare_media(client, admin, with_player=False)
     response = client.patch(f"/api/v1/media/{mid}/personal", headers=admin, json={"user_rating": 9})
     assert response.status_code == 200
@@ -177,8 +203,10 @@ def test_no_player_reports_local_only_and_clearing_override_is_local(client, adm
         f"/api/v1/media/{mid}/personal", headers=admin, json={"user_rating": None}
     )
     assert response.status_code == 200
-    assert response.json()["writeback"] == []
-    assert response.json()["user_rating"] == 4
+    # Removing the rating must not restore the imported Kodi value (4); it is
+    # reported (and queued) for Kodi like any other rating change.
+    assert response.json()["user_rating"] is None
+    assert response.json()["writeback"][0]["status"] == "unavailable"
 
 
 def test_mismatched_kodi_identity_never_gets_updated(client, admin):

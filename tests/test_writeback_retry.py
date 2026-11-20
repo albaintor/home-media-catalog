@@ -177,11 +177,15 @@ def test_repeated_edits_supersede_unsent_values_and_success_clears_only_edited_f
     assert status["pending_count"] == 1
     assert status["pending"][0]["changes"] == {"user_rating": 9}
 
-    # Resetting an override to null clears its queue entry, with no remote request.
-    with patch("home_media_catalog.writeback._write_kodi") as write:
+    # Removing the rating supersedes the queued value and is sent to Kodi
+    # (stored there as userrating 0); success clears the queue entry.
+    with patch(
+        "home_media_catalog.writeback._write_kodi", new_callable=AsyncMock, return_value=None
+    ) as write:
         r = client.patch(f"/api/v1/media/{mid}/personal", headers=admin, json={"user_rating": None})
     assert r.status_code == 200
-    write.assert_not_called()
+    write.assert_called_once()
+    assert write.call_args.args[3] == {"user_rating": None}
     assert client.get("/api/v1/writebacks/status", headers=admin).json()["pending_count"] == 0
 
 

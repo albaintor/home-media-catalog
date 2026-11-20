@@ -48,7 +48,10 @@ def test_personal_overrides_survive_sync_restart_and_reset(client, admin):
     assert reopened.detail(mid)["watch_status"] == "unwatched"
     assert client.patch(path, headers=admin, json={"watched": None}).json()["user_rating"] == 0
     result = client.patch(path, headers=admin, json={"user_rating": None, "watched": None}).json()
-    assert result["watch_status"] == "watched" and result["user_rating"] == 6
+    # Resetting removes the rating instead of restoring the imported Kodi value.
+    assert result["watch_status"] == "watched" and result["user_rating"] is None
+    assert result["personal"]["user_rating"] is None
+    assert reopened.detail(mid)["user_rating"] is None
     assert (
         client.patch(
             "/api/v1/media/absent/personal", headers=admin, json={"watched": True}

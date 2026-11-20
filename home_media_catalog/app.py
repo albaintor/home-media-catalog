@@ -2281,6 +2281,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 key: value
                 for key, value in data.model_dump(exclude_unset=True).items()
                 if detail.get("personal", {}).get(key) != value
+                # Removing a rating imported from a source (no personal value)
+                # is still a change: the displayed rating must disappear.
+                or (key == "user_rating" and value is None
+                    and detail.get("user_rating") is not None)
             }
             if changes:
                 await asyncio.to_thread(store.update_personal, media_id, changes)

@@ -19,7 +19,9 @@ from .utils import identifiers
 
 _LOG = logging.getLogger(__name__)
 
-# Null clears the local override ("use source value"), not the source itself.
+# Null watched clears the local override ("use source value"), not the
+# source itself. Null user_rating removes the personal rating everywhere:
+# Kodi stores it as userrating 0 ("no rating").
 # Extend this registry when another connector supports updates.
 WRITABLE_FIELDS = {
     "kodi": frozenset({"user_rating", "watched"}),
@@ -122,7 +124,9 @@ async def _write_kodi(
 
     updates: dict[str, Any] = {}
     warning = None
-    if changes.get("user_rating") is not None:
+    if "user_rating" in changes and changes["user_rating"] is None:
+        updates["userrating"] = 0
+    elif changes.get("user_rating") is not None:
         # Kodi's userrating property is an integer, whereas the local UI
         # permits halves. Preserve the precise value locally.
         rating = float(changes["user_rating"])
@@ -202,7 +206,7 @@ async def propagate_personal(
     for source_id, editions in editions_by_source.items():
         kind = editions[0]["source_type"]
         fields = WRITABLE_FIELDS[kind] & changes.keys()
-        if not any(changes[field] is not None for field in fields):
+        if not any(changes[field] is not None or field == "user_rating" for field in fields):
             continue
         source = source_info.get(source_id, {})
         if kind == "mymovies" and not source.get("config", {}).get("remote_enabled"):

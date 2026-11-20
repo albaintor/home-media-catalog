@@ -3560,6 +3560,19 @@ class Store:
                 if name not in ("user_rating", "watched"):
                     raise ValueError("Unknown personal field.")
                 conn.execute(f"UPDATE personal SET {name}=? WHERE work_id=?", (value, work_id))
+            if "user_rating" in changes and changes["user_rating"] is None:
+                # A NULL personal value falls back to the imported source
+                # rating (e.g. Kodi userrating), which would resurrect the
+                # removed rating until the next sync. Clearing a rating removes
+                # it everywhere; the Kodi writeback stores 0 ("no rating").
+                for record in conn.execute(
+                    "SELECT id,payload FROM records WHERE work_id=?", (work_id,)
+                ).fetchall():
+                    payload = json.loads(record["payload"])
+                    if payload.get("user_rating") is not None:
+                        payload["user_rating"] = None
+                        conn.execute("UPDATE records SET payload=? WHERE id=?",
+                                     (encode(payload), record["id"]))
             self._rebuild(conn, work_id)
         return True
 
@@ -4734,7 +4747,8 @@ class Store:
 
         A new value supersedes an older queued value for the same source/field.
         Clearing a local override discards the matching queued field but does
-        not write null to the remote service.
+        not write null to the remote service, except a removed user rating,
+        which is queued so Kodi also forgets it.
         """
         from .writeback import WRITABLE_FIELDS
 
@@ -4758,7 +4772,7 @@ class Store:
                 pending = json.loads(row["changes"]) if row else {}
                 # Clear local-only resets while preserving unrelated failed fields.
                 for key, value in applicable.items():
-                    if value is None:
+                    if value is None and key != "user_rating":
                         pending.pop(key, None)
                     else:
                         pending[key] = value
