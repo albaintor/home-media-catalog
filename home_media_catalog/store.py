@@ -3835,19 +3835,41 @@ class Store:
         """List manual and imported collections with manual membership precedence."""
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT c.id,c.name,c.revision,c.is_manual,COUNT(ci.work_id) item_count, "
-                "MIN(ci.work_id) AS sole_work_id, "
+                "WITH effective_items AS ("
+                "SELECT c.id collection_id,ci.work_id FROM collections c "
+                "JOIN collection_items ci ON ci.collection_id=c.id "
+                "WHERE c.is_manual=1 OR NOT EXISTS("
+                "SELECT 1 FROM collection_items mi "
+                "JOIN collections mc ON mc.id=mi.collection_id "
+                "WHERE mi.work_id=ci.work_id AND mc.is_manual=1)) "
+                ",collection_metrics AS ("
+                "SELECT e.collection_id,COUNT(*) item_count,MIN(e.work_id) sole_work_id,"
+                "AVG(CASE WHEN w.rating>0 THEN w.rating END) average_rating,"
+                "AVG(CASE WHEN w.user_rating>0 THEN w.user_rating END) average_user_rating,"
+                "SUM(CASE WHEN w.watch_status='watched' THEN 1 ELSE 0 END) watched_count,"
+                "SUM(CASE WHEN w.watch_status IN ('watched','in_progress') THEN 1 ELSE 0 END) started_count "
+                "FROM effective_items e JOIN works w ON w.id=e.work_id GROUP BY e.collection_id),"
+                "collection_sources AS ("
+                "SELECT e.collection_id,json_group_array(DISTINCT st.value) source_types_json "
+                "FROM effective_items e JOIN works w ON w.id=e.work_id,"
+                "json_each(w.source_types) st GROUP BY e.collection_id),"
+                "collection_formats AS ("
+                "SELECT e.collection_id,json_group_array(DISTINCT fm.value) formats_json "
+                "FROM effective_items e JOIN works w ON w.id=e.work_id,"
+                "json_each(w.formats) fm GROUP BY e.collection_id) "
+                "SELECT c.id,c.name,c.revision,c.is_manual,COALESCE(cm.item_count,0) item_count, "
+                "cm.sole_work_id,cm.average_rating,cm.average_user_rating,"
+                "cm.watched_count,cm.started_count,cs.source_types_json,cf.formats_json, "
                 "CASE WHEN c.is_manual=0 AND EXISTS ("
                 "SELECT 1 FROM collection_items ext "
                 "JOIN collection_items mi ON mi.work_id=ext.work_id "
                 "JOIN collections mc ON mc.id=mi.collection_id AND mc.is_manual=1 "
                 "WHERE ext.collection_id=c.id) THEN 1 ELSE 0 END AS has_manual_overlap "
-                "FROM collections c LEFT JOIN collection_items ci "
-                "ON ci.collection_id=c.id AND (c.is_manual=1 OR NOT EXISTS("
-                "SELECT 1 FROM collection_items mi "
-                "JOIN collections mc ON mc.id=mi.collection_id "
-                "WHERE mi.work_id=ci.work_id AND mc.is_manual=1)) "
-                "GROUP BY c.id HAVING c.is_manual=1 OR COUNT(ci.work_id)>0 "
+                "FROM collections c "
+                "LEFT JOIN collection_metrics cm ON cm.collection_id=c.id "
+                "LEFT JOIN collection_sources cs ON cs.collection_id=c.id "
+                "LEFT JOIN collection_formats cf ON cf.collection_id=c.id "
+                "WHERE c.is_manual=1 OR COALESCE(cm.item_count,0)>0 "
                 "ORDER BY c.is_manual DESC,c.name COLLATE NOCASE,c.id"
             ).fetchall()
             result = [dict(row) for row in rows]
@@ -3876,8 +3898,18 @@ class Store:
                 single_items.update({item["id"]: item for item in self._summaries_with_sources(conn, rows)})
             for item in result:
                 sole_id = item.pop("sole_work_id", None)
+                source_types = json.loads(item.pop("source_types_json", None) or "[]")
+                formats = json.loads(item.pop("formats_json", None) or "[]")
+                watched_count = int(item.pop("watched_count", 0) or 0)
+                started_count = int(item.pop("started_count", 0) or 0)
                 item["is_manual"] = bool(item["is_manual"])
                 item["has_manual_overlap"] = bool(item.get("has_manual_overlap", False))
+                item["watch_status"] = (
+                    "watched" if item["item_count"] and watched_count == item["item_count"]
+                    else "partial" if started_count else None
+                )
+                item["source_types"] = sorted(set(source_types))
+                item["formats"] = sorted(set(formats))
                 item["single_media"] = (
                     single_items.get(sole_id) if item["item_count"] == 1 else None
                 )

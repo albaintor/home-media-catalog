@@ -53,6 +53,38 @@ def test_collection_index_reuses_media_and_exposes_singletons(store):
     assert store.media(collection_id=identifier)["total"] == 1
 
 
+def test_collection_index_aggregates_card_metadata(store):
+    source = _source(store)
+    store.apply_snapshot(source, [
+        Record("rated", "movie", "Rated", rating=8, user_rating=9, watched=True,
+               formats=["Blu-ray 4K"], collections=["Metadata Saga"]),
+        Record("unrated", "movie", "Unrated", watched=False,
+               formats=["Blu-ray"], collections=["Metadata Saga"]),
+        Record("second-rating", "movie", "Second rating", rating=6, user_rating=7,
+               resume_seconds=120, total_seconds=7200,
+               collections=["Metadata Saga"]),
+    ])
+
+    group = next(item for item in store.collection_index()
+                 if item["name"] == "Metadata Saga")
+    assert group["average_rating"] == 7
+    assert group["average_user_rating"] == 8
+    assert group["watch_status"] == "partial"
+    assert group["source_types"] == ["clz"]
+    assert set(group["formats"]) == {"Blu-ray", "Blu-ray 4K"}
+
+    # Every mutation path updates works first; the next index read must expose
+    # current values without a stale denormalized collection summary.
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE works SET watch_status='watched' "
+            "WHERE id IN (SELECT work_id FROM collection_items "
+            "WHERE collection_id=?)", (group["id"],),
+        )
+    assert next(item for item in store.collection_index()
+                if item["id"] == group["id"])["watch_status"] == "watched"
+
+
 
 def test_collection_thumbnail_uses_release_year_not_membership_order(store):
     source = _source(store)

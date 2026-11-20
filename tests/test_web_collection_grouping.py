@@ -210,6 +210,37 @@ assert.ok(!markup.includes('old.jpg'));
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_collection_card_metadata_uses_complete_members_or_server_index():
+    source = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs');
+const src=fs.readFileSync(process.argv[1],'utf8');
+const funcs=src.slice(src.indexOf('function collectionCardMetadata('),
+  src.indexOf('function renderCards('));
+const state={indexedCollections:[{id:'indexed',item_count:3,average_rating:7.5,
+  average_user_rating:8.5,watch_status:'partial',source_types:['kodi','clz'],
+  formats:['Blu-ray 4K']}]};
+const {collectionCardMetadata}=Function('state',funcs+
+  '\nreturn {collectionCardMetadata};')(state);
+const indexed=collectionCardMetadata({id:'indexed',items:[],itemCount:3});
+assert.equal(indexed.averageRating,7.5);
+assert.equal(indexed.averageUserRating,8.5);
+assert.equal(indexed.watchStatus,'partial');
+assert.deepEqual(indexed.sourceTypes,['kodi','clz']);
+assert.deepEqual(indexed.formats,['Blu-ray 4K']);
+const loaded=collectionCardMetadata({id:'loaded',itemCount:3,items:[
+  {rating:8,user_rating:9,watch_status:'watched',source_types:['kodi'],formats:['4K']},
+  {rating:null,user_rating:0,watch_status:'unknown',source_types:['clz'],formats:['Blu-ray']},
+  {rating:6,user_rating:7,watch_status:'in_progress',source_types:['kodi'],formats:[]}
+]});
+assert.equal(loaded.averageRating,7);
+assert.equal(loaded.averageUserRating,8);
+assert.equal(loaded.watchStatus,'partial');
+assert.deepEqual(new Set(loaded.sourceTypes),new Set(['kodi','clz']));
+"""
+    subprocess.run(["node", "-e", source, str(WEB)], check=True, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
 def test_internal_overlap_preserves_all_grouped_media():
     """Hide overlapping imported groups, retaining their works as media cards."""
     source = r"""

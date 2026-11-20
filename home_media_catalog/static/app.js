@@ -1517,6 +1517,48 @@ function collectionArtwork(items, fallbackArtwork=null, expectedCount=null) {
     : '<span class="collection-artwork-empty" aria-hidden="true">▦</span>');
   return `<span class="collection-artwork ${layout}" aria-hidden="true">${cells.join('')}</span>`;
 }
+function collectionCardMetadata(group) {
+  const items=group.items||[],expected=Number(group.itemCount??items.length);
+  const complete=items.length>0&&items.length===expected;
+  const indexed=(state.indexedCollections||[]).find(entry=>entry.id===group.id)||null;
+  const positiveAverage=field=>{
+    const values=items.map(item=>Number(item[field])).filter(value=>Number.isFinite(value)&&value>0);
+    if(complete)return values.length?values.reduce((sum,value)=>sum+value,0)/values.length:null;
+    const value=Number(indexed?.[field==='rating'?'average_rating':'average_user_rating']);
+    return Number.isFinite(value)&&value>0?value:null;
+  };
+  let watchStatus=indexed?.watch_status||null;
+  if(complete) {
+    const watched=items.filter(item=>item.watch_status==='watched').length;
+    const started=items.filter(item=>['watched','in_progress'].includes(item.watch_status)).length;
+    watchStatus=watched===items.length?'watched':started?'partial':null;
+  }
+  const union=(field)=>complete
+    ? [...new Set(items.flatMap(item=>item[field]||[]))]
+    : [...new Set(indexed?.[field]||[])];
+  return {averageRating:positiveAverage('rating'),
+    averageUserRating:positiveAverage('user_rating'),watchStatus,
+    sourceTypes:union('source_types'),formats:union('formats')};
+}
+function collectionCardBadges(group) {
+  const metadata=collectionCardMetadata(group);
+  const watch=metadata.watchStatus==='watched'
+    ? '<span class="collection-watch watched" title="Vu" aria-label="Vu">✓</span>'
+    : metadata.watchStatus==='partial'
+    ? '<span class="collection-watch partial" title="Vue partielle" aria-label="Vue partielle">◐</span>':'';
+  const ratings=`<span class="collection-ratings">${metadata.averageRating!=null
+    ? `<span class="collection-rating tmdb" title="Note TMDB moyenne" aria-label="Note TMDB moyenne ${metadata.averageRating.toFixed(1)}">★ ${metadata.averageRating.toFixed(1)}</span>`:''}${metadata.averageUserRating!=null
+    ? `<span class="collection-rating personal" title="Note personnelle moyenne" aria-label="Note personnelle moyenne ${metadata.averageUserRating.toFixed(1)}">★ ${metadata.averageUserRating.toFixed(1)}</span>`:''}</span>`;
+  const discFormats=metadata.formats.filter(value=>formatLogos[canonicalFormat(value)]?.[1]==='disc');
+  const libraries=metadata.sourceTypes.map(type=>sourceBadge(type)).join('');
+  const supports=formatBadges(discFormats,true);
+  return {overlay:`<span class="collection-card-overlay">${watch}${ratings}</span>`,
+    editions:libraries||supports?`<span class="collection-card-editions">${libraries}${supports}</span>`:''};
+}
+function collectionCard(group) {
+  const count=group.itemCount??group.items.length,badges=collectionCardBadges(group);
+  return `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${count} titres"><span class="collection-card-visual">${collectionArtwork(group.items,group.artwork,group.itemCount)}${badges.overlay}</span><strong>${esc(group.title)}</strong><span class="collection-count">${count} titres</span>${badges.editions}</button>`;
+}
 function renderCards(items, append=false) {
   const root=$('results');
   const grouped=state.groupBy==='collection';
@@ -1537,7 +1579,7 @@ function renderCards(items, append=false) {
       root.innerHTML=groups.map(group=>group.items.length===1&&!group.manual&&
         (group.itemCount??group.items.length)===1
         ? card(group.items[0])
-        : `<button type="button" class="collection-card" data-open-collection="${esc(group.id)}" aria-label="${esc(group.title)}, ${group.itemCount??group.items.length} titres">${collectionArtwork(group.items,group.artwork,group.itemCount)}<strong>${esc(group.title)}</strong><span>${group.itemCount??group.items.length} titres</span></button>`).join('');
+        : collectionCard(group)).join('');
       attachImageFallbacks(root);
       return;
     }
