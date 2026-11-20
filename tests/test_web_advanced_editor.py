@@ -56,6 +56,24 @@ def test_web_editor_routes_permissions_and_conversion_preserve_work(client, admi
     hdr = client.patch(hdr_path, json={"hdr_formats": ["Dolby Vision"]}, headers=admin)
     assert hdr.status_code == 200, hdr.text
     assert hdr.json()["editions"][0]["metadata"]["hdr_override"] == ["Dolby Vision"]
+    formats_path = media_url + "/editions/" + edition_id + "/formats"
+    assert client.patch(formats_path, json={"video_formats": ["4K"]}, headers=reader).status_code == 403
+    assert client.patch(formats_path, json={"video_formats": ["Bogus"]}, headers=admin).status_code == 422
+    technical = client.patch(formats_path, json={"video_formats": ["4K"], "audio_formats": ["DTS:X"]},
+                             headers=admin)
+    assert technical.status_code == 200, technical.text
+    metadata = technical.json()["editions"][0]["metadata"]
+    assert metadata["video_override"] == ["4K"] and metadata["audio_override"] == ["DTS:X"]
+    assert {"4K", "DTS:X"} <= set(metadata["formats"])
+    # An absent group is unchanged; null restores the detected formats.
+    restored = client.patch(formats_path, json={"audio_formats": None}, headers=admin)
+    assert restored.status_code == 200, restored.text
+    metadata = restored.json()["editions"][0]["metadata"]
+    assert metadata["video_override"] == ["4K"] and "audio_override" not in metadata
+    assert "DTS:X" not in metadata["formats"]
+    unknown = client.patch(media_url + "/editions/unknown/formats", json={"video_formats": None},
+                           headers=admin)
+    assert unknown.status_code == 404
     endpoint = "/api/v1/sources/" + source["id"] + "/convert-to-internal"
     assert client.post(endpoint, json={"remove_source": True}, headers=reader).status_code == 403
     copied = client.post(endpoint, json={"remove_source": False}, headers=admin)
@@ -70,6 +88,7 @@ def test_web_editor_routes_permissions_and_conversion_preserve_work(client, admi
     assert len(detail["editions"]) == 1
     assert detail["editions"][0]["source_type"] == "internal"
     assert detail["editions"][0]["metadata"]["hdr_override"] == ["Dolby Vision"]
+    assert detail["editions"][0]["metadata"]["video_override"] == ["4K"]
     key = detail["editions"][0]["external_key"]
     disc = client.patch("/api/v1/internal/items/" + key,
                         json={"format": "DVD", "barcode": "036000291452"}, headers=admin)

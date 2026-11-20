@@ -12,7 +12,7 @@ force the app to show an update-required screen before reading the catalogue.
 # Public schema/DTO revision, independent of the backwards-compatibility
 # contract negotiated by iOS. Increment on every data-model change; the
 # server's version identifier includes the model revision automatically.
-DATA_MODEL_VERSION = 10
+DATA_MODEL_VERSION = 11
 
 # Contract 2 requires the bounded rich-detail batch endpoint used by iOS.
 # Keep contract 1 available for older installed app versions.
@@ -22,7 +22,9 @@ MIN_MOBILE_CONTRACT = 1
 # Contract 4 adds advanced metadata and per-edition HDR overrides, custom
 # posters, manual catalogue editing and external collection conversion.
 # Contract 5 supports deleting custom poster overrides.
-MAX_MOBILE_CONTRACT = 5
+# Contract 6 adds per-edition video/audio format overrides
+# (PATCH /media/{id}/editions/{edition_id}/formats).
+MAX_MOBILE_CONTRACT = 6
 
 
 def mobile_compatibility() -> dict[str, int]:

@@ -86,6 +86,7 @@ from .models import (
     ConnectionResult,
     CustomTitleInput,
     EditionHDRInput,
+    EditionTechnicalFormatsInput,
     DeviceCollectionSnapshot,
     EpisodeWatchInput,
     EpisodeWatchResult,
@@ -1700,6 +1701,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def update_edition_hdr(media_id: str, edition_id: str, data: EditionHDRInput):
         try:
             await asyncio.to_thread(store.set_edition_hdr, media_id, edition_id, data.hdr_formats)
+        except KeyError as exc:
+            raise HTTPException(404, "Unknown edition.") from exc
+        return media_detail(media_id)
+
+    @app.patch(
+        API + "/media/{media_id}/editions/{edition_id}/formats",
+        response_model=MediaDetail,
+        tags=["Catalogue"],
+        dependencies=[Depends(writable)],
+    )
+    async def update_edition_formats(
+        media_id: str, edition_id: str, data: EditionTechnicalFormatsInput
+    ):
+        try:
+            await asyncio.to_thread(
+                store.set_edition_technical_formats, media_id, edition_id,
+                data.model_dump(exclude_unset=True),
+            )
         except KeyError as exc:
             raise HTTPException(404, "Unknown edition.") from exc
         return media_detail(media_id)

@@ -14,7 +14,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .connectors.base import Record
 from .connectors.collection_xml import COLLECTION_TYPES, DEVICE_COLLECTION_TYPES, SOURCE_TYPES
-from .media_formats import canonical_format, canonical_source_format
+from .media_formats import AUDIO_FORMAT_LABELS, canonical_format, canonical_source_format
 from .people import category as credit_category
 from .people import person_view, youtube_url
 from .utils import fold, now
@@ -1209,14 +1209,65 @@ class Store:
             self._save_editor_payload(conn, work_id, payload)
             self._rebuild(conn, work_id)
 
+    def set_edition_technical_formats(
+        self, work_id: str, edition_id: str, changes: dict[str, list[str] | None]
+    ) -> None:
+        """Override an edition's video and/or audio group.
+
+        Each key is optional: absent leaves the group unchanged, None restores
+        the detected formats and a list replaces the group.
+        """
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM records WHERE id=? AND work_id=?",
+                                (edition_id, work_id)).fetchone():
+                raise KeyError(edition_id)
+            payload = self._editor_payload(conn, work_id)
+            overrides = dict(payload.get("edition_format_overrides") or {})
+            edition = dict(overrides.get(edition_id) or {})
+            for key, field in (("video_formats", "video_override"), ("audio_formats", "audio_override")):
+                if key not in changes:
+                    continue
+                if changes[key] is None:
+                    edition.pop(field, None)
+                else:
+                    edition[field] = list(dict.fromkeys(changes[key]))
+            if edition:
+                overrides[edition_id] = edition
+            else:
+                overrides.pop(edition_id, None)
+            payload["edition_format_overrides"] = overrides
+            self._save_editor_payload(conn, work_id, payload)
+            self._rebuild(conn, work_id)
+
     @staticmethod
-    def _edition_formats(formats: list[str], override: list[str] | None) -> list[str]:
-        if override is None:
+    def _edition_formats(
+        formats: list[str], override: list[str] | None, technical: dict | None = None
+    ) -> list[str]:
+        """Rebuild visible formats from source formats and manual overrides.
+
+        Mirrors EditionTechnicalFormats.formats on iOS.
+        """
+        technical = technical or {}
+        if override is None and not technical:
             return formats
         def is_hdr(value: str) -> bool:
             normalized = re.sub(r"[\s_-]", "", value.casefold())
             return normalized in {"hdr", "hdr10", "hdr10+", "hdr10plus", "dolbyvision", "dv", "dovi", "hlg"}
-        return list(dict.fromkeys([v for v in formats if not is_hdr(v)] + override))
+        def is_video(value: str) -> bool:
+            name = value.strip().casefold()
+            return (name in {"4k", "8k", "uhd", "full hd", "fhd", "hd", "sd", "3d"}
+                    or re.fullmatch(r"[0-9]{3,4}[pi]", name) is not None)
+        def is_audio(value: str) -> bool:
+            return value.strip().casefold() in AUDIO_FORMAT_LABELS
+        result = list(formats)
+        if override is not None:
+            result = [v for v in result if not is_hdr(v)] + override
+        if (video := technical.get("video_override")) is not None:
+            result = [v for v in result if not is_video(v)] + video
+        if (audio := technical.get("audio_override")) is not None:
+            result = [v for v in result if not is_audio(v)] + audio
+        return list(dict.fromkeys(result))
 
     def convert_source_to_internal(self, source_id: str, remove_source: bool = False) -> dict:
         """Copy complete imported disc records onto their existing canonical work IDs."""
@@ -1284,22 +1335,24 @@ class Store:
                         previous["formats"] = value.get("formats", [])
                     conn.execute("UPDATE records SET payload=? WHERE id=?", (encode(previous), existing_id))
                     editor = self._editor_payload(conn, row["work_id"])
-                    hdr = editor.get("edition_hdr_overrides") or {}
-                    if row["id"] in hdr and existing_id not in hdr:
-                        hdr[existing_id] = hdr[row["id"]]
-                        editor["edition_hdr_overrides"] = hdr
-                        self._save_editor_payload(conn, row["work_id"], editor)
+                    for field in ("edition_hdr_overrides", "edition_format_overrides"):
+                        copied_overrides = editor.get(field) or {}
+                        if row["id"] in copied_overrides and existing_id not in copied_overrides:
+                            copied_overrides[existing_id] = copied_overrides[row["id"]]
+                            editor[field] = copied_overrides
+                    self._save_editor_payload(conn, row["work_id"], editor)
                     affected.add(row["work_id"])
                     continue
                 new_id = str(uuid4())
                 conn.execute("INSERT INTO records(id,work_id,source_id,external_key,payload) VALUES(?,?,?,?,?)",
                              (new_id, row["work_id"], "internal", key, encode(value)))
                 editor = self._editor_payload(conn, row["work_id"])
-                hdr = editor.get("edition_hdr_overrides") or {}
-                if row["id"] in hdr:
-                    hdr[new_id] = hdr[row["id"]]
-                    editor["edition_hdr_overrides"] = hdr
-                    self._save_editor_payload(conn, row["work_id"], editor)
+                for field in ("edition_hdr_overrides", "edition_format_overrides"):
+                    copied_overrides = editor.get(field) or {}
+                    if row["id"] in copied_overrides:
+                        copied_overrides[new_id] = copied_overrides[row["id"]]
+                        editor[field] = copied_overrides
+                self._save_editor_payload(conn, row["work_id"], editor)
                 affected.add(row["work_id"])
                 copied += 1
             if remove_source:
@@ -2024,10 +2077,13 @@ class Store:
             return
         editor = Store._editor_payload(conn, work_id)
         hdr_overrides = editor.get("edition_hdr_overrides") or {}
+        format_overrides = editor.get("edition_format_overrides") or {}
         entries = []
         for row in rows:
             record = json.loads(row["payload"])
-            record["formats"] = Store._edition_formats(record.get("formats", []), hdr_overrides.get(row["id"]))
+            record["formats"] = Store._edition_formats(
+                record.get("formats", []), hdr_overrides.get(row["id"]), format_overrides.get(row["id"])
+            )
             entries.append((record, row["type"]))
         entries.sort(
             key=lambda p: (p[1] != "kodi", not p[0].get("metadata", {}).get("is_default", True))
@@ -3361,6 +3417,7 @@ class Store:
         editions = []
         editor = self._editor_payload(conn, work_id)
         hdr_overrides = editor.get("edition_hdr_overrides") or {}
+        format_overrides = editor.get("edition_format_overrides") or {}
         for record in conn.execute(
             "SELECT r.*,s.name,s.type FROM records r JOIN sources s ON s.id=r.source_id WHERE work_id=? ORDER BY s.type DESC,r.external_key",
             (work_id,),
@@ -3376,9 +3433,13 @@ class Store:
                     "identifiers": payload["identifiers"],
                     "metadata": {
                         **payload["metadata"],
-                        "formats": self._edition_formats(payload["formats"], hdr_overrides.get(record["id"])),
+                        "formats": self._edition_formats(
+                            payload["formats"], hdr_overrides.get(record["id"]),
+                            format_overrides.get(record["id"]),
+                        ),
                         "collections": payload["collections"],
                         **({"hdr_override": hdr_overrides[record["id"]]} if record["id"] in hdr_overrides else {}),
+                        **(format_overrides.get(record["id"]) or {}),
                     },
                     **{
                         n: payload.get(n)
@@ -3595,7 +3656,8 @@ class Store:
             # Refreshing credits must not erase an uploaded/repaired poster.
             if previous:
                 old_payload = json.loads(previous["payload"])
-                for field in ("custom_title", "metadata_overrides", "edition_hdr_overrides"):
+                for field in ("custom_title", "metadata_overrides", "edition_hdr_overrides",
+                              "edition_format_overrides"):
                     if field in old_payload:
                         payload = {**payload, field: old_payload[field]}
                 # A lookup without a TMDB vote keeps the last known rating.

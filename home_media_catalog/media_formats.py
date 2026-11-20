@@ -160,6 +160,15 @@ DISC_TECHNICAL_GROUPS = (
     frozenset({"HDR10", "HDR10+", "Dolby Vision", "HLG", "HDR", "SDR"}),
     frozenset({"Dolby Atmos", "DTS:X", "Dolby TrueHD", "DTS-HD MA", "DTS-HD", "DTS-HD HR", "Dolby Digital+", "Dolby Digital", "DTS", "LPCM", "PCM", "Auro-3D", "AAC", "FLAC", "TrueHD", "AC3", "EAC3"}),
 )
+# Audio labels replaced by a manual per-edition audio override. Includes the
+# iOS selectable choices and the imported aliases recognised by Kodi/discs.
+AUDIO_FORMAT_LABELS = frozenset(
+    label.casefold() for label in DISC_TECHNICAL_GROUPS[2] | {
+        "Dolby Atmos", "DTS:X", "Auro-3D", "Dolby TrueHD", "DTS-HD MA", "DTS-HD HR", "DTS-HD",
+        "Dolby Digital+", "Dolby Digital", "DTS", "LPCM", "PCM", "FLAC", "AAC", "MP3", "Opus",
+        "Dolby Digital Plus", "DTS-HD Master Audio", "E-AC-3", "AC-3", "DD+", "DD",
+    }
+)
 DISC_LABELS = frozenset({"DVD", "Blu-ray", "Blu-ray 3D", "4K Ultra HD Blu-ray", "Blu-ray 4K", "4K UHD", "UHD Blu-ray", "Ultra HD Blu-ray", "4K Blu-ray"})
 
 

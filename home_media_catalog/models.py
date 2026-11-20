@@ -110,6 +110,18 @@ class EditionHDRInput(StrictModel):
     )
 
 
+class EditionTechnicalFormatsInput(StrictModel):
+    """Per-edition video/audio overrides. Absent leaves a group unchanged,
+    null restores the detected formats, a list replaces the group."""
+    video_formats: list[Literal[
+        "8K", "4K", "1080p", "1080i", "720p", "576p", "576i", "480p", "480i", "3D"
+    ]] | None = Field(default=None, max_length=10)
+    audio_formats: list[Literal[
+        "Dolby Atmos", "DTS:X", "Auro-3D", "Dolby TrueHD", "DTS-HD MA", "DTS-HD HR", "DTS-HD",
+        "Dolby Digital+", "Dolby Digital", "DTS", "LPCM", "PCM", "FLAC", "AAC", "MP3", "Opus"
+    ]] | None = Field(default=None, max_length=16)
+
+
 class SourceConversionInput(StrictModel):
     remove_source: bool = False
 
