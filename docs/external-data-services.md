@@ -19,7 +19,7 @@ availability, contractual authorization or current free-tier quotas is implied.
 | Service / reference | iOS | Server/web | What HMC uses it for | API / documentation |
 | --- | --- | --- | --- | --- |
 | **TMDB (The Movie Database)** | **Active** (on-device API token for standalone discovery) | **Active** (configured `TMDB_API_TOKEN`) | Movie/series IDs, posters, episodes, regional SVOD provider availability and search; **does not return a reliable Netflix/Disney+/Prime Video content ID or direct provider playback URL** | [TMDB API](https://developer.themoviedb.org/docs/getting-started), [watch providers](https://developer.themoviedb.org/reference/tv-series-watch-providers) |
-| **Wikidata external provider identifiers** | **Active**: device queries an exact TMDB movie/series ID via SPARQL (`P4947` / `P4983`) and resolves supported Netflix (`P1874`), Prime Video (`P14462` GTI, `P14440`/`P8055`), Disney+ (`P13902`/`P7596`/`P7595`) and Apple TV (`P9751`/`P9586`) links | **Not used** for this streaming resolution | Automatic iOS-first provider-link discovery; unambiguous provider IDs are mapped to validated official URLs and locally cached, then synced when authorized. Availability and universal-link app handoff remain provider-dependent | [Wikidata Query Service](https://query.wikidata.org/), [property P14440](https://www.wikidata.org/wiki/Property:P14440) |
+| **Wikidata external provider identifiers** | **Active**: device queries an exact TMDB movie/series ID via SPARQL (`P4947` / `P4983`) and resolves supported Netflix (`P1874`), Prime Video (`P14462` GTI, `P14440`), Disney+ (`P13902`/`P7596`/`P7595`) and Apple TV (`P9751`/`P9586`) links | **Not used** for this streaming resolution | Automatic iOS-first provider-link discovery; unambiguous provider IDs are mapped to validated official URLs and locally cached, then synced when authorized. Availability and universal-link app handoff remain provider-dependent | [Wikidata Query Service](https://query.wikidata.org/), [property P14440](https://www.wikidata.org/wiki/Property:P14440) |
 | **Streaming Availability API (Movie of the Night)** | **Optional** when a personal API key is configured in iOS **Customize Streaming**; exact TMDB ID, FR streaming options, title/season/episode links | **Not called** by the server | Provides actual per-service destinations for Netflix, Prime Video, Disney+, Apple TV, Max and Paramount+ when listed; only subscription (not rental/addon) destinations are considered; key remains in iOS Keychain | [API docs](https://docs.movieofthenight.com/), [authentication](https://docs.movieofthenight.com/guide/authentication), [show lookup](https://docs.movieofthenight.com/resource/shows) |
 | **Official Netflix Top 10 (Tudum)** | Not an iOS ID resolver | **Active**, used for the Netflix-specific ranking when available | Country-specific historical weekly rankings, **not** viewing history, provider IDs or deep links | [Netflix Tudum Top 10](https://www.netflix.com/tudum/top10), [country TSV used by HMC](https://www.netflix.com/tudum/top10/data/all-weeks-countries.tsv) |
 | **Official streaming-service URLs** (Netflix, Disney+, Prime Video, Apple TV, Max, Paramount+) | **Active** for automatically resolved links, previously synchronized links and fallback title search | **Active** for validating/importing official links via API | Open a known verified title/episode URL or fall back to a provider-scoped title search. Automatic Wikidata resolution only covers supported provider identifiers; not a universal deep-link API | [Netflix](https://www.netflix.com/), [Disney+](https://www.disneyplus.com/), [Prime Video](https://www.primevideo.com/), [Apple TV](https://tv.apple.com/), [Max](https://www.max.com/), [Paramount+](https://www.paramountplus.com/) |
@@ -41,17 +41,33 @@ availability, contractual authorization or current free-tier quotas is implied.
   When no trustworthy direct URL is available, HMC opens the provider's title
   search. Brief negative caching avoids repeated failing network requests.
 - **Generic resolution:** no hardcoded TMDB-to-provider exception for
-  *The Rings of Power* or any other individual work. Prime Video GTI and Prime
-  Video ID links use Wikidata's official `/detail/` formatter; legacy Amazon
-  Video ASIN records may open the Amazon France detail page, which is not
-  guaranteed to launch Prime Video. The optional streaming API can supply a
-  more appropriate Prime Video destination for the French catalogue.
+  *The Rings of Power* or any other individual work. A Wikidata `P14462`
+  Global Title Identifier becomes an official
+  `app.primevideo.com/detail?gti=…&territory=FR` share link; a `P14440`
+  Prime catalogue ID becomes a `primevideo.com/detail/…` URL. **P8055
+  Amazon.com ASINs are deliberately excluded**: an American ASIN does not
+  identify the French edition, and replacing `amazon.com` with
+  `amazon.fr` produced missing-title errors. Both iOS and the server now
+  reject `amazon.fr/gp/video/detail/…` and `amazon.com/gp/video/detail/…`
+  as Prime Video direct links. Legacy invalid links in the iOS state are
+  tombstoned and synchronized so the NAS does not restore them; if no other
+  provider ID is available, use Prime Video title search, not a broken URL.
 - **Bidirectional sync:** `GET /api/v1/streaming/state` and
   `POST /api/v1/streaming/state/sync` merge these records by timestamp via
   `streaming_state`. A server administrator can also submit a verified URL
   using `POST /api/v1/streaming/links/import`; the next iOS state sync can
   import that mapping. A title's streaming-provider membership and its
   provider-specific URL are **different pieces of data**.
+- **Server compatibility:** the iOS state sync expects each JSON row to
+  contain `key`, `payload`, `modified_at` and `deleted`. The `main`
+  server's `GET /api/v1/streaming/state` and
+  `POST /api/v1/streaming/state/sync` both return these keys. An iOS error
+  such as `rows.Index 0.modified_at` means the **running NAS response** is
+  missing that field (or has an incompatible format). Check the actual
+  deployed image and [update the server](installation.md#updating-an-existing-installation)
+  using `sh ./rebuild.sh` from its repository directory before treating this
+  as an iOS storage failure. iOS retains pending local state for retry
+  rather than inventing timestamps that could overwrite newer edits.
 - **Episodes:** when the optional API supplies a uniquely matched episode
   (explicit episode number, or exact localized title within a matching
   season), HMC prefers its official `videoLink` when valid, then its `link`.
