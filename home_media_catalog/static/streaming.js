@@ -400,8 +400,15 @@ async function save(title){
       },body:JSON.stringify({changes:[{key,payload,modified_at:nextTime,deleted:false}]})
     });
     state.rows=result.rows;
+    // Retain the full discovery page if a heart is saved from its subview:
+    // re-rendering the home shelves alone would discard loaded pagination.
+    const currentSubview=state.subview;
+    const previousShelf=currentSubview&&state.shelves.get(currentSubview.id);
     renderBrowser();
-    if(state.subview)showSubview(state.subview.id);
+    if(currentSubview&&previousShelf) {
+      state.shelves.set(currentSubview.id,previousShelf);
+      showSubview(currentSubview.id);
+    }
     if(state.selected===keyFor(title))details(state.selected);
   }catch(e){failure(e.message);}
 }
