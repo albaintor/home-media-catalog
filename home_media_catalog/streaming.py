@@ -159,6 +159,86 @@ def _merge(store: Any, incoming: list[StreamingStateRow]) -> list[dict[str, Any]
             for row in rows]
 
 
+def _title_metadata(raw: dict[str, Any], kind: str) -> dict[str, Any]:
+    """Project TMDB film/TV details to a bounded, shared web/native contract.
+
+    These are public reference metadata, not watched state or service ownership.
+    Missing translations are left empty rather than fabricated.
+    """
+    date = raw.get("first_air_date" if kind == "tv" else "release_date") or ""
+    credits = raw.get("credits") or {}
+    if not isinstance(credits, dict):
+        credits = {}
+
+    def people(entries: Any, role_key: str, limit: int) -> list[dict[str, Any]]:
+        if not isinstance(entries, list):
+            return []
+        result = []
+        for person in entries:
+            if not isinstance(person, dict):
+                continue
+            identifier, name = person.get("id"), person.get("name")
+            if not isinstance(identifier, int) or not isinstance(name, str):
+                continue
+            profile = person.get("profile_path")
+            result.append({
+                "id": identifier, "name": name[:160],
+                "role": str(person.get(role_key) or "")[:160],
+                "profile_path": profile if isinstance(profile, str)
+                and re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", profile) else None,
+            })
+            if len(result) >= limit:
+                break
+        return result
+
+    cast = people(credits.get("cast"), "character", 30)
+    crew = people(credits.get("crew"), "job", 80)
+    # A useful concise list: directors and principal creative roles first.
+    priority = {"Director": 0, "Creator": 1, "Writer": 2, "Screenplay": 3,
+                "Executive Producer": 4, "Producer": 5}
+    crew.sort(key=lambda row: priority.get(row["role"], 20))
+    genres = [
+        row["name"][:100] for row in (raw.get("genres") or [])[:30]
+        if isinstance(row, dict) and isinstance(row.get("name"), str)
+    ]
+    seasons = [
+        {
+            "number": season["season_number"],
+            "title": str(season.get("name") or "")[:200],
+            "episode_count": int(season.get("episode_count") or 0),
+            "air_date": str(season.get("air_date") or "")[:30],
+            "poster_path": season.get("poster_path"),
+        }
+        for season in (raw.get("seasons") or [])[:60]
+        if isinstance(season, dict) and isinstance(season.get("season_number"), int)
+        and isinstance(season.get("episode_count"), int)
+        and 0 <= season["season_number"] <= 10000
+    ]
+    runtimes = raw.get("episode_run_time" if kind == "tv" else "runtime")
+    if isinstance(runtimes, list):
+        runtimes = next((v for v in runtimes if isinstance(v, int) and v > 0), None)
+    if not isinstance(runtimes, int) or not 0 < runtimes <= 10000:
+        runtimes = None
+    return {
+        "id": raw.get("id"),
+        "kind": kind,
+        "title": raw.get("name" if kind == "tv" else "title") or "",
+        "original_title": raw.get("original_name" if kind == "tv"
+                                  else "original_title") or "",
+        "overview": raw.get("overview") or "",
+        "year": int(date[:4]) if re.match(r"^\d{4}", date) else None,
+        "poster_path": raw.get("poster_path"),
+        "backdrop_path": raw.get("backdrop_path"),
+        "rating": raw.get("vote_average") or 0,
+        "genres": genres,
+        "cast": cast,
+        "crew": crew[:16],
+        "seasons": seasons,
+        "runtime_minutes": runtimes,
+        "status": raw.get("status") or "",
+    }
+
+
 def _streaming_edition_uuid(key: str) -> str:
     """Use the same deterministic edition UUID as iOS' editionUUID(identity)."""
     digest = bytearray(hashlib.sha256(("hmc-streaming:" + key).encode()).digest()[:16])
@@ -410,6 +490,35 @@ async def _search(token: str, selection: str, phrase: str, kind: str,
 
 def build_streaming_router(store: Any, settings: Any) -> APIRouter:
     router = APIRouter(prefix="/api/v1/streaming", tags=["Streaming"])
+
+    @router.get("/titles/{kind}/{tmdb_id}/details",
+                dependencies=[Depends(authenticated)])
+    async def title_details(
+        kind: str, tmdb_id: int,
+        language: str = Query("fr-FR", pattern=r"^[a-z]{2}-[A-Z]{2}$"),
+    ):
+        """Fetch a full streaming title record, including credits and seasons.
+
+        Uses the same TMDB identity as the iOS heart journal. Credentials stay
+        on the NAS; the browser never contacts TMDB's authenticated API.
+        """
+        if kind not in {"movie", "tv"} or tmdb_id < 1 or tmdb_id > 999999999:
+            raise HTTPException(422, "Invalid TMDB title identity")
+        cache_key = f"tmdb-title-details:{language}:{kind}:{tmdb_id}"
+        cached = _CACHE.get(cache_key)
+        if cached is not None and time.monotonic() - cached[0] < 6 * 3600:
+            return cached[1]
+        raw = await _tmdb(
+            settings.tmdb_api_token.strip(), f"/{kind}/{tmdb_id}",
+            {"language": language, "append_to_response": "credits"},
+        )
+        result = _title_metadata(raw, kind)
+        if len(_CACHE) >= 160:
+            # Bound global, per-installation metadata cache.
+            oldest = next(iter(_CACHE))
+            _CACHE.pop(oldest, None)
+        _CACHE[cache_key] = (time.monotonic(), result)
+        return result
 
     @router.get("/providers", dependencies=[Depends(authenticated)])
     async def providers(region: str = Query("FR", pattern=r"^[A-Z]{2}$")):

@@ -347,3 +347,34 @@ def test_tombstoned_heart_does_not_recreate_deleted_streaming_edition(tmp_path):
     )
     assert _reconcile_streaming_catalogue(store, _merge(store, [deleted])) == 0
     assert store.media()["total"] == 0
+
+
+
+def test_title_metadata_includes_summary_genres_cast_and_tv_seasons():
+    from home_media_catalog.streaming import _title_metadata
+
+    raw = {
+        "id": 777, "name": "Sample TV", "original_name": "Original TV",
+        "overview": "Detailed synopsis.", "first_air_date": "2025-05-18",
+        "vote_average": 8.1, "poster_path": "/cover.jpg",
+        "genres": [{"id": 18, "name": "Drama"}],
+        "credits": {
+            "cast": [{"id": 12, "name": "Actor", "character": "Hero",
+                      "profile_path": "/actor.jpg"}],
+            "crew": [{"id": 20, "name": "Director Name", "job": "Director",
+                      "profile_path": "/director.jpg"}],
+        },
+        "seasons": [{"season_number": 1, "name": "Season 1",
+                     "episode_count": 8, "poster_path": "/season.jpg"}],
+    }
+    result = _title_metadata(raw, "tv")
+    assert result["title"] == "Sample TV"
+    assert result["overview"] == "Detailed synopsis."
+    assert result["genres"] == ["Drama"]
+    assert result["cast"][0]["role"] == "Hero"
+    assert result["cast"][0]["profile_path"] == "/actor.jpg"
+    assert result["crew"][0]["role"] == "Director"
+    assert result["seasons"][0]["episode_count"] == 8
+    assert result["year"] == 2025
+    assert _title_metadata({"id": 8, "title": "Film", "runtime": 95}, "movie")[
+        "runtime_minutes"] == 95
