@@ -366,19 +366,30 @@ async def _tmdb(token: str, path: str, params: dict[str, Any]) -> dict[str, Any]
 
 
 async def _discover(token: str, service: str, kind: str, genre: int | None,
-                    page: int, region: str, sort: str) -> dict[str, Any]:
+                    page: int, region: str, sort: str,
+                    order: str = "desc") -> dict[str, Any]:
+    # TMDB sorts the entire matching catalogue *before* pagination. Sorting
+    # only the 20 titles returned by each page produces misleading results.
+    field = {
+        "popularity": "popularity",
+        "rating": "vote_average",
+        "title": "name" if kind == "tv" else "title",
+        "original_title": "original_name" if kind == "tv" else "original_title",
+        "year": "first_air_date" if kind == "tv" else "primary_release_date",
+        "recent": "first_air_date" if kind == "tv" else "primary_release_date",
+    }[sort]
+    direction = "desc" if sort == "recent" else order
     params: dict[str, Any] = {
         "watch_region": region, "with_watch_providers": _provider_ids(service),
         "with_watch_monetization_types": "flatrate",
         "language": "fr-FR" if region == "FR" else "en-US",
-        "sort_by": "vote_average.desc" if sort == "rating" else "popularity.desc",
+        "sort_by": f"{field}.{direction}",
         "page": page,
     }
     if sort == "rating":
         params["vote_count.gte"] = 100
-    elif sort == "recent":
+    elif sort in {"recent", "year"}:
         # Recently released titles currently available, NOT newly added to the service.
-        params["sort_by"] = "first_air_date.desc" if kind == "tv" else "primary_release_date.desc"
         params["first_air_date.lte" if kind == "tv" else "primary_release_date.lte"] = datetime.now(UTC).date().isoformat()
     if genre is not None:
         params["with_genres"] = genre
@@ -388,8 +399,7 @@ async def _discover(token: str, service: str, kind: str, genre: int | None,
         "page": result.get("page", page),
         "total_pages": min(result.get("total_pages", 1), 500),
         "source": "tmdb",
-        "ranking_type": "tmdb_recent" if sort == "recent" else (
-            "tmdb_rating" if sort == "rating" else "tmdb_popularity"),
+        "ranking_type": "tmdb_" + sort,
     }
 
 
@@ -647,10 +657,11 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         service: str, kind: str = Query("movie", pattern=r"^(movie|tv)$"),
         genre: int | None = Query(None, ge=1), page: int = Query(1, ge=1, le=500),
         region: str = Query("FR", pattern=r"^[A-Z]{2}$"),
-        sort: str = Query("popularity", pattern=r"^(popularity|rating|recent)$"),
+        sort: str = Query("popularity", pattern=r"^(popularity|rating|recent|title|original_title|year)$"),
+        order: str = Query("desc", pattern=r"^(asc|desc)$"),
     ):
         return await _discover(settings.tmdb_api_token.strip(), service, kind, genre, page,
-                               region, sort)
+                               region, sort, order)
 
     @router.get("/search", dependencies=[Depends(authenticated)])
     async def search(
