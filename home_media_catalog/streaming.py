@@ -133,6 +133,10 @@ async def _discover(token: str, service: str, kind: str, genre: int | None,
     }
     if sort == "rating":
         params["vote_count.gte"] = 100
+    elif sort == "recent":
+        # Recently released titles currently available, NOT newly added to the service.
+        params["sort_by"] = "first_air_date.desc" if kind == "tv" else "primary_release_date.desc"
+        params["first_air_date.lte" if kind == "tv" else "primary_release_date.lte"] = datetime.now(UTC).date().isoformat()
     if genre is not None:
         params["with_genres"] = genre
     result = await _tmdb(token, "/discover/" + ("tv" if kind == "tv" else "movie"), params)
@@ -141,7 +145,8 @@ async def _discover(token: str, service: str, kind: str, genre: int | None,
         "page": result.get("page", page),
         "total_pages": min(result.get("total_pages", 1), 500),
         "source": "tmdb",
-        "ranking_type": "tmdb_popularity" if sort != "rating" else "tmdb_rating",
+        "ranking_type": "tmdb_recent" if sort == "recent" else (
+            "tmdb_rating" if sort == "rating" else "tmdb_popularity"),
     }
 
 
@@ -163,7 +168,7 @@ def _item(row: dict[str, Any], kind: str) -> dict[str, Any]:
 async def _official_netflix(token: str, region: str, kind: str) -> list[dict[str, Any]]:
     # Netflix publishes historical weekly ranks by country as TSV, not an API.
     # Download at most once per installation and 12h; never treat it as daily.
-    cache_key = "netflix-countries"
+    cache_key = "netflix-countries-" + region
     cached = _CACHE.get(cache_key)
     if cached is not None and time.monotonic() - cached[0] < 12 * 3600:
         rows = cached[1]
@@ -247,7 +252,7 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         service: str, kind: str = Query("movie", pattern=r"^(movie|tv)$"),
         genre: int | None = Query(None, ge=1), page: int = Query(1, ge=1, le=500),
         region: str = Query("FR", pattern=r"^[A-Z]{2}$"),
-        sort: str = Query("popularity", pattern=r"^(popularity|rating)$"),
+        sort: str = Query("popularity", pattern=r"^(popularity|rating|recent)$"),
     ):
         return await _discover(settings.tmdb_api_token.strip(), service, kind, genre, page,
                                region, sort)
