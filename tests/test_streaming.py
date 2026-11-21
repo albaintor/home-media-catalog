@@ -269,3 +269,36 @@ def test_streaming_provider_link_sync_reconciliation(tmp_path):
     assert refreshed[0]["payload"]["url"].endswith("87654321")
     unchanged = _merge(store, [link(base, "https://www.netflix.com/title/81234567")])
     assert unchanged == refreshed
+
+
+def test_streaming_sync_rows_have_required_mobile_wire_fields(tmp_path):
+    """iOS Decodable expects modified_at, not modifiedAt or a missing timestamp."""
+    store = Store(tmp_path / "streaming-contract.sqlite")
+    store.initialize()
+    row = StreamingStateRow(
+        key="prefs:subscriptions",
+        payload={"value": "prime_video"},
+        modified_at=datetime(2026, 11, 21, tzinfo=UTC).isoformat(),
+    )
+    response_rows = _merge(store, [row])
+    assert len(response_rows) == 1
+    assert set(response_rows[0]) == {"key", "payload", "modified_at", "deleted"}
+    assert isinstance(response_rows[0]["modified_at"], str)
+    assert response_rows[0]["modified_at"].endswith("+00:00")
+    # GET /state and POST /state/sync both use _merge, keeping one wire
+    # contract; no speculative timestamp should be fabricated by the iOS app.
+    assert _merge(store, [])[0] == response_rows[0]
+
+
+def test_prime_only_accepts_primevideo_host_not_american_retail_asin():
+    from home_media_catalog.streaming import _official_link
+    url, provider_id = _official_link(
+        "https://www.primevideo.com/detail/0TUVXIO58IUNEPNBF8363Z7YGL",
+        "prime_video",
+    )
+    assert provider_id == "0TUVXIO58IUNEPNBF8363Z7YGL"
+    assert url.startswith("https://www.primevideo.com/detail/")
+    with pytest.raises(HTTPException):
+        _official_link("https://www.amazon.fr/gp/video/detail/B09QH98YG1", "prime_video")
+    with pytest.raises(HTTPException):
+        _official_link("https://www.amazon.com/gp/video/detail/B09QH98YG1", "prime_video")
