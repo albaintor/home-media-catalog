@@ -36,6 +36,35 @@ depends on the checked-out branch, server compatibility, network source and devi
   release checks](../THIRD_PARTY_NOTICES.md). An experimental dynamic-FFmpeg
   dependency does not make every transitive library App Store compliant.
 
+## Native Streaming and Kodi Remote navigation (iOS `streaming` branch)
+
+The **Streaming** system tab now has two segments at the top:
+**Streaming** and **Kodi Remote** (translated as *Télécommande Kodi* where
+the system language is French). The old standalone Kodi Remote tab has been
+removed. Playback and catalogue shortcuts which previously presented the
+remote navigate to the **Kodi Remote** segment. The last selected section
+is saved locally; upgrading from an older saved `remote` system tab also
+selects this segment. The remote's existing controls and split/compact
+layout are unchanged.
+
+Streaming discovery shelves use stable-height poster cells and an eagerly
+retained outer shelf layout to prevent later sections from appearing far down
+the vertical scroll and disappearing when scrolling back up. Each poster
+shows **Add to catalog (heart)** at the upper left, a **TMDB score** at the
+upper right when one exists, and **verified provider logos** at the bottom
+left. When a title has multiple providers, their logos appear together
+(with a count if more than four fit). The catalogue's regular grid and list
+posters use the same badge component, based on explicit
+`streaming_services` metadata or the saved streaming association—not
+simply the user's configured subscriptions. Missing provider membership
+may be checked against the actual **French** TMDB/connected-server
+availability before a Streaming card displays logos.
+
+These are iOS presentation features and do not alter server streaming
+subscription availability or grant playback rights. [External data
+services](external-data-services.md) documents the sources and their
+limitations.
+
 ## Built-in catalogue, barcode identification and collection grouping
 
 The **internal catalogue** is available alongside Kodi, CLZ Movies, My Movies and Filmotech. A movie, TV series or physical DVD/Blu-ray edition can be added without a playable file, an XML export or a Kodi instance. It is usable through the web server and in the native iPhone/iPad app, including iOS standalone mode.
