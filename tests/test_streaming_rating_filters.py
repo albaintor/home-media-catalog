@@ -38,3 +38,30 @@ def test_unrated_are_excluded_and_bounds_are_validated(tmp_path):
     assert store.media(user_rating_lt=10)["total"] == 0
     with raises(ValueError):
         store.media(rating_gt=11)
+
+
+
+def test_streaming_catalogue_metrics_use_canonical_tmdb_and_personal_state(tmp_path):
+    from types import SimpleNamespace
+
+    from home_media_catalog.streaming import build_streaming_router
+
+    store = Store(tmp_path / "metrics.sqlite")
+    store.initialize()
+    media_id = store.save_internal_media(InternalMediaInput(
+        id="dbba2222-1234-4234-9234-220022002204",
+        kind="tvshow", title="Watchable Series", tmdb_id="17774",
+        rating=7.7, format="",
+    ).model_dump())["id"]
+    store.update_personal(media_id, {"watched": True, "user_rating": 9.5})
+
+    router = build_streaming_router(store, SimpleNamespace(tmdb_api_token=""))
+    endpoint = next(
+        route.endpoint for route in router.routes
+        if route.path == "/api/v1/streaming/catalogue-metrics"
+    )
+    result = endpoint()
+    assert result["items"] == [{
+        "kind": "tv", "tmdb_id": 17774,
+        "watch_status": "watched", "rating": 7.7, "user_rating": 9.5,
+    }]
