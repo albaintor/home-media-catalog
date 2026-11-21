@@ -5,12 +5,14 @@ on:
       - 'home_media_catalog/streaming.py'
       - 'home_media_catalog/app.py'
       - 'tests/test_streaming.py'
+      - 'tests/test_streaming_rating_filters.py'
       - '.github/workflows/streaming.yml'
   pull_request:
     paths:
       - 'home_media_catalog/streaming.py'
       - 'home_media_catalog/app.py'
       - 'tests/test_streaming.py'
+      - 'tests/test_streaming_rating_filters.py'
       - '.github/workflows/streaming.yml'
   workflow_dispatch:
 
@@ -25,6 +27,6 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e '.[dev]'
       - name: Test streaming state and provider adapters
-        run: pytest -q tests/test_streaming.py
+        run: pytest -q tests/test_streaming.py tests/test_streaming_rating_filters.py
       - name: Check streaming module lint
-        run: ruff check home_media_catalog/streaming.py tests/test_streaming.py
+        run: ruff check home_media_catalog/streaming.py tests/test_streaming.py tests/test_streaming_rating_filters.py
