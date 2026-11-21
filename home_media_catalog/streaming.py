@@ -606,6 +606,51 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         _CACHE[cache_key] = (time.monotonic(), result)
         return result
 
+    @router.get("/titles/tv/{tmdb_id}/seasons/{season_number}/episodes",
+                dependencies=[Depends(authenticated)])
+    async def streaming_season_episodes(
+        tmdb_id: int, season_number: int,
+        language: str = Query("fr-FR", pattern=r"^[a-z]{2}-[A-Z]{2}$"),
+    ):
+        """Read one TMDB season without writing to the internal catalogue.
+
+        Streaming discovery must be able to browse episodes without the heart.
+        Only a particular selected season is fetched, rather than importing the
+        entire series into the media catalog just to display its contents.
+        """
+        if not 1 <= tmdb_id <= 999999999 or not 0 <= season_number <= 10000:
+            raise HTTPException(422, "Invalid TMDB season identity")
+        cache_key = f"tmdb-streaming-season:{language}:{tmdb_id}:{season_number}"
+        cached = _CACHE.get(cache_key)
+        if cached is not None and time.monotonic() - cached[0] < 6 * 3600:
+            return cached[1]
+        raw = await _tmdb(
+            settings.tmdb_api_token.strip(),
+            f"/tv/{tmdb_id}/season/{season_number}",
+            {"language": language},
+        )
+        items = []
+        for episode in raw.get("episodes", [])[:150]:
+            if not isinstance(episode, dict):
+                continue
+            number = episode.get("episode_number")
+            if not isinstance(number, int) or isinstance(number, bool) or not 1 <= number <= 10000:
+                continue
+            items.append({
+                "season": season_number,
+                "episode": number,
+                "tmdb_id": episode.get("id"),
+                "title": str(episode.get("name") or f"Episode {number}")[:300],
+                "overview": str(episode.get("overview") or "")[:5000],
+                "air_date": str(episode.get("air_date") or "")[:30],
+                "still_path": episode.get("still_path"),
+            })
+        result = {"episodes": items}
+        if len(_CACHE) >= 160:
+            _CACHE.pop(next(iter(_CACHE)), None)
+        _CACHE[cache_key] = (time.monotonic(), result)
+        return result
+
     @router.get("/people/{person_id}", dependencies=[Depends(authenticated)])
     async def person_filmography(
         person_id: int,
