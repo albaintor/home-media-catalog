@@ -562,8 +562,9 @@ const formatLogos = {'4K':['4k','video'],'Blu-ray 4K':['bluray4k','disc'],'8K':[
 // New native PDF vector badges use the equivalent SVG symbols below because
 // browser <img> does not reliably render PDFs.
 const formatImages = {
-  '4K':'format-4k','3D':'format-3d','Blu-ray 3D':'format-3d',
-  'Blu-ray':'format-blu-ray','Dolby Vision':'format-dolby-vision',
+  '4K':'format-4k','3D':'format-3d','Blu-ray 3D':'format-blu-ray-3d',
+  'Blu-ray':'format-blu-ray','Blu-ray 4K':'format-blu-ray-4k',
+  'DVD':'format-dvd','Dolby Vision':'format-dolby-vision',
   'HDR10':'format-hdr10','HDR10+':'format-hdr10-plus','HLG':'format-hlg',
   'Dolby Atmos':'format-dolby-atmos','Dolby TrueHD':'format-dolby-truehd',
   'Dolby Digital':'format-dolby-digital','Dolby Digital+':'format-dolby-digital-plus',
