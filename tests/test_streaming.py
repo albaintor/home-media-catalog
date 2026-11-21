@@ -17,6 +17,8 @@ from home_media_catalog.streaming import (
     _merge,
     _provider_ids,
     _provider_keys,
+    _streaming_trailers,
+    _title_metadata,
 )
 
 
@@ -88,6 +90,30 @@ def test_tmdb_media_mapping():
     assert value["year"] == 2026
     assert value["rating"] == 7.5
     assert value["poster_path"] == "/sample.jpg"
+
+
+
+def test_streaming_tmdb_details_expose_only_valid_youtube_trailers():
+    raw = {
+        "id": 42, "title": "Demo", "release_date": "2026-11-21",
+        "videos": {"results": [
+            {"site": "Vimeo", "type": "Trailer", "key": "EXAMPLE1234"},
+            {"site": "YouTube", "type": "Clip", "key": "EXAMPLE1234"},
+            {"site": "YouTube", "type": "Trailer", "key": "../../invalid"},
+            {"site": "YouTube", "type": "Trailer", "key": "EXAMPLE1234",
+             "name": "Version française", "official": True, "iso_639_1": "fr"},
+            {"site": "YouTube", "type": "Trailer", "key": "EXAMPLE1234"},
+            {"site": "YouTube", "type": "Teaser", "key": "ANOTHER1234",
+             "name": "Teaser", "official": False, "iso_639_1": "en"},
+        ]},
+    }
+    trailers = _streaming_trailers(raw)
+    assert [trailer["key"] for trailer in trailers] == [
+        "EXAMPLE1234", "ANOTHER1234",
+    ]
+    assert trailers[0]["official"] is True
+    assert _title_metadata(raw, "movie")["trailers"] == trailers
+    assert _title_metadata({"id": 42, "title": "No video"}, "movie")["trailers"] == []
 
 
 def test_multi_provider_selection_is_validated_and_deduplicated():
