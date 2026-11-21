@@ -179,8 +179,8 @@ def test_streaming_series_poster_and_backdrop_survive_catalogue_rebuild(tmp_path
     assert store.artwork(item_id, "fanart")
 
 
-def test_streaming_artwork_requires_contract_eight():
-    assert MAX_MOBILE_CONTRACT == 8
+def test_streaming_episodic_tracking_requires_contract_nine():
+    assert MAX_MOBILE_CONTRACT == 9
 
 
 def test_streaming_reference_episodes_have_watch_tracking_without_files(tmp_path):
