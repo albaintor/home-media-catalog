@@ -1,8 +1,8 @@
 """Transactional local catalogue. SQLite never shares Kodi's schema or writes to MariaDB."""
 
 import hashlib
-import math
 import json
+import math
 import re
 import sqlite3
 from collections import defaultdict
