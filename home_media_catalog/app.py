@@ -151,6 +151,7 @@ from .players import play
 from .players import probe as probe_player
 from .settings import Settings
 from .store import Store
+from .streaming import build_streaming_router
 from .sync import BusyError, SyncManager
 from .writeback import propagate_personal
 
@@ -271,6 +272,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         },
     )
     app.state.store, app.state.auth, app.state.sync = store, auth, sync
+    app.include_router(build_streaming_router(store, settings))
     app.state.playback_oauth = cloud_auth
     app.state.playback_nfs_mounts = settings.playback_nfs_mounts
     app.state.artwork = Artwork(settings)
