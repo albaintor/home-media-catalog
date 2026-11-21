@@ -24,7 +24,7 @@ def test_streaming_web_has_both_saved_horizontal_shelves_and_full_subviews():
     assert "row.deleted" in js
     assert "'My Movies'" in js and "'My Series'" in js
     assert "function renderSaved()" in js
-    assert "if(!titles.length)return ''" in js
+    assert "if(!visible.length)return ''" in js
     assert "streaming-shelf-track" in js and "overflow-x:auto" in css
     assert 'id="streaming-subview"' in html
     assert "See more titles" in js
