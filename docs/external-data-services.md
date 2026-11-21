@@ -31,8 +31,13 @@ availability, contractual authorization or current free-tier quotas is implied.
   Availability API v4** using the exact TMDB identifier and country `fr`,
   then queries **Wikidata** for exact provider IDs. Only validated official
   HTTPS destinations are cached in `StreamingLibrary` and synchronized to
-  the NAS when connected with write access. The API key is optional, stored
-  only in the iOS Keychain; no manual per-title link association is required.
+  the NAS when connected with write access. In **standalone iOS mode**,
+  links persist in SQLite across app launches. When paired to a server,
+  local link persistence follows **Synchronize and store the entire catalog
+  locally**; with that option disabled, resolved links remain available in
+  memory until the server sync but do not form a full persistent local
+  provider-link snapshot. The API key is optional, stored only in the iOS
+  Keychain; no manual per-title link association is required.
   When no trustworthy direct URL is available, HMC opens the provider's title
   search. Brief negative caching avoids repeated failing network requests.
 - **Generic resolution:** no hardcoded TMDB-to-provider exception for
@@ -47,6 +52,12 @@ availability, contractual authorization or current free-tier quotas is implied.
   using `POST /api/v1/streaming/links/import`; the next iOS state sync can
   import that mapping. A title's streaming-provider membership and its
   provider-specific URL are **different pieces of data**.
+- **Episodes:** when the optional API supplies a uniquely matched episode
+  (explicit episode number, or exact localized title within a matching
+  season), HMC prefers its official `videoLink` when valid, then its `link`.
+  The API's documented season/episode records do **not** require numeric
+  indices: HMC must never assign them from unverified array order. Otherwise
+  the series title page is used; the platform controls actual playback.
 - **Episodes:** an episode-specific URL is preferred when known. Otherwise
   HMC opens the known series URL or provider title search. **Opening a
   series URL does not guarantee automatic resume or selection of the next
