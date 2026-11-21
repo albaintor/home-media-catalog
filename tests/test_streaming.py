@@ -180,6 +180,35 @@ def test_discover_intersects_subscriptions_and_genre(monkeypatch):
 
 
 
+def test_kdrama_and_korean_movie_categories_keep_subscription_and_region(monkeypatch):
+    captured = []
+
+    async def fake_tmdb(_token, path, params):
+        captured.append((path, params))
+        return {"page": 1, "total_pages": 1, "results": []}
+
+    monkeypatch.setattr(streaming, "_tmdb", fake_tmdb)
+    asyncio.run(streaming._discover(
+        "token", "netflix,disney_plus", "tv", 18, 1, "FR",
+        "popularity", "desc", "KR", "ko",
+    ))
+    asyncio.run(streaming._discover(
+        "token", "netflix", "movie", None, 1, "FR",
+        "popularity", "desc", "KR", "ko",
+    ))
+    for path, params in captured:
+        assert path.startswith("/discover/")
+        assert params["with_origin_country"] == "KR"
+        assert params["with_original_language"] == "ko"
+        assert params["watch_region"] == "FR"
+        assert params["with_watch_monetization_types"] == "flatrate"
+    assert captured[0][0] == "/discover/tv"
+    assert captured[0][1]["with_genres"] == 18
+    assert captured[0][1]["with_watch_providers"] == "8|337"
+    assert captured[1][0] == "/discover/movie"
+    assert "with_genres" not in captured[1][1]
+
+
 @pytest.mark.parametrize(
     "kind,sort,order,expected",
     [
