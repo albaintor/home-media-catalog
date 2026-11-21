@@ -1,0 +1,84 @@
+"""Streaming state and TMDB discovery invariants (no external HTTP required)."""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from fastapi import HTTPException
+
+from home_media_catalog.store import Store
+from home_media_catalog.streaming import (
+    StreamingStateRow,
+    _item,
+    _merge,
+    _provider_ids,
+)
+
+
+def _row(key: str, stamp: datetime, value: str, deleted: bool = False):
+    return StreamingStateRow(
+        key=key,
+        payload={"value": value},
+        modified_at=stamp.isoformat(),
+        deleted=deleted,
+    )
+
+
+def test_streaming_rows_merge_per_key_and_keep_tombstones(tmp_path):
+    store = Store(tmp_path / "catalogue.sqlite")
+    store.initialize()
+    start = datetime(2026, 11, 21, tzinfo=UTC)
+    first = _merge(
+        store,
+        [_row("prefs:subscriptions", start, "netflix"),
+         _row("prefs:genres", start, "drama")],
+    )
+    assert len(first) == 2
+
+    changed = _merge(store, [_row("prefs:subscriptions", start + timedelta(seconds=1),
+                                  "netflix,disney_plus")])
+    assert next(r for r in changed if r["key"] == "prefs:genres")["payload"] == {
+        "value": "drama"
+    }
+    old = _merge(store, [_row("prefs:subscriptions", start, "older")])
+    assert next(r for r in old if r["key"] == "prefs:subscriptions")["payload"] == {
+        "value": "netflix,disney_plus"
+    }
+    deleted = _merge(store, [_row("prefs:subscriptions", start + timedelta(seconds=2),
+                                  "", deleted=True)])
+    assert next(r for r in deleted if r["key"] == "prefs:subscriptions")["deleted"]
+    assert len(_merge(store, [])) == 2
+
+
+def test_same_timestamp_reconciliation_is_independent_of_input_order(tmp_path):
+    store = Store(tmp_path / "catalogue.sqlite")
+    store.initialize()
+    stamp = datetime(2026, 11, 21, tzinfo=UTC)
+    a = _row("prefs:kinds", stamp, "movie")
+    b = _row("prefs:kinds", stamp, "tv")
+    a_result = _merge(store, [a, b])
+    b_result = _merge(store, [b, a])
+    assert a_result == b_result
+
+
+def test_providers_are_allowlisted():
+    assert _provider_ids("netflix") == "8"
+    assert "531" in _provider_ids("paramount_plus")
+    with pytest.raises(HTTPException) as exc:
+        _provider_ids("invalid-provider")
+    assert exc.value.status_code == 422
+
+
+def test_tmdb_media_mapping():
+    value = _item({
+        "id": 123,
+        "name": "Sample",
+        "first_air_date": "2026-11-20",
+        "poster_path": "/sample.jpg",
+        "vote_average": 7.5,
+    }, "tv")
+    assert value["id"] == 123
+    assert value["title"] == "Sample"
+    assert value["kind"] == "tv"
+    assert value["year"] == 2026
+    assert value["rating"] == 7.5
+    assert value["poster_path"] == "/sample.jpg"
