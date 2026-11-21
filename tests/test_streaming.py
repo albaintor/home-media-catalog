@@ -333,6 +333,7 @@ def test_streaming_series_poster_and_backdrop_survive_catalogue_rebuild(tmp_path
     assert store.artwork(item_id, "fanart") == [
         "https://image.tmdb.org/t/p/w1280/series-backdrop.jpg"
     ]
+    assert store.media(kind="tvshow")["items"][0]["streaming_reference"] is False
     with store.connect() as conn:
         store._rebuild(conn, item_id)
     assert store.artwork(item_id, "poster")
@@ -488,6 +489,7 @@ def test_streaming_heart_state_materializes_media_for_web_video_catalogue(tmp_pa
     titles = {item["title"] for item in listed}
     assert {"Sample streaming film", "Sample streaming series"} <= titles
     assert len(listed) == 2
+    assert all(item["streaming_reference"] is True for item in listed)
     assert store.media(kind="movie")["total"] == 1
     assert store.media(kind="tvshow")["total"] == 1
     assert _streaming_edition_uuid("item:movie:550").count("-") == 4
