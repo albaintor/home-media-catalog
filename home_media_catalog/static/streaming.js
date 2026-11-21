@@ -26,7 +26,7 @@ const state = {
   cache:new Map(),titles:new Map(),shelves:new Map(),
   observer:null,version:0,subview:null,selected:null,searchTimer:null,
   logos:{},detailCache:new Map(),metrics:new Map(),person:null,
-  personVersion:0,personReturnKey:null
+  personVersion:0,personReturnKey:null,personAvailabilityCache:new Map()
 };
 function preference(key,fallback) {
   const row=state.rows.find(r=>r.key==='prefs:'+key && !r.deleted);
@@ -472,10 +472,11 @@ function renderTitleDetails(title,full=null,loading=false,error='') {
   const genres=(data.genres||[]).map(g=>'<span>'+esc(g)+'</span>').join('');
   const cast=(data.cast||[]).slice(0,24).map(p=>{
     const photo=posterURL(p.profile_path,'w185');
-    return '<div class="streaming-person">'+
+    return '<button type="button" class="streaming-person" data-streaming-person="'+
+      esc(p.id)+'" aria-label="Voir la fiche et la filmographie de '+esc(p.name)+'">'+
       (photo?'<img loading="lazy" src="'+esc(photo)+'" alt="">':
         '<span class="streaming-person-placeholder" aria-hidden="true">◉</span>')+
-      '<strong>'+esc(p.name)+'</strong><small>'+esc(p.role||'')+'</small></div>';
+      '<strong>'+esc(p.name)+'</strong><small>'+esc(p.role||'')+'</small></button>';
   }).join('');
   const creators=(data.crew||[]).filter(p=>['Director','Creator','Writer','Screenplay','Producer'].includes(p.role))
     .slice(0,10).map(p=>'<span>'+esc(p.name)+(p.role?' · '+esc(p.role):'')+'</span>').join(' · ');
@@ -533,6 +534,128 @@ async function details(key) {
     if(state.selected===key&&$('streaming-title-dialog').open)
       renderTitleDetails(title,null,false,'Full details are currently unavailable: '+error.message);
   }
+}
+function personCatalogueCard(item){
+  if(!item||typeof item.id!=='string'||!/^[a-z0-9_-]{1,128}$/i.test(item.id))return '';
+  const image=new URL('api/v1/media/'+encodeURIComponent(item.id)+'/artwork/poster',root).href;
+  return '<button type="button" class="streaming-catalog-result" data-streaming-catalog-item="'+
+    esc(item.id)+'"><img src="'+esc(image)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">'+
+    '<span><strong>'+esc(item.title||'')+'</strong><small>'+esc(item.year||'')+
+    (item.watch_status==='watched'?' · Vu':'')+'</small></span></button>';
+}
+function renderPerson(){
+  const p=state.person;
+  if(!p)return;
+  const image=posterURL(p.profile_path,'w300');
+  const catalog=p.catalog||[];
+  const hasMoreCatalogue=catalog.length<(p.catalogTotal||0);
+  const stream=p.available||[];
+  const remaining=(p.filmography||[]).length-(p.checked||0);
+  $('streaming-person-content').innerHTML=
+    '<div class="streaming-person-header">'+
+    (image?'<img src="'+esc(image)+'" alt="" loading="lazy">':'')+
+    '<div><h2 id="streaming-person-heading">'+esc(p.name)+'</h2>'+
+    (p.department?'<p class="muted">'+esc(p.department)+'</p>':'')+
+    (p.biography?'<p class="streaming-person-bio">'+esc(p.biography)+'</p>':'')+
+    '</div></div><div class="streaming-person-tabs" role="group" aria-label="Source des médias">'+
+    '<button type="button" data-streaming-person-tab="catalog" aria-pressed="'+
+      (p.tab==='catalog')+'">Catalogue ('+esc(p.catalogTotal||0)+')</button>'+
+    '<button type="button" data-streaming-person-tab="streaming" aria-pressed="'+
+      (p.tab==='streaming')+'">Streaming</button></div>'+
+    (p.tab==='catalog'
+      ?'<div class="streaming-person-catalog">'+catalog.map(personCatalogueCard).join('')+
+        (!catalog.length?'<p class="muted">Aucun média associé dans le catalogue.</p>':'')+
+        (hasMoreCatalogue?'<button type="button" class="secondary" data-streaming-person-more="catalog">Afficher davantage de médias</button>':'')+'</div>'
+      :'<p class="streaming-filter-hint">Disponibilité dans la région '+esc(validRegion())+
+        ' : tous les services sont vérifiés, indépendamment de vos abonnements et filtres.</p>'+
+        '<div class="streaming-grid streaming-person-streaming-grid">'+stream.map(card).join('')+'</div>'+
+        (p.checking?'<p class="muted">Vérification des disponibilités…</p>':'')+
+        (!p.checking&&!stream.length?'<p class="muted">Aucun titre disponible parmi les '+
+          esc(p.checked)+' titres vérifiés.</p>':'')+
+        (remaining>0?'<button type="button" class="secondary" data-streaming-person-more="streaming" '+
+          (p.checking?'disabled':'')+'>Vérifier '+Math.min(12,remaining)+' autres titres ('+
+          p.checked+'/'+p.filmography.length+')</button>':'')
+    );
+}
+async function loadPersonCatalogueMore(){
+  const p=state.person;
+  if(!p||p.catalogLoading||p.catalog.length>=p.catalogTotal)return;
+  p.catalogLoading=true;
+  const version=state.personVersion;
+  try{
+    const params=new URLSearchParams({
+      person_tmdb_id:String(p.id),person_name:p.name,limit:'60',offset:String(p.catalog.length)
+    });
+    const result=await api('media?'+params);
+    if(version!==state.personVersion)return;
+    const seen=new Set(p.catalog.map(item=>item.id));
+    p.catalog.push(...(result.items||[]).filter(item=>!seen.has(item.id)));
+    p.catalogTotal=Number(result.total)||p.catalog.length;
+  }catch(error){failure('Person catalogue: '+error.message);}
+  finally{p.catalogLoading=false;if(version===state.personVersion)renderPerson();}
+}
+async function loadPersonStreamingMore(){
+  const p=state.person;
+  if(!p||p.checking||p.checked>=p.filmography.length)return;
+  p.checking=true;renderPerson();
+  const version=state.personVersion;
+  const batch=p.filmography.slice(p.checked,p.checked+12);
+  const selection=Object.keys(names).join(',');
+  const checked=await Promise.all(batch.map(async title=>{
+    const key=validRegion()+':'+keyFor(title);
+    try{
+      let available=state.personAvailabilityCache.get(key);
+      if(!available){
+        const data=await limited(()=>api('streaming/availability/'+title.kind+'/'+title.id+
+          '?'+new URLSearchParams({service:selection,region:validRegion()})));
+        available=Array.isArray(data.service_keys)?data.service_keys:[];
+        state.personAvailabilityCache.set(key,available);
+      }
+      return available.length?{...title,service_keys:available}:null;
+    }catch{return null;}
+  }));
+  if(version!==state.personVersion)return;
+  p.available.push(...checked.filter(Boolean));
+  p.checked+=batch.length;
+  p.checking=false;
+  renderPerson();
+}
+async function openPerson(id){
+  const personID=Number(id);
+  if(!Number.isSafeInteger(personID)||personID<1||personID>999999999)return;
+  const version=++state.personVersion;
+  state.personReturnKey=state.selected;
+  if($('streaming-title-dialog').open)$('streaming-title-dialog').close();
+  state.selected=null;
+  const dialog=$('streaming-person-dialog');
+  $('streaming-person-content').innerHTML='<h2 id="streaming-person-heading">Chargement de la fiche personne…</h2>';
+  if(!dialog.open)dialog.showModal();
+  try{
+    const person=await api('streaming/people/'+personID+'?'+new URLSearchParams({
+      language:validRegion()==='FR'?'fr-FR':'en-US'
+    }));
+    if(version!==state.personVersion)return;
+    state.person={
+      ...person,tab:'catalog',catalog:[],catalogTotal:1,available:[],checked:0,checking:false,
+      catalogLoading:false
+    };
+    const params=new URLSearchParams({
+      person_tmdb_id:String(personID),person_name:person.name,limit:'60',offset:'0'
+    });
+    const catalogue=await api('media?'+params);
+    if(version!==state.personVersion)return;
+    state.person.catalog=catalogue.items||[];
+    state.person.catalogTotal=Number(catalogue.total)||state.person.catalog.length;
+    renderPerson();
+  }catch(error){
+    if(version===state.personVersion)
+      $('streaming-person-content').innerHTML='<h2 id="streaming-person-heading">Fiche personne indisponible</h2>'+
+        '<p class="muted">'+esc(error.message)+'</p>';
+  }
+}
+function closePerson(){
+  ++state.personVersion;
+  if($('streaming-person-dialog').open)$('streaming-person-dialog').close();
 }
 async function save(title){
   try{
