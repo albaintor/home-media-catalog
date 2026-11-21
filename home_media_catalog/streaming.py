@@ -7,6 +7,7 @@ All persistent data belongs to the existing self-hosted catalogue database.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -101,10 +102,31 @@ def _merge(store: Any, incoming: list[StreamingStateRow]) -> list[dict[str, Any]
             for row in rows]
 
 
-def _provider_ids(key: str) -> str:
-    if key not in PROVIDERS:
-        raise HTTPException(422, "Unsupported streaming provider")
-    return "|".join(str(v) for v in PROVIDERS[key][1])
+def _provider_keys(selection: str) -> list[str]:
+    """Parse selected subscriptions; reject unknown and empty scopes."""
+    keys = [part.strip() for part in selection.split(",")]
+    if not keys or any(key not in PROVIDERS for key in keys) or len(keys) > len(PROVIDERS):
+        raise HTTPException(422, "Unsupported streaming provider selection")
+    return list(dict.fromkeys(keys))
+
+
+def _provider_ids(selection: str) -> str:
+    keys = _provider_keys(selection)
+    return "|".join(str(provider_id) for key in keys for provider_id in PROVIDERS[key][1])
+
+
+def _availability_keys(results: dict[str, Any], selection: str, region: str) -> list[str]:
+    """Only paid-subscription (flatrate) offers qualify; exclude rentals/buy offers."""
+    scoped = results.get("results", {}).get(region, {})
+    available = {row.get("provider_id") for row in scoped.get("flatrate", [])}
+    return [key for key in _provider_keys(selection)
+            if any(ident in available for ident in PROVIDERS[key][1])]
+
+
+async def _availability(token: str, kind: str, tmdb_id: int, selection: str,
+                        region: str) -> list[str]:
+    response = await _tmdb(token, f"/{kind}/{tmdb_id}/watch/providers", {})
+    return _availability_keys(response, selection, region)
 
 
 async def _tmdb(token: str, path: str, params: dict[str, Any]) -> dict[str, Any]:
