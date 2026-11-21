@@ -49,3 +49,18 @@ def test_web_format_uhd_is_not_4k_resolution():
     assert "4k ultra hd blu-ray" in app
     css = (STATIC / "app.css").read_text()
     assert ".format-720p" in css and ".format-1080p" in css
+
+
+
+def test_streaming_web_fetches_complete_metadata_and_provider_logos():
+    js = (STATIC / "streaming.js").read_text()
+    assert "streaming/providers?" in js
+    assert "providerLogo(s)" in js
+    assert "streaming/titles/" in js and "/details?" in js
+    assert "streaming-cast-track" in js
+    assert "streaming-detail-genres" in js
+    assert "streaming-seasons" in js
+    assert "state.detailCache.set(key,full)" in js
+    css = (STATIC / "streaming.css").read_text()
+    assert ".streaming-logo img" in css
+    assert ".streaming-person img" in css

@@ -24,7 +24,8 @@ const state = {
   rows:[], visible:[],subscriptions:[], kind:'both', region:'FR',
   query:'',loaded:false,loading:false,session:null,
   cache:new Map(),titles:new Map(),shelves:new Map(),
-  observer:null,version:0,subview:null,selected:null,searchTimer:null
+  observer:null,version:0,subview:null,selected:null,searchTimer:null,
+  logos:{},detailCache:new Map()
 };
 function preference(key,fallback) {
   const row=state.rows.find(r=>r.key==='prefs:'+key && !r.deleted);
@@ -105,12 +106,52 @@ function directURL(title,key){
       allowed.some(h=>host===h||host.endsWith('.'+h))?u.href:'';
   }catch{return ''}
 }
+function providerIcon(key) {
+  const path=state.logos[key];
+  if(typeof path==='string' && /^\/[A-Za-z0-9_.-]{1,150}$/.test(path))
+    return '<img loading="lazy" decoding="async" src="'+
+      esc('https://image.tmdb.org/t/p/w92'+path)+'" alt="">';
+  const initials={
+    netflix:'N',disney_plus:'D+',prime_video:'Prime',apple_tv_plus:'',
+    hbo_max:'Max',paramount_plus:'P+'
+  };
+  return '<span class="streaming-logo-fallback '+esc(key)+'" aria-hidden="true">'+
+    esc(initials[key]||'?')+'</span>';
+}
+function providerLogo(key) {
+  return '<span class="streaming-logo" data-provider-logo="'+esc(key)+
+    '" title="'+esc(names[key]||key)+'">'+providerIcon(key)+'</span>';
+}
+function refreshProviderLogos() {
+  document.querySelectorAll('#streaming-page [data-provider-logo]').forEach(node=>{
+    node.innerHTML=providerIcon(node.dataset.providerLogo);
+  });
+}
+async function loadProviderLogos() {
+  try {
+    const stored=sessionStorage.getItem('hmc-streaming-logos-'+validRegion());
+    if(stored)state.logos=JSON.parse(stored);
+  } catch {}
+  refreshProviderLogos();
+  try {
+    const result=await api('streaming/providers?'+new URLSearchParams({region:validRegion()}));
+    const logos={};
+    for(const item of result.providers||[])
+      if(names[item.key] && typeof item.logo_path==='string' &&
+         /^\/[A-Za-z0-9_.-]{1,150}$/.test(item.logo_path))
+        logos[item.key]=item.logo_path;
+    state.logos=logos;
+    try{sessionStorage.setItem('hmc-streaming-logos-'+validRegion(),JSON.stringify(logos));}catch{}
+    refreshProviderLogos();
+  } catch {
+    // Keep previously obtained provider artwork and fallbacks.
+  }
+}
 function card(title){
   const key=keyFor(title);
   state.titles.set(key,title);
   const poster=posterURL(title.poster_path),isSaved=!!savedRow(title);
-  const badges=servicesFor(title).slice(0,4).map(s=>'<span title="'+esc(names[s])+'">'+esc(
-    s==='netflix'?'N':s==='prime_video'?'Prime':s==='disney_plus'?'D+':s==='apple_tv_plus'?'Apple':s==='hbo_max'?'Max':'P+')+'</span>').join('');
+  const badges=servicesFor(title).slice(0,4).map(s=>providerLogo(s)).join('');
   const year=title.year||'',rating=Number(title.rating)||0;
   return '<article class="streaming-tile"><div class="streaming-tile-art">'+
     '<button class="streaming-tile-poster" type="button" data-streaming-card="'+esc(key)+'" aria-label="'+esc(title.title)+'">'+
@@ -154,8 +195,8 @@ function filterChips(){
     '<button type="button" aria-pressed="'+fullySelected+'" data-streaming-service="all">'+
     esc('All')+'</button>'+
     subs.map(s=>'<button type="button" data-streaming-service="'+esc(s)+
-      '" aria-pressed="'+state.visible.includes(s)+'"><span class="streaming-service-dot '+
-      esc(s)+'"></span>'+esc(names[s])+'</button>').join('');
+      '" aria-pressed="'+state.visible.includes(s)+'">'+providerLogo(s)+
+      esc(names[s])+'</button>').join('');
 }
 function computeShelves(){
   const kinds=state.kind==='both'?['tv','movie']:[state.kind];
@@ -351,32 +392,85 @@ async function loadNext(){
     button.hidden=def.page>=def.total;
   }catch(e){failure(e.message);}finally{button.disabled=false;}
 }
-function details(key){
+function renderTitleDetails(title,full=null,loading=false,error='') {
+  const key=keyFor(title);
+  const saved=savedRow(title);
+  const data=full||{};
+  const titleText=data.title||title.title;
+  const poster=posterURL(data.poster_path||title.poster_path,'w500');
+  const backdrop=posterURL(data.backdrop_path||title.backdrop_path,'w1280');
+  const available=servicesFor(title);
+  const links=available.map(s=>{
+    const direct=directURL(title,s),fallback=providerSearchURL(s,title.title);
+    const destination=direct||fallback;
+    return destination?'<a href="'+esc(destination)+'" target="_blank" rel="noopener noreferrer">'+
+      providerLogo(s)+' '+esc((direct?'Open on ':'Search on ')+names[s])+'</a>':'';
+  }).join('');
+  const body=data.overview||title.overview||saved?.payload?.overview||'';
+  const genres=(data.genres||[]).map(g=>'<span>'+esc(g)+'</span>').join('');
+  const cast=(data.cast||[]).slice(0,24).map(p=>{
+    const photo=posterURL(p.profile_path,'w185');
+    return '<div class="streaming-person">'+
+      (photo?'<img loading="lazy" src="'+esc(photo)+'" alt="">':
+        '<span class="streaming-person-placeholder" aria-hidden="true">◉</span>')+
+      '<strong>'+esc(p.name)+'</strong><small>'+esc(p.role||'')+'</small></div>';
+  }).join('');
+  const creators=(data.crew||[]).filter(p=>['Director','Creator','Writer','Screenplay','Producer'].includes(p.role))
+    .slice(0,10).map(p=>'<span>'+esc(p.name)+(p.role?' · '+esc(p.role):'')+'</span>').join(' · ');
+  const seasons=(data.seasons||[]).filter(s=>s.number>=0).map(s=>
+    '<div class="streaming-season">'+
+    (posterURL(s.poster_path,'w185')?'<img loading="lazy" alt="" src="'+esc(posterURL(s.poster_path,'w185'))+'">':'')+
+    '<span><strong>'+esc(s.title||('Season '+s.number))+'</strong><small>'+
+    esc((s.episode_count||0)+' episodes')+'</small></span></div>').join('');
+  const rating=Number(data.rating||title.rating)||0;
+  const meta=[title.kind==='tv'?'Series':'Movie',data.year||title.year,
+    data.runtime_minutes?data.runtime_minutes+' min':'',
+    rating>0?'★ '+rating.toFixed(1)+'/10':''].filter(Boolean).join(' · ');
+  $('streaming-title-content').innerHTML=
+    (backdrop?'<div class="streaming-detail-backdrop" aria-hidden="true"><img src="'+esc(backdrop)+'" alt=""></div>':'')+
+    '<div class="streaming-detail-layout">'+
+    (poster?'<img src="'+esc(poster)+'" alt="">':'<div></div>')+
+    '<div><h2 id="streaming-detail-heading">'+esc(titleText)+'</h2>'+
+    (data.original_title&&data.original_title!==titleText?
+      '<p class="streaming-original-title">'+esc(data.original_title)+'</p>':'')+
+    '<p>'+esc(meta)+'</p>'+
+    '<div class="streaming-detail-actions"><button type="button" class="secondary" data-streaming-save-detail="'+
+    esc(key)+'">'+esc(saved?'♥ In my catalog':'♡ Add to catalog')+'</button>'+
+    (saved?.payload?.work_id?
+      '<button type="button" class="secondary" data-streaming-work="'+
+      esc(saved.payload.work_id)+'">Open catalog entry</button>':'')+
+    '</div><div class="streaming-detail-services">'+links+'</div></div></div>'+
+    (genres?'<div class="streaming-detail-genres">'+genres+'</div>':'')+
+    (body?'<section class="streaming-detail-section"><h3>Synopsis</h3><p class="synopsis">'+esc(body)+'</p></section>':
+      loading?'<p class="streaming-detail-loading">Loading synopsis…</p>':'')+
+    (cast?'<section class="streaming-detail-section"><h3>Cast</h3><div class="streaming-cast-track">'+cast+'</div></section>':'')+
+    (creators?'<section class="streaming-detail-section"><h3>Crew</h3><p>'+creators+'</p></section>':'')+
+    (seasons?'<section class="streaming-detail-section"><h3>Seasons</h3><div class="streaming-seasons">'+seasons+'</div></section>':'')+
+    (loading?'<p class="streaming-detail-loading">Loading full title information…</p>':'')+
+    (error?'<p class="streaming-detail-note">'+esc(error)+'</p>':'');
+}
+async function details(key) {
   const title=state.titles.get(key);
   if(!title)return;
   state.selected=key;
-  const poster=posterURL(title.poster_path,'w500');
-  const available=servicesFor(title);
-  const links=available.map(s=>{
-    const direct=directURL(title,s);
-    const fallback=providerSearchURL(s,title.title);
-    const destination=direct||fallback;
-    return destination?'<a href="'+esc(destination)+'" target="_blank" rel="noopener noreferrer">'+
-      esc((direct?'Open on ':'Search on ')+names[s])+'</a>':'';
-  }).join('');
-  $('streaming-title-content').innerHTML=
-    '<div class="streaming-detail-layout">'+
-    (poster?'<img src="'+esc(poster)+'" alt="">':'<div></div>')+
-    '<div><h2 id="streaming-detail-heading">'+esc(title.title)+'</h2>'+
-    '<p>'+esc([title.kind==='tv'?'Series':'Movie',title.year].filter(Boolean).join(' · '))+'</p>'+
-    '<div class="streaming-detail-actions"><button type="button" class="secondary" data-streaming-save-detail="'+
-      esc(key)+'">'+esc(savedRow(title)?'♥ In my catalog':'♡ Add to catalog')+'</button>'+
-    (savedRow(title)?.payload?.work_id?
-      '<button type="button" class="secondary" data-streaming-work="'+
-      esc(savedRow(title).payload.work_id)+'">Open catalog entry</button>':'')+
-    '</div><div class="streaming-detail-services">'+links+'</div></div></div>'+
-    (title.overview?'<p class="synopsis">'+esc(title.overview)+'</p>':'');
-  $('streaming-title-dialog').showModal();
+  const cached=state.detailCache.get(key);
+  renderTitleDetails(title,cached||null,!cached);
+  if(!$('streaming-title-dialog').open)$('streaming-title-dialog').showModal();
+  if(cached)return;
+  try{
+    const full=await api('streaming/titles/'+encodeURIComponent(title.kind)+'/'+
+      encodeURIComponent(title.id)+'/details?'+new URLSearchParams({
+        language:validRegion()==='FR'?'fr-FR':'en-US'
+      }));
+    if(!full||full.id!==title.id||full.kind!==title.kind)
+      throw new Error('The title metadata does not match this item.');
+    state.detailCache.set(key,full);
+    if(state.selected===key&&$('streaming-title-dialog').open)
+      renderTitleDetails(title,full);
+  }catch(error){
+    if(state.selected===key&&$('streaming-title-dialog').open)
+      renderTitleDetails(title,null,false,'Full details are currently unavailable: '+error.message);
+  }
 }
 async function save(title){
   if(savedRow(title))return;
@@ -409,7 +503,7 @@ async function save(title){
       state.shelves.set(currentSubview.id,previousShelf);
       showSubview(currentSubview.id);
     }
-    if(state.selected===keyFor(title))details(state.selected);
+    if(state.selected===keyFor(title))void details(state.selected);
   }catch(e){failure(e.message);}
 }
 async function load(){
@@ -432,6 +526,7 @@ async function load(){
     $('streaming-kind').value=state.kind;
     state.loaded=true;
     renderBrowser();
+    void loadProviderLogos();
   }catch(e){failure(e.message);}finally{
     state.loading=false;$('streaming-refresh').disabled=false;
   }
@@ -456,7 +551,7 @@ export function startStreaming(){
   $('streaming-region').addEventListener('change',e=>{
     state.region=e.target.value;
     try{localStorage.setItem('hmc-streaming-region',state.region);}catch{}
-    state.cache.clear();renderBrowser();
+    state.cache.clear();state.logos={};renderBrowser();void loadProviderLogos();
   });
   $('streaming-search').addEventListener('input',e=>{
     state.query=e.target.value;
@@ -484,7 +579,7 @@ export function startStreaming(){
       return;
     }
     const tile=event.target.closest('[data-streaming-card]');
-    if(tile){details(tile.dataset.streamingCard);return;}
+    if(tile){void details(tile.dataset.streamingCard);return;}
     const more=event.target.closest('[data-streaming-more]');
     if(more){showSubview(more.dataset.streamingMore);return;}
     const work=event.target.closest('[data-streaming-work]');
@@ -495,7 +590,8 @@ export function startStreaming(){
   });
   $('streaming-back').addEventListener('click',closeSubview);
   $('streaming-subview-more').addEventListener('click',()=>void loadNext());
-  $('streaming-detail-close').addEventListener('click',()=>$('streaming-title-dialog').close());
+  $('streaming-detail-close').addEventListener('click',()=>{$('streaming-title-dialog').close();state.selected=null;});
+  $('streaming-title-dialog').addEventListener('close',()=>{state.selected=null;});
   window.addEventListener('hashchange',route);
   window.addEventListener('media-app-ready',route);
   route();

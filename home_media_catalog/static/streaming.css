@@ -66,3 +66,36 @@
 .streaming-detail-services a{display:inline-flex;padding:7px 10px;text-decoration:none;font-size:11px;border:1px solid var(--border);border-radius:7px}
 .streaming-detail-services a:hover{color:var(--accent)}
 @media(max-width:700px){.streaming-shelf-track .streaming-tile{flex-basis:118px}.streaming-shelf-header h3{font-size:15px}.streaming-controls{grid-template-columns:1fr 1fr}.streaming-controls .search-box{grid-column:1/-1}.streaming-detail-layout{grid-template-columns:100px minmax(0,1fr);gap:12px}.streaming-detail-layout h2{font-size:18px}}
+
+/* TMDB service artwork, mirroring the native iOS providers strip. */
+.streaming-logo{width:25px;height:25px;display:inline-grid;place-items:center;flex:none;border-radius:6px;overflow:hidden;background:#222e3f;vertical-align:middle}
+.streaming-logo img{display:block;width:100%;height:100%;object-fit:contain}
+.streaming-logo-fallback{width:100%;height:100%;display:grid;place-items:center;font-size:10px;color:white;font-weight:800;background:#44536c}
+.streaming-logo-fallback.netflix{background:#d50914}.streaming-logo-fallback.disney_plus{background:#0d2a72}.streaming-logo-fallback.prime_video{background:#007cae}.streaming-logo-fallback.apple_tv_plus{background:#222}.streaming-logo-fallback.hbo_max{background:#6334a3}.streaming-logo-fallback.paramount_plus{background:#204a9e}
+.streaming-tile .streaming-tile-services{display:flex;align-items:center;gap:3px;padding:3px;background:#101820dc;border-radius:7px}
+.streaming-tile .streaming-tile-services .streaming-logo{width:19px;height:19px;background:transparent;padding:0;border:0}
+.streaming-tile .streaming-tile-services .streaming-logo-fallback{font-size:8px}
+.streaming-detail-services{align-items:center}
+.streaming-detail-services a{align-items:center;gap:6px}
+.streaming-detail-services .streaming-logo{width:24px;height:24px}
+.streaming-title-dialog{max-width:780px;max-height:min(92dvh,950px);overflow-y:auto;position:relative}
+.streaming-detail-backdrop{position:absolute;inset:0 0 auto;height:250px;pointer-events:none;opacity:.16;overflow:hidden;mask-image:linear-gradient(black,transparent)}
+.streaming-detail-backdrop img{width:100%;height:100%;object-fit:cover;filter:blur(14px)}
+.streaming-detail-layout,.streaming-detail-section,.streaming-detail-genres,.streaming-detail-loading,.streaming-detail-note{position:relative}
+.streaming-detail-genres{display:flex;flex-wrap:wrap;gap:7px;margin:16px 0}
+.streaming-detail-genres span{border:1px solid var(--border);background:var(--raised);border-radius:20px;font-size:11px;padding:6px 10px}
+.streaming-detail-section{margin-top:23px}
+.streaming-detail-section h3{font-size:14px;margin:0 0 12px}
+.streaming-detail-section .synopsis{line-height:1.65;color:var(--text);margin:0}
+.streaming-detail-loading,.streaming-detail-note{font-size:12px;color:var(--muted);margin-top:15px}
+.streaming-cast-track{display:flex;gap:14px;overflow-x:auto;scrollbar-width:thin;padding-bottom:8px}
+.streaming-person{width:90px;flex:none;display:flex;flex-direction:column;gap:4px;font-size:11px}
+.streaming-person img,.streaming-person-placeholder{width:90px;height:118px;object-fit:cover;border-radius:8px;background:var(--raised);display:grid;place-items:center;font-size:24px;color:var(--muted)}
+.streaming-person strong{font-weight:600}
+.streaming-person small{color:var(--muted);line-height:1.3}
+.streaming-seasons{display:flex;gap:9px;flex-wrap:wrap}
+.streaming-season{display:flex;align-items:center;gap:9px;min-width:155px;background:var(--surface);border:1px solid var(--border);padding:8px;border-radius:9px}
+.streaming-season img{width:40px;height:60px;object-fit:cover;border-radius:4px}
+.streaming-season span{display:flex;flex-direction:column;gap:5px;font-size:11px}
+.streaming-season small{color:var(--muted)}
+@media(max-width:650px){.streaming-title-dialog{padding:18px}.streaming-person{width:76px}.streaming-person img,.streaming-person-placeholder{width:76px;height:105px}}
