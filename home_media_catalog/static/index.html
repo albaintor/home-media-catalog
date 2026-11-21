@@ -159,15 +159,31 @@
       <footer class="catalogue-footer"><span>Home Media Catalog</span><span id="server-version"></span><span id="sync-status"></span></footer>
     </section>
     <section id="streaming-page" class="catalogue streaming-page" aria-labelledby="streaming-title" hidden>
-      <div class="streaming-heading"><div><p class="eyebrow">VOTRE CATALOGUE STREAMING</p><h2 id="streaming-title">Streaming</h2><p id="streaming-summary" class="muted" aria-live="polite"></p></div>
-        <button id="streaming-refresh" class="secondary" type="button">Actualiser</button></div>
-      <div class="streaming-controls">
-        <div class="search-box"><span aria-hidden="true">⌕</span><input id="streaming-search" type="search" autocomplete="off" placeholder="Rechercher dans le streaming…" aria-label="Rechercher dans le streaming"></div>
-        <select id="streaming-service" aria-label="Service de streaming"><option value="">Tous les services</option></select>
-        <select id="streaming-kind" aria-label="Type de média"><option value="">Films et séries</option><option value="movie">Films</option><option value="tv">Séries</option></select>
+      <div class="streaming-heading">
+        <div><p class="eyebrow">VOTRE CATALOGUE STREAMING</p><h2 id="streaming-title">Streaming</h2><p id="streaming-summary" class="muted" aria-live="polite"></p></div>
+        <button id="streaming-refresh" class="secondary" type="button">Actualiser</button>
       </div>
-      <div id="streaming-error" class="error-banner streaming-error" role="alert" hidden></div>
-      <div id="streaming-results" class="streaming-grid" aria-live="polite"></div>
+      <div id="streaming-browser">
+        <div class="streaming-controls">
+          <div class="search-box"><span aria-hidden="true">⌕</span><input id="streaming-search" type="search" autocomplete="off" placeholder="Rechercher dans le streaming…" aria-label="Rechercher dans le streaming"></div>
+          <select id="streaming-kind" aria-label="Type de média"><option value="both">Films et séries</option><option value="movie">Films</option><option value="tv">Séries</option></select>
+          <select id="streaming-region" aria-label="Région des services"><option value="FR">France</option><option value="BE">Belgique</option><option value="CH">Suisse</option><option value="CA">Canada</option><option value="US">États-Unis</option><option value="GB">Royaume-Uni</option><option value="DE">Allemagne</option><option value="ES">Espagne</option><option value="IT">Italie</option><option value="KR">Corée du Sud</option><option value="JP">Japon</option></select>
+        </div>
+        <div id="streaming-services" class="streaming-service-chips" role="group" aria-label="Services de streaming"></div>
+        <div id="streaming-error" class="error-banner streaming-error" role="alert" hidden></div>
+        <section id="streaming-saved" class="streaming-shelves" aria-label="Mes contenus streaming"></section>
+        <section id="streaming-discover" class="streaming-shelves" aria-label="Découvrir les contenus streaming"></section>
+      </div>
+      <section id="streaming-subview" class="streaming-subview" hidden>
+        <button id="streaming-back" class="secondary" type="button">← Retour au streaming</button>
+        <h2 id="streaming-subview-title"></h2>
+        <div id="streaming-subview-grid" class="streaming-grid"></div>
+        <button id="streaming-subview-more" class="secondary" type="button" hidden>Afficher davantage de titres</button>
+      </section>
+      <dialog id="streaming-title-dialog" class="streaming-title-dialog" aria-labelledby="streaming-detail-heading">
+        <button id="streaming-detail-close" type="button" class="dialog-close" aria-label="Fermer">×</button>
+        <div id="streaming-title-content"></div>
+      </dialog>
     </section>
     <section id="music-page" class="catalogue music-page" aria-labelledby="music-title" hidden>
         <p class="eyebrow">VOTRE DISCOTHÈQUE</p>
