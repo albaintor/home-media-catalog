@@ -237,6 +237,49 @@ async def _official_netflix(token: str, region: str, kind: str) -> list[dict[str
     return enriched
 
 
+async def _search(token: str, selection: str, phrase: str, kind: str,
+                  region: str) -> dict[str, Any]:
+    """Search film/series titles, then validate regional SVOD availability.
+
+    TMDB /search does not accept provider filters. Validation through each
+    title's /watch/providers avoids showing rentals or unavailable titles.
+    Bound the candidate pool and the concurrent lookups for mobile typing.
+    """
+    _provider_keys(selection)
+    media_kinds = ("movie", "tv") if kind == "both" else (kind,)
+    requests = await asyncio.gather(*(
+        _tmdb(token, "/search/" + media_kind, {
+            "query": phrase, "page": 1, "language": "fr-FR",
+            "include_adult": "false",
+        }) for media_kind in media_kinds
+    ))
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    for media_kind, response in zip(media_kinds, requests, strict=True):
+        candidates.extend((media_kind, row) for row in
+                          response.get("results", [])[:15] if row.get("id"))
+    limit = asyncio.Semaphore(6)
+
+    async def check(media_kind: str, row: dict[str, Any]) -> dict[str, Any] | None:
+        async with limit:
+            try:
+                available = await _availability(
+                    token, media_kind, int(row["id"]), selection, region
+                )
+            except (HTTPException, ValueError, KeyError):
+                return None
+        if not available:
+            return None
+        record = _item(row, media_kind)
+        record["service_keys"] = available
+        return record
+
+    checked = await asyncio.gather(*(check(k, row) for k, row in candidates))
+    matches = [record for record in checked if record is not None]
+    matches.sort(key=lambda record: record["rating"], reverse=True)
+    return {"items": matches, "source": "tmdb", "ranking_type": "search",
+            "page": 1, "total_pages": 1, "region": region}
+
+
 def build_streaming_router(store: Any, settings: Any) -> APIRouter:
     router = APIRouter(prefix="/api/v1/streaming", tags=["Streaming"])
 
@@ -278,11 +321,33 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         return await _discover(settings.tmdb_api_token.strip(), service, kind, genre, page,
                                region, sort)
 
+    @router.get("/search", dependencies=[Depends(authenticated)])
+    async def search(
+        q: str = Query(min_length=2, max_length=120),
+        service: str = Query(min_length=1, max_length=150),
+        kind: str = Query("both", pattern=r"^(movie|tv|both)$"),
+        region: str = Query("FR", pattern=r"^[A-Z]{2}$"),
+    ):
+        return await _search(settings.tmdb_api_token.strip(),
+                             service, q.strip(), kind, region)
+
+    @router.get("/availability/{kind}/{tmdb_id}",
+                dependencies=[Depends(authenticated)])
+    async def availability(
+        kind: str, tmdb_id: int, service: str,
+        region: str = Query("FR", pattern=r"^[A-Z]{2}$"),
+    ):
+        if kind not in {"movie", "tv"} or tmdb_id < 1:
+            raise HTTPException(422, "Invalid TMDB title identity")
+        return {"service_keys": await _availability(
+            settings.tmdb_api_token.strip(), kind, tmdb_id, service, region
+        )}
+
     @router.get("/top", dependencies=[Depends(authenticated)])
     async def top(service: str, kind: str = Query("movie", pattern=r"^(movie|tv)$"),
                   region: str = Query("FR", pattern=r"^[A-Z]{2}$")):
         _provider_ids(service)
-        if service == "netflix":
+        if _provider_keys(service) == ["netflix"]:
             try:
                 official = await _official_netflix(settings.tmdb_api_token.strip(), region, kind)
                 if len(official) >= 5:
