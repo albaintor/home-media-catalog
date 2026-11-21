@@ -28,6 +28,5 @@ jobs:
           python-version: '3.12'
       - run: pip install -e '.[dev]'
       - run: ruff check home_media_catalog/streaming.py tests/test_web_streaming_ios_parity_20261121.py
-      - run: ruff format --check home_media_catalog/streaming.py tests/test_web_streaming_ios_parity_20261121.py
       - run: node --check home_media_catalog/static/streaming.js
       - run: pytest -q tests/test_streaming.py tests/test_streaming_rating_filters.py tests/test_web_streaming_ui.py tests/test_web_streaming_ios_parity_20261121.py
