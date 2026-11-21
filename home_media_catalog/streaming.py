@@ -405,7 +405,8 @@ async def _discover(token: str, service: str, kind: str, genre: int | None,
                     order: str = "desc", origin_country: str | None = None,
                     original_language: str | None = None,
                     rating_min: float | None = None,
-                    rating_max: float | None = None) -> dict[str, Any]:
+                    rating_max: float | None = None,
+                    keyword_id: int | None = None) -> dict[str, Any]:
     # TMDB sorts the entire matching catalogue *before* pagination. Sorting
     # only the 20 titles returned by each page produces misleading results.
     field = {
@@ -431,6 +432,8 @@ async def _discover(token: str, service: str, kind: str, genre: int | None,
         params["first_air_date.lte" if kind == "tv" else "primary_release_date.lte"] = datetime.now(UTC).date().isoformat()
     if genre is not None:
         params["with_genres"] = genre
+    if keyword_id is not None:
+        params["with_keywords"] = keyword_id
     if origin_country:
         params["with_origin_country"] = origin_country
     if original_language:
@@ -711,6 +714,37 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
                                {"language": "fr-FR"})
         return {"genres": response.get("genres", [])}
 
+    @router.get("/categories/search", dependencies=[Depends(authenticated)])
+    async def search_categories(
+        q: str = Query(min_length=2, max_length=80),
+    ):
+        """Find TMDB keywords to use as additional personalized shelves.
+
+        Keyword ids are discover filters, not Netflix editorial categories.
+        Return only validated ids and short names to prevent arbitrary client
+        fields from being persisted in the shared Streaming journal.
+        """
+        results = await _tmdb(
+            settings.tmdb_api_token.strip(), "/search/keyword",
+            {"query": q.strip(), "page": 1},
+        )
+        matches = []
+        seen: set[int] = set()
+        for row in results.get("results", []):
+            if not isinstance(row, dict):
+                continue
+            key = row.get("id")
+            title = row.get("name")
+            if (not isinstance(key, int) or isinstance(key, bool) or key <= 0
+                    or key in seen or not isinstance(title, str)
+                    or not 1 <= len(title.strip()) <= 80):
+                continue
+            seen.add(key)
+            matches.append({"id": key, "name": title.strip()})
+            if len(matches) == 20:
+                break
+        return {"results": matches}
+
     @router.get("/discover", dependencies=[Depends(authenticated)])
     async def discover(
         service: str, kind: str = Query("movie", pattern=r"^(movie|tv)$"),
@@ -722,10 +756,11 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         original_language: str | None = Query(None, pattern=r"^[a-z]{2}$"),
         rating_min: float | None = Query(None, ge=0, le=10),
         rating_max: float | None = Query(None, ge=0, le=10),
+        keyword_id: int | None = Query(None, ge=1),
     ):
         return await _discover(settings.tmdb_api_token.strip(), service, kind, genre, page,
                                region, sort, order, origin_country, original_language,
-                               rating_min, rating_max)
+                               rating_min, rating_max, keyword_id)
 
     @router.get("/search", dependencies=[Depends(authenticated)])
     async def search(
