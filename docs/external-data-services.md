@@ -58,16 +58,21 @@ availability, contractual authorization or current free-tier quotas is implied.
   using `POST /api/v1/streaming/links/import`; the next iOS state sync can
   import that mapping. A title's streaming-provider membership and its
   provider-specific URL are **different pieces of data**.
-- **Server compatibility:** the iOS state sync expects each JSON row to
-  contain `key`, `payload`, `modified_at` and `deleted`. The `main`
-  server's `GET /api/v1/streaming/state` and
-  `POST /api/v1/streaming/state/sync` both return these keys. An iOS error
-  such as `rows.Index 0.modified_at` means the **running NAS response** is
-  missing that field (or has an incompatible format). Check the actual
-  deployed image and [update the server](installation.md#updating-an-existing-installation)
-  using `sh ./rebuild.sh` from its repository directory before treating this
-  as an iOS storage failure. iOS retains pending local state for retry
-  rather than inventing timestamps that could overwrite newer edits.
+- **Streaming sync JSON contract and fixed iOS decoder:** each response
+  row must contain `key`, `payload`, `modified_at` and `deleted`. The
+  current `main` server already returns them in both
+  `GET /api/v1/streaming/state` and `POST /api/v1/streaming/state/sync`.
+  An iOS-side `rows.Index 0.modified_at` error was reproduced **even with
+  this field present**: the shared `JSONDecoder` uses
+  `.convertFromSnakeCase` (thus mapping `modified_at` → `modifiedAt`),
+  but `StreamingSyncRow.CodingKeys` erroneously requested the raw
+  `"modified_at"` spelling. This is corrected on iOS `streaming` by
+  declaring `case modifiedAt`. An error with this path in a build **before
+  that fix** is not evidence that the NAS is outdated. After installing the
+  corrected iOS build, retry synchronization: SQLite keeps its local changes
+  until the server returns their revisions and they are acknowledged.
+  A genuinely incompatible NAS response should be diagnosed separately,
+  using the precise decoding path and deployed API version.
 - **Episodes:** when the optional API supplies a uniquely matched episode
   (explicit episode number, or exact localized title within a matching
   season), HMC prefers its official `videoLink` when valid, then its `link`.
