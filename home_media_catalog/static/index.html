@@ -8,6 +8,7 @@
   <link rel="icon" type="image/svg+xml" href="static/cinema.svg">
   <link rel="stylesheet" href="static/app.css">
   <link rel="stylesheet" href="static/music.css">
+  <link rel="stylesheet" href="static/streaming.css">
   <script type="module" src="static/app.js"></script>
 </head>
 <body>
@@ -47,6 +48,9 @@
       <nav class="main-section-nav" aria-label="Bibliothèques">
         <a id="video-link" class="library-link" href="#video" aria-current="page">
           <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4V8Z"/></svg>Vidéo
+        </a>
+        <a id="streaming-link" class="library-link" href="#streaming">
+          <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3V9Z"/><path d="M6 2v2m12-2v2"/></svg>Streaming
         </a>
         <a id="music-link" class="library-link" href="#music">
           <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Musique
@@ -153,6 +157,17 @@
       <section id="results" class="poster-grid" aria-label="Résultats du catalogue" aria-busy="false"></section>
       <div id="pagination" class="pagination catalogue-loading" hidden><span id="page-info" aria-live="polite"></span><p id="load-more-status" role="status"></p><button id="load-more" class="secondary" type="button" aria-controls="results">Charger la suite</button><div id="load-more-trigger" aria-hidden="true"></div></div>
       <footer class="catalogue-footer"><span>Home Media Catalog</span><span id="server-version"></span><span id="sync-status"></span></footer>
+    </section>
+    <section id="streaming-page" class="catalogue streaming-page" aria-labelledby="streaming-title" hidden>
+      <div class="streaming-heading"><div><p class="eyebrow">VOTRE CATALOGUE STREAMING</p><h2 id="streaming-title">Streaming</h2><p id="streaming-summary" class="muted" aria-live="polite"></p></div>
+        <button id="streaming-refresh" class="secondary" type="button">Actualiser</button></div>
+      <div class="streaming-controls">
+        <div class="search-box"><span aria-hidden="true">⌕</span><input id="streaming-search" type="search" autocomplete="off" placeholder="Rechercher dans le streaming…" aria-label="Rechercher dans le streaming"></div>
+        <select id="streaming-service" aria-label="Service de streaming"><option value="">Tous les services</option></select>
+        <select id="streaming-kind" aria-label="Type de média"><option value="">Films et séries</option><option value="movie">Films</option><option value="tv">Séries</option></select>
+      </div>
+      <div id="streaming-error" class="error-banner streaming-error" role="alert" hidden></div>
+      <div id="streaming-results" class="streaming-grid" aria-live="polite"></div>
     </section>
     <section id="music-page" class="catalogue music-page" aria-labelledby="music-title" hidden>
         <p class="eyebrow">VOTRE DISCOTHÈQUE</p>

@@ -2,8 +2,16 @@ import { startKodiRemote, stopKodiRemote, showKodiRemote } from './remote.js';
 import { startI18n, displayLocale, tr, localizedPrompt, localizedConfirm } from './i18n.js';
 import { MediaPlayer } from './player.js';
 import { startMusic, replayRecentMusic } from './music.js';
+import { startStreaming } from './streaming.js';
 startI18n();
 startMusic();
+startStreaming();
+window.addEventListener('streaming-open-media', event => {
+  const id = event.detail?.mediaID;
+  if (typeof id !== 'string' || !/^[a-z0-9_-]{1,128}$/i.test(id)) return;
+  window.location.hash = '#video';
+  void openDetail(id);
+});
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const stateLabels = {watched:tr('Vu'),unwatched:tr('Non vu'),in_progress:tr('En cours'),unknown:tr('État non renseigné')};
@@ -77,7 +85,7 @@ let filtersRestored=false;
 const savedView = ['grid','list'].includes(preferences.view)?preferences.view:readStorage('kodi_library_view');
 const canonicalFormat = value => {
   const label=String(value).trim();
-  return /^(4k uhd|4k blu-ray|blu-ray 4k|uhd blu-ray|ultra hd blu-ray)$/i.test(label)?'Blu-ray 4K':/^4k$/i.test(label)?'4K':label;
+  return /^(4k uhd|4k blu-ray|blu-ray 4k|uhd blu-ray|ultra hd blu-ray|4k ultra hd blu-ray|bluray 4k|4k bluray|4k ultra hd bluray)$/i.test(label)?'Blu-ray 4K':/^4k$/i.test(label)?'4K':label;
 };
 function formatCategory(label) {
   if (/^(dolby atmos|dolby truehd|dolby digital|dts(?:[-:]|$)|aac|flac|pcm|lpcm|ac3|eac3|mp3|opus)/i.test(label)) return 'audio';
@@ -572,7 +580,7 @@ function formatBadges(values, compact=false, provenance=null) {
     const logo=formatLogos[label];
     const sources=provenance?.get(label);
     const description=sources?.length?`${label} · ${sources.join(', ')}`:label;
-    return logo?`<span class="format-badge ${logo[1]}" title="${esc(description)}" aria-label="${esc(description)}">${formatImages[label]?`<img src="${esc(url('static/format-icons/'+formatImages[label]+'.png'))}" alt="" loading="eager" decoding="async">`:`<svg aria-hidden="true" viewBox="0 0 112 36"><use href="${esc(url('static/format-logos.svg'))}#${logo[0]}"></use></svg>`}</span>`:`<span class="format-chip" title="${esc(description)}">${esc(label)}</span>`;
+    return logo?`<span class="format-badge ${logo[1]} format-${logo[0]}" title="${esc(description)}" aria-label="${esc(description)}">${formatImages[label]?`<img src="${esc(url('static/format-icons/'+formatImages[label]+'.png'))}" alt="" loading="eager" decoding="async">`:`<svg aria-hidden="true" viewBox="0 0 112 36"><use href="${esc(url('static/format-logos.svg'))}#${logo[0]}"></use></svg>`}</span>`:`<span class="format-chip" title="${esc(description)}">${esc(label)}</span>`;
   }).join('')+(compact&&labels.length>4?`<span class="format-overflow" title="${esc(labels.slice(4).join(', '))}">+${labels.length-4}</span>`:'');
 }
 function detailFormatBadges(item) {

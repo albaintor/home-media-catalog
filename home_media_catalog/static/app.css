@@ -927,3 +927,10 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
 .detail-backdrop.is-loaded img{opacity:.38;filter:blur(3px);transform:scale(1.03)}
 .detail-backdrop img.failed{display:none}
 .detail-backdrop+.detail-layout{position:relative;z-index:1}
+
+/* Match iOS resolution badges; 4K Blu-ray stays in the disc group. */
+.format-option .format-badge.format-720p,.format-option .format-badge.format-1080p{color:#f4d268}
+.format-option .format-badge.format-4k{color:#c5a7fc}
+.format-option .format-badge.format-bluray4k{color:#dce5ef}
+.format-option{min-width:96px}
+.format-option .format-chip{font-size:12px;font-weight:650;min-height:25px;display:flex;align-items:center}

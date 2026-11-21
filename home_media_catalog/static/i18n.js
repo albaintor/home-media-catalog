@@ -3,6 +3,27 @@
  * preferences or the explicit language selector. Persist the user's choice.
  */
 const EN = {
+  "VOTRE CATALOGUE STREAMING": "YOUR STREAMING CATALOGUE",
+  "Actualiser": "Refresh",
+  "Rechercher dans le streaming…": "Search streaming…",
+  "Rechercher dans le streaming": "Search streaming",
+  "Service de streaming": "Streaming service",
+  "Tous les services": "All services",
+  "Films et séries": "Movies and TV",
+  "titres enregistrés": "saved titles",
+  "affichés": "shown",
+  "Titre sans nom": "Untitled",
+  "Ouvrir sur": "Open on",
+  "Publication en attente": "Pending publication",
+  "Ouvrir la fiche": "Open details",
+  "Aucun titre streaming": "No streaming titles",
+  "Ajoutez des titres sur iOS puis synchronisez-les avec le serveur.": "Add titles on iOS and synchronize them with the server.",
+  "Chargement du streaming…": "Loading streaming…",
+  "Réponse serveur invalide": "Invalid server response",
+  "Impossible de charger le streaming : ": "Cannot load streaming: ",
+  "Données précédemment chargées": "Previously loaded data",
+  "Streaming indisponible": "Streaming unavailable",
+
   "Home Media Catalog sur iPhone et iPad": "Home Media Catalog on iPhone and iPad",
   "Télécharger Home Media Catalog sur l’App Store": "Download Home Media Catalog on the App Store",
   "Modifier la fiche": "Edit media",
