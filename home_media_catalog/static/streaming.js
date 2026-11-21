@@ -86,6 +86,10 @@ function syncFilterPreferences(){
   ])$(id).value=String(scoreLimit(key,fallback));
   $('streaming-show-tops').checked=preference('show_tops','true')==='true';
   $('streaming-show-recent').checked=preference('show_recent','true')==='true';
+  const subscribed=new Set(subscribedServices());
+  $('streaming-subscription-options').innerHTML=Object.keys(names).map(key=>
+    '<label><input type="checkbox" data-streaming-subscription="'+esc(key)+'" '+
+    (subscribed.has(key)?'checked':'')+'> '+esc(names[key])+'</label>').join('');
   const genres=new Set(preference('genres','action,drama,comedy').split(','));
   $('streaming-genre-options').innerHTML=genreOptions.map(([key,label])=>
     '<label><input type="checkbox" data-streaming-genre="'+esc(key)+'" '+
@@ -753,7 +757,17 @@ export function startStreaming(){
       'streaming-show-tops':'show_tops','streaming-show-recent':'show_recent'
     };
     const key=keyById[target.id];
-    if(target.dataset.streamingGenre){
+    if(target.dataset.streamingSubscription){
+      const selection=new Set(subscribedServices());
+      if(target.checked)selection.add(target.dataset.streamingSubscription);
+      else selection.delete(target.dataset.streamingSubscription);
+      const next=Object.keys(names).filter(key=>selection.has(key));
+      persistPreference('subscriptions',next.join(','));
+      state.subscriptions=next;
+      state.visible=state.visible.filter(key=>next.includes(key));
+      for(const key of next)if(!state.visible.includes(key))state.visible.push(key);
+      persistPreference('visible_services',state.visible.join(','));
+    }else if(target.dataset.streamingGenre){
       const genre=target.dataset.streamingGenre;
       const chosen=new Set(preference('genres','action,drama,comedy').split(',').filter(Boolean));
       if(target.checked)chosen.add(genre);else chosen.delete(genre);
