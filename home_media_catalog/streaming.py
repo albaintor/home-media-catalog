@@ -402,7 +402,8 @@ async def _tmdb(token: str, path: str, params: dict[str, Any]) -> dict[str, Any]
 
 async def _discover(token: str, service: str, kind: str, genre: int | None,
                     page: int, region: str, sort: str,
-                    order: str = "desc") -> dict[str, Any]:
+                    order: str = "desc", origin_country: str | None = None,
+                    original_language: str | None = None) -> dict[str, Any]:
     # TMDB sorts the entire matching catalogue *before* pagination. Sorting
     # only the 20 titles returned by each page produces misleading results.
     field = {
@@ -428,6 +429,10 @@ async def _discover(token: str, service: str, kind: str, genre: int | None,
         params["first_air_date.lte" if kind == "tv" else "primary_release_date.lte"] = datetime.now(UTC).date().isoformat()
     if genre is not None:
         params["with_genres"] = genre
+    if origin_country:
+        params["with_origin_country"] = origin_country
+    if original_language:
+        params["with_original_language"] = original_language
     result = await _tmdb(token, "/discover/" + ("tv" if kind == "tv" else "movie"), params)
     return {
         "items": [_item(row, kind) for row in result.get("results", []) if row.get("id")],
@@ -705,9 +710,11 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         region: str = Query("FR", pattern=r"^[A-Z]{2}$"),
         sort: str = Query("popularity", pattern=r"^(popularity|rating|recent|title|original_title|year)$"),
         order: str = Query("desc", pattern=r"^(asc|desc)$"),
+        origin_country: str | None = Query(None, pattern=r"^[A-Z]{2}$"),
+        original_language: str | None = Query(None, pattern=r"^[a-z]{2}$"),
     ):
         return await _discover(settings.tmdb_api_token.strip(), service, kind, genre, page,
-                               region, sort, order)
+                               region, sort, order, origin_country, original_language)
 
     @router.get("/search", dependencies=[Depends(authenticated)])
     async def search(
