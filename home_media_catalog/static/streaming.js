@@ -25,11 +25,71 @@ const state = {
   query:'',loaded:false,loading:false,session:null,
   cache:new Map(),titles:new Map(),shelves:new Map(),
   observer:null,version:0,subview:null,selected:null,searchTimer:null,
-  logos:{},detailCache:new Map()
+  logos:{},detailCache:new Map(),metrics:new Map(),person:null,
+  personVersion:0,personReturnKey:null
 };
 function preference(key,fallback) {
   const row=state.rows.find(r=>r.key==='prefs:'+key && !r.deleted);
   return typeof row?.payload?.value==='string'?row.payload.value:fallback;
+}
+function scoreLimit(key,fallback){
+  const score=Number(preference(key,String(fallback)));
+  return Number.isFinite(score)?Math.min(10,Math.max(0,score)):fallback;
+}
+function matchesStreamingFilters(title){
+  const metric=state.metrics.get(keyFor(title));
+  const watch=preference('watch_filter','all');
+  if(watch==='watched'&&metric?.watch_status!=='watched')return false;
+  if(watch==='unwatched'&&metric?.watch_status==='watched')return false;
+  const publicMin=scoreLimit('rating_min',0),publicMax=scoreLimit('rating_max',10);
+  const personalMin=scoreLimit('user_rating_min',0),personalMax=scoreLimit('user_rating_max',10);
+  if(publicMin>0||publicMax<10){
+    const value=Number(title.rating)||Number(metric?.rating)||0;
+    if(!value||value<publicMin||value>publicMax)return false;
+  }
+  if(personalMin>0||personalMax<10){
+    const value=Number(metric?.user_rating);
+    if(metric?.user_rating==null||!Number.isFinite(value)||
+       value<personalMin||value>personalMax)return false;
+  }
+  return true;
+}
+let preferenceWrites=Promise.resolve();
+function persistPreference(key,value){
+  const recordKey='prefs:'+key;
+  const previous=state.rows.find(r=>r.key===recordKey);
+  const modified_at=new Date(Math.max(Date.now(),(Date.parse(previous?.modified_at)||0)+2)).toISOString();
+  const change={key:recordKey,payload:{value:String(value)},modified_at,deleted:false};
+  if(previous)Object.assign(previous,change);
+  else state.rows.push(change);
+  preferenceWrites=preferenceWrites.catch(()=>{}).then(async()=>{
+    if(!state.session)state.session=await api('auth/session');
+    if(state.session.role!=='admin')return;
+    try {
+      const result=await api('streaming/state/sync',{method:'POST',headers:{
+        'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
+      },body:JSON.stringify({changes:[change]})});
+      // Only update the acknowledged row; other unsent local preferences remain.
+      const acknowledged=(result.rows||[]).find(row=>row.key===recordKey);
+      const current=state.rows.find(row=>row.key===recordKey);
+      if(acknowledged&&current?.payload?.value===value)
+        Object.assign(current,acknowledged);
+    }catch(error){failure('Preference synchronization failed: '+error.message);}
+  });
+}
+function syncFilterPreferences(){
+  $('streaming-watch-filter').value=preference('watch_filter','all');
+  for(const [id,key,fallback] of [
+    ['streaming-rating-min','rating_min',0],['streaming-rating-max','rating_max',10],
+    ['streaming-user-rating-min','user_rating_min',0],
+    ['streaming-user-rating-max','user_rating_max',10]
+  ])$(id).value=String(scoreLimit(key,fallback));
+  $('streaming-show-tops').checked=preference('show_tops','true')==='true';
+  $('streaming-show-recent').checked=preference('show_recent','true')==='true';
+  const genres=new Set(preference('genres','action,drama,comedy').split(','));
+  $('streaming-genre-options').innerHTML=genreOptions.map(([key,label])=>
+    '<label><input type="checkbox" data-streaming-genre="'+esc(key)+'" '+
+    (genres.has(key)?'checked':'')+'> '+esc(label)+'</label>').join('');
 }
 function personalRows(kind) {
   return state.rows.filter(row=>!row.deleted &&
@@ -37,7 +97,7 @@ function personalRows(kind) {
     (!kind || row.payload?.kind===kind) &&
     ['saved','pending'].includes(row.payload?.status) &&
     row.payload?.title)
-    .sort((a,b)=>b.modified_at.localeCompare(a.modified_at));
+    .sort((a,b)=>String(b.modified_at||'').localeCompare(String(a.modified_at||'')));
 }
 function keyFor(title){return title.kind+':'+title.id;}
 function savedRow(title){
@@ -178,9 +238,10 @@ function renderSaved(){
   const groups=[['movie','My Movies'],['tv','My Series']];
   $('streaming-saved').innerHTML=groups.map(([kind,heading])=>{
     const titles=personalRows(kind).map(normalizeTitle);
-    if(!titles.length)return '';
-    state.shelves.set('saved-'+kind,{heading,items:titles,kind,saved:true});
-    return shelf('saved-'+kind,heading,titles.map(card).join(''));
+    const visible=titles.filter(matchesStreamingFilters);
+    if(!visible.length)return '';
+    state.shelves.set('saved-'+kind,{heading,items:visible,kind,saved:true});
+    return shelf('saved-'+kind,heading,visible.map(card).join(''));
   }).join('');
 }
 function subscribedServices(){
@@ -282,7 +343,7 @@ function setupDiscover(){
     try{
       const result=await retrieve(def);
       if(version!==state.version)return;
-      def.items=Array.isArray(result.items)?result.items:[];
+      def.items=(Array.isArray(result.items)?result.items:[]).filter(matchesStreamingFilters);
       def.total=result.total_pages||1;
       if(def.sort==='top'&&result.ranking_type==='official_weekly')
         def.heading=def.kind==='tv'?'Top 10 series · Netflix (weekly)':
@@ -337,7 +398,7 @@ async function performSearch(){
     if(gen!==searchGeneration)return;
     $('streaming-discover').innerHTML='';
     for(const kind of (state.kind==='both'?['tv','movie']:[state.kind])){
-      const items=(result.items||[]).filter(x=>x.kind===kind);
+      const items=(result.items||[]).filter(x=>x.kind===kind&&matchesStreamingFilters(x));
       if(!items.length)continue;
       const id='search-'+kind;
       const heading=kind==='tv'?'Series · search results':'Movies · search results';
@@ -353,6 +414,7 @@ function renderBrowser(){
   state.titles.clear();
   state.shelves.clear();
   filterChips();
+  syncFilterPreferences();
   renderSaved();
   if(state.query.trim().length>=2)void performSearch();
   else setupDiscover();
@@ -397,7 +459,7 @@ function renderTitleDetails(title,full=null,loading=false,error='') {
   const saved=savedRow(title);
   const data=full||{};
   const titleText=data.title||title.title;
-  const poster=posterURL(data.poster_path||title.poster_path,'w500');
+  const poster=posterURL(title.poster_path||data.poster_path,'w500');
   const backdrop=posterURL(data.backdrop_path||title.backdrop_path,'w1280');
   const available=servicesFor(title);
   const links=available.map(s=>{
@@ -473,15 +535,15 @@ async function details(key) {
   }
 }
 async function save(title){
-  if(savedRow(title))return;
   try{
     if(!state.session)state.session=await api('auth/session');
     if(state.session.role!=='admin')throw new Error('Administrator access required to save streaming titles.');
+    const existing=savedRow(title);
     const selected=servicesFor(title).filter(x=>names[x]);
     const membership=selected.length?selected:state.visible;
     const key='item:'+keyFor(title);
     const original=state.rows.find(row=>row.key===key);
-    const nextTime=new Date(Math.max(Date.now(),Date.parse(original?.modified_at||'')+2||0)).toISOString();
+    const nextTime=new Date(Math.max(Date.now(),(Date.parse(original?.modified_at)||0)+2)).toISOString();
     const payload={
       tmdb_id:String(title.id),kind:title.kind,title:title.title,
       original_title:title.original_title||title.title,
@@ -493,7 +555,7 @@ async function save(title){
     const result=await api('streaming/state/sync',{
       method:'POST',headers:{
         'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
-      },body:JSON.stringify({changes:[{key,payload,modified_at:nextTime,deleted:false}]})
+      },body:JSON.stringify({changes:[{key,payload:existing?.payload||payload,modified_at:nextTime,deleted:!!existing}]})
     });
     state.rows=result.rows;
     // Retain the full discovery page if a heart is saved from its subview:
@@ -514,9 +576,10 @@ async function load(){
   $('streaming-refresh').disabled=true;
   $('streaming-error').hidden=true;
   try{
-    const [response,session]=await Promise.all([
-      api('streaming/state'),api('auth/session')
+    const [response,session,metrics]=await Promise.all([
+      api('streaming/state'),api('auth/session'),api('streaming/catalogue-metrics')
     ]);
+    state.metrics=new Map((metrics.items||[]).map(m=>[m.kind+':'+m.tmdb_id,m]));
     if(!Array.isArray(response.rows))throw new Error('Invalid streaming state.');
     state.rows=response.rows;
     state.session=session;
@@ -561,7 +624,7 @@ export function startStreaming(){
     state.searchTimer=setTimeout(()=>renderBrowser(),350);
   });
   $('streaming-kind').addEventListener('change',e=>{
-    state.kind=e.target.value;renderBrowser();
+    state.kind=e.target.value;persistPreference('kinds',state.kind);renderBrowser();
   });
   $('streaming-refresh').addEventListener('click',()=>void load());
   $('streaming-services').addEventListener('click',event=>{
@@ -571,7 +634,7 @@ export function startStreaming(){
     if(key==='all')state.visible=[...state.subscriptions];
     else if(state.visible.includes(key))state.visible=state.visible.filter(x=>x!==key);
     else if(state.subscriptions.includes(key))state.visible.push(key);
-    renderBrowser();
+    persistPreference('visible_services',state.visible.join(','));renderBrowser();
   });
   $('streaming-page').addEventListener('click',event=>{
     const heart=event.target.closest('[data-streaming-heart],[data-streaming-save-detail]');
