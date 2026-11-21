@@ -305,6 +305,7 @@ class MediaSummary(BaseModel):
     # Raw collection label -> exact provider UUIDs, for safe cross-source merging.
     collection_sources: dict[str, list[str]] = Field(default_factory=dict)
     source_types: list[str] = Field(default_factory=list)
+    streaming_services: list[str] = Field(default_factory=list)
     media_sources: list[MediaSource] = Field(default_factory=list)
     # Filled only for a local cast/crew search; omitted roles mean no known
     # character/job, not that the person has no credit for the title.
