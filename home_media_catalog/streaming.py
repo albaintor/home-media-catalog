@@ -49,6 +49,7 @@ class StreamingSyncInput(BaseModel):
 
 class StreamingEpisodeImportInput(BaseModel):
     tmdb_id: int = Field(ge=1, le=999999999)
+    episodes: list[dict[str, Any]] | None = Field(default=None, max_length=1500)
 
 
 
@@ -380,6 +381,13 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         known = detail.get("identifiers", {}).get("tmdb") or []
         if known and str(body.tmdb_id) not in [str(value) for value in known]:
             raise HTTPException(409, "TMDB identity mismatch")
+        if body.episodes is not None:
+            try:
+                return await asyncio.to_thread(
+                    store.import_streaming_episodes, media_id, body.tmdb_id, body.episodes
+                )
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
         token = settings.tmdb_api_token.strip()
         series = await _tmdb(token, f"/tv/{body.tmdb_id}", {"language": "fr-FR"})
         numbers = [
