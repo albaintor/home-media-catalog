@@ -275,7 +275,7 @@ async def _search(token: str, selection: str, phrase: str, kind: str,
 
     checked = await asyncio.gather(*(check(k, row) for k, row in candidates))
     matches = [record for record in checked if record is not None]
-    matches.sort(key=lambda record: record["rating"], reverse=True)
+    # Preserve TMDB search relevance order; vote averages are not query scores.
     return {"items": matches, "source": "tmdb", "ranking_type": "search",
             "page": 1, "total_pages": 1, "region": region}
 
