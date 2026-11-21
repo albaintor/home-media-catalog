@@ -8,11 +8,11 @@ All persistent data belongs to the existing self-hosted catalogue database.
 from __future__ import annotations
 
 import asyncio
-import math
 import csv
 import hashlib
 import io
 import json
+import math
 import re
 import time
 from datetime import UTC, datetime
