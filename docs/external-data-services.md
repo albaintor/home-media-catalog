@@ -19,17 +19,21 @@ availability, contractual authorization or current free-tier quotas is implied.
 | Service / reference | iOS | Server/web | What HMC uses it for | API / documentation |
 | --- | --- | --- | --- | --- |
 | **TMDB (The Movie Database)** | **Active** (on-device API token for standalone discovery) | **Active** (configured `TMDB_API_TOKEN`) | Movie/series IDs, posters, episodes, regional SVOD provider availability and search; **does not return a reliable Netflix/Disney+/Prime Video content ID or direct provider playback URL** | [TMDB API](https://developer.themoviedb.org/docs/getting-started), [watch providers](https://developer.themoviedb.org/reference/tv-series-watch-providers) |
+| **Wikidata external provider identifiers** | **Active**: device queries an exact TMDB movie/series ID via SPARQL (`P4947` / `P4983`) and resolves supported Netflix (`P1874`), Prime Video (`P14440`/`P8055`), Disney+ (`P13902`/`P7596`/`P7595`) and Apple TV (`P9751`/`P9586`) links | **Not used** for this streaming resolution | Automatic iOS-first provider-link discovery; unambiguous provider IDs are mapped to validated official URLs and locally cached, then synced when authorized. Availability and universal-link app handoff remain provider-dependent | [Wikidata Query Service](https://query.wikidata.org/), [property P14440](https://www.wikidata.org/wiki/Property:P14440) |
 | **Official Netflix Top 10 (Tudum)** | Not an iOS ID resolver | **Active**, used for the Netflix-specific ranking when available | Country-specific historical weekly rankings, **not** viewing history, provider IDs or deep links | [Netflix Tudum Top 10](https://www.netflix.com/tudum/top10), [country TSV used by HMC](https://www.netflix.com/tudum/top10/data/all-weeks-countries.tsv) |
-| **Official streaming-service URLs** (Netflix, Disney+, Prime Video, Apple TV, Max, Paramount+) | **Active** for *validated, user-supplied links* and fallback title search | **Active** for validating/importing user-supplied links | Save a URL against `(kind, TMDB ID, provider)`, optionally `(season, episode)`; open a known link or fall back to a provider-scoped title search. **No automatic ID discovery** from provider websites | [Netflix](https://www.netflix.com/), [Disney+](https://www.disneyplus.com/), [Prime Video](https://www.primevideo.com/), [Apple TV](https://tv.apple.com/), [Max](https://www.max.com/), [Paramount+](https://www.paramountplus.com/) |
+| **Official streaming-service URLs** (Netflix, Disney+, Prime Video, Apple TV, Max, Paramount+) | **Active** for automatically resolved links, previously synchronized links and fallback title search | **Active** for validating/importing official links via API | Open a known verified title/episode URL or fall back to a provider-scoped title search. Automatic Wikidata resolution only covers supported provider identifiers; not a universal deep-link API | [Netflix](https://www.netflix.com/), [Disney+](https://www.disneyplus.com/), [Prime Video](https://www.primevideo.com/), [Apple TV](https://tv.apple.com/), [Max](https://www.max.com/), [Paramount+](https://www.paramountplus.com/) |
 
 ### Link lifecycle and limitations
 
-- **iOS-first:** association of a copied official link is validated and
-  immediately usable on the device. The `StreamingLibrary` local state journal
-  handles `link:movie:…`, `link:tv:…` and optional `:s{season}e{episode}`
-  entries; the catalogue-storage preference controls whether link records are
-  persisted across app launches. The implementation does **not** yet
-  automatically look up a provider ID from a TMDB ID.
+- **iOS-first:** tapping **Open on [platform]** checks the device's known
+  `link:movie:…`, `link:tv:…` and optional episode records, then attempts
+  an **automatic Wikidata lookup using the exact TMDB ID**. A single valid
+  provider ID is converted to an official destination, retained in the local
+  `StreamingLibrary` journal subject to the catalogue-storage preference,
+  and synchronized to the server when connected with write access. The manual
+  "Associate copied streaming link" UI has been removed. A lookup miss, HTTP
+  failure or unsupported provider leads to a normal title search. Failed
+  lookups are remembered briefly in device memory to avoid repeated requests.
 - **Bidirectional sync:** `GET /api/v1/streaming/state` and
   `POST /api/v1/streaming/state/sync` merge these records by timestamp via
   `streaming_state`. A server administrator can also submit a verified URL
@@ -47,22 +51,29 @@ availability, contractual authorization or current free-tier quotas is implied.
   can become obsolete or be unavailable in France. A universal link is not
   proof that content is included in the user's subscription.
 
-### Streaming URL resolvers considered, **not integrated**
+### Additional streaming URL resolvers considered, **not integrated**
 
-These are potential sources of **automatic** TMDB/IMDb → platform URL mapping,
-not dependencies currently used by HMC:
+Wikidata resolution is implemented for the supported provider properties above.
+The following **additional** APIs are not yet called by HMC:
 
 | Candidate | Potential use | Important constraint | Reference |
 | --- | --- | --- | --- |
-| **Wikidata external identifiers** | Resolve a known TMDB/IMDb title to a provider identifier when a corresponding Wikidata statement exists | Community-maintained and incomplete; the current **barcode** Wikidata lookup (below) does **not** implement streaming-link resolution | [Wikidata Query Service](https://query.wikidata.org/), [data access](https://www.wikidata.org/wiki/Wikidata:Data_access) |
 | **Streaming Availability API (Movie of the Night)** | Query a TMDB/IMDb identifier for country/service streaming options and direct destinations | API key, quotas, attribution, licensing and storage rights must be checked before integration | [API docs](https://docs.movieofthenight.com/), [show lookup](https://docs.movieofthenight.com/resource/shows), [authentication](https://docs.movieofthenight.com/guide/authentication) |
 | **JustWatch official API / widget / exports** | Regional offers and provider navigation | Official integrations are partner-oriented; no HMC integration; unofficial GraphQL access is not a stable public contract | [JustWatch partner docs](https://apis.justwatch.com/docs/) |
 | **Watchmode** | Match TMDB/IMDb IDs to availability and provider destinations | Account and plan limitations; deep-link/episode features and usage rights vary | [Watchmode API](https://api.watchmode.com/docs), [pricing](https://api.watchmode.com/pricing) |
 
-**Possible future iOS resolver order:** existing verified local link →
-Wikidata (when the mapping can be established unambiguously) → a licensed
-streaming-link API when configured → fallback service search. This order is a
-**proposal**, not implemented automatic behavior.
+**Current iOS order:** known local/synchronized link → exact TMDB-to-Wikidata
+mapping for supported properties → provider title search. **Potential future
+enhancement:** add a licensed streaming-link API between Wikidata and search,
+subject to access and storage rights. The server does not perform the automatic
+lookup on behalf of iOS.
+
+For example, Wikidata associates TMDB TV ID `84773` (*The Lord of the Rings:
+The Rings of Power*) with the Amazon Video ASIN `B09QH98YG1`. A native
+Prime Video `/detail/` ID, where supplied, is preferred; otherwise the
+documented Amazon Video detail URL may be opened. A valid Amazon Video URL
+does **not** guarantee that iOS opens the Prime Video app instead of a browser,
+or that it selects a particular season or episode.
 
 ## Physical-disc barcode and technical metadata lookup
 
