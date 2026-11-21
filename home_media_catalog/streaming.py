@@ -534,6 +534,63 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         _CACHE[cache_key] = (time.monotonic(), result)
         return result
 
+    @router.get("/people/{person_id}", dependencies=[Depends(authenticated)])
+    async def person_filmography(
+        person_id: int,
+        language: str = Query("fr-FR", pattern=r"^[a-z]{2}-[A-Z]{2}$"),
+    ):
+        """TMDB-identified person and unfiltered filmography for both web/iOS.
+
+        Do not apply the user's streaming subscriptions here. The web client
+        verifies the regional subscription offers independently for each title.
+        """
+        if not 1 <= person_id <= 999999999:
+            raise HTTPException(422, "Invalid TMDB person identity")
+        cache_key = f"tmdb-person:{language}:{person_id}"
+        cached = _CACHE.get(cache_key)
+        if cached is not None and time.monotonic() - cached[0] < 6 * 3600:
+            return cached[1]
+        raw = await _tmdb(
+            settings.tmdb_api_token.strip(), f"/person/{person_id}",
+            {"language": language, "append_to_response": "combined_credits"},
+        )
+        if raw.get("id") != person_id:
+            raise HTTPException(502, "Unexpected TMDB person identity")
+        credits = raw.get("combined_credits") or {}
+        unique: dict[tuple[str, int], dict[str, Any]] = {}
+        for member in (credits.get("cast") or []) + (credits.get("crew") or []):
+            if not isinstance(member, dict) or member.get("media_type") not in {"movie", "tv"}:
+                continue
+            kind = member["media_type"]
+            identifier = member.get("id")
+            if not isinstance(identifier, int) or identifier < 1:
+                continue
+            record = _item(member, kind)
+            if not record["title"]:
+                continue
+            identity = (kind, identifier)
+            if identity not in unique or member.get("character"):
+                unique[identity] = record
+        filmography = sorted(
+            unique.values(),
+            key=lambda row: (row.get("year") or 0, row.get("rating") or 0),
+            reverse=True,
+        )[:300]
+        photo = raw.get("profile_path")
+        result = {
+            "id": person_id,
+            "name": str(raw.get("name") or "")[:160],
+            "biography": str(raw.get("biography") or "")[:12000],
+            "profile_path": photo if isinstance(photo, str)
+                and re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", photo) else None,
+            "department": str(raw.get("known_for_department") or "")[:100],
+            "filmography": filmography,
+        }
+        if len(_CACHE) >= 160:
+            _CACHE.pop(next(iter(_CACHE)), None)
+        _CACHE[cache_key] = (time.monotonic(), result)
+        return result
+
     @router.get("/catalogue-metrics", dependencies=[Depends(authenticated)])
     def catalogue_metrics():
         """Read-only Kodi/internal-catalogue status and personal scores by TMDB ID.
