@@ -3,6 +3,7 @@ import { startI18n, displayLocale, tr, localizedPrompt, localizedConfirm } from 
 import { MediaPlayer } from './player.js';
 import { startMusic, replayRecentMusic } from './music.js';
 import { startStreaming } from './streaming.js';
+import { bindRatingRange } from './rating-range.js';
 startI18n();
 startMusic();
 startStreaming();
@@ -109,6 +110,9 @@ function updateFormatSelections() {
 
 const state = {csrf:null,role:'read',view:savedView==='list'?'list':'grid',order:preferences.order==='asc'?'asc':'desc',limit:60,recent:preferences.recent===true,formats:[],deepSearch:preferences.deepSearch===true,facets:null,players:[],tmdbAvailable:false,jobs:[],activityPollBusy:false,activityWasRunning:false,personalUpdateState:null,personalRemoteFailure:false,personalPollBusy:false,personalSaveCount:0,seq:0,controller:null,detail:null,detailSeq:0,personalSeq:0,personalPending:new Set(),quickPending:new Set(),enrichingIds:new Set(),personSearch:null,seasons:[],playbackDraft:null,playbackMediaId:null,listId:typeof preferences.listId==='string'?preferences.listId:null,listItems:[],listRevision:0,listSort:['position','title','year','date_added','rating','user_rating'].includes(preferences.listSort)?preferences.listSort:'position',listOrder:preferences.listOrder==='desc'?'desc':'asc',listTotal:0,listSeq:0,items:[],ids:new Set(),nextOffset:0,total:0,hasMore:false,loading:false,loadError:false};
 state.multi={source_type:[],genre:[],watch_status:[]};
+// Reuse the native 0–10 / 0.5-point dual-handle rating semantics.
+const cataloguePublicRating = bindRatingRange('catalog-rating', () => loadMedia());
+const cataloguePersonalRating = bindRatingRange('catalog-user-rating', () => loadMedia());
 state.groupBy=preferences.collectionDefaultsVersion===2?(preferences.groupBy==='collection'?'collection':''):'collection';
 state.openCollection=null;
 state.openCollectionMembers=null;
@@ -180,7 +184,7 @@ function renderCollectionPicker() {
 }
 function savePreferences() {
   if(!filtersRestored)return;
-  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,mergeEquivalentCollections:state.mergeEquivalentCollections,collectionDefaultsVersion:2,collections:state.collections,internalCollectionsOnly:state.internalCollectionsOnly,formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
+  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,mergeEquivalentCollections:state.mergeEquivalentCollections,collectionDefaultsVersion:2,collections:state.collections,internalCollectionsOnly:state.internalCollectionsOnly,formats:state.formats,deepSearch:state.deepSearch,ratingRanges:{public:cataloguePublicRating.get(),personal:cataloguePersonalRating.get()},order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
 }
 function updateSearchClearButton() {
   $('clear-search').hidden=!$('search').value&&!state.personSearch;
@@ -206,6 +210,8 @@ function restoreFilters() {
     const value=id==='kind'&&preferences.filters?.kind==='episode'?'':preferences.filters?.[id];
     if(typeof value==='string'&&(id==='search'||[...$(id).options].some(option=>option.value===value)))$(id).value=value;
   }
+  cataloguePublicRating.set(preferences.ratingRanges?.public?.min ?? 0,preferences.ratingRanges?.public?.max ?? 10);
+  cataloguePersonalRating.set(preferences.ratingRanges?.personal?.min ?? 0,preferences.ratingRanges?.personal?.max ?? 10);
   for(const name of multiNames) {
     const saved=preferences.multiFilters?.[name];
     const legacy=preferences.filters?.[multiLegacyIds[name]];
@@ -564,7 +570,7 @@ const formatLogos = {'4K':['4k','video'],'Blu-ray 4K':['bluray4k','disc'],'8K':[
 const formatImages = {
   '4K':'format-4k','3D':'format-3d','Blu-ray 3D':'format-blu-ray-3d',
   'Blu-ray':'format-blu-ray','Blu-ray 4K':'format-blu-ray-4k',
-  'DVD':'format-dvd','Dolby Vision':'format-dolby-vision',
+  'Dolby Vision':'format-dolby-vision',
   'HDR10':'format-hdr10','HDR10+':'format-hdr10-plus','HLG':'format-hlg',
   'Dolby Atmos':'format-dolby-atmos','Dolby TrueHD':'format-dolby-truehd',
   'Dolby Digital':'format-dolby-digital','Dolby Digital+':'format-dolby-digital-plus',
@@ -1223,6 +1229,17 @@ function currentParams(offset=0) {
   for(const name of names.slice(0,40))params.append('collection',name);
   for(const name of multiNames)for(const value of state.multi[name])params.append(name,value);
   for (const value of state.formats) params.append('format',value);
+  for(const [controller,minKey,maxKey] of [
+    [cataloguePublicRating,'rating_min','rating_max'],
+    [cataloguePersonalRating,'user_rating_min','user_rating_max']
+  ]) {
+    const {min,max}=controller.get();
+    // The unrestricted range must keep films/series without a stored rating.
+    if(min>0||max<10) {
+      params.set(minKey,String(min));
+      params.set(maxKey,String(max));
+    }
+  }
   if(state.personSearch) {
     params.delete('q');
     if(state.personSearch.tmdbId)params.set('person_tmdb_id',state.personSearch.tmdbId);
@@ -1258,7 +1275,9 @@ function currentParams(offset=0) {
 function updateFilterState() {
   const count=['search','kind'].filter(id=>$(id).value).length + state.collections.length + Number(state.internalCollectionsOnly)
     + multiNames.reduce((total,name)=>total+state.multi[name].length,0)
-    + state.formats.length + Number(state.recent) + Number(state.deepSearch) + Number(!!state.groupBy);
+    + state.formats.length + Number(state.recent) + Number(state.deepSearch) + Number(!!state.groupBy)
+    + Number(cataloguePublicRating.get().min>0||cataloguePublicRating.get().max<10)
+    + Number(cataloguePersonalRating.get().min>0||cataloguePersonalRating.get().max<10);
   $('filter-count').textContent=count || '';
   $('reset-filters').hidden=!count;
   const quickStatus=state.multi.watch_status.length===1?state.multi.watch_status[0]:'';
@@ -2174,6 +2193,7 @@ function reset() {
   state.mergeEquivalentCollections=true;$('merge-collections').checked=true;
   $('merge-collections-label').hidden=false;
   renderMultiFilters();
+  cataloguePublicRating.set(0,10);cataloguePersonalRating.set(0,10);
   state.formats=[];state.deepSearch=false;$('deep-search').checked=false;
   updateFormatSelections();state.recent=false;updateSearchClearButton();loadMedia();
 }
