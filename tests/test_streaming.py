@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from home_media_catalog import streaming
+from home_media_catalog.models import InternalMediaInput
 from home_media_catalog.store import Store
 from home_media_catalog.streaming import (
     StreamingStateRow,
@@ -149,3 +150,29 @@ def test_discover_intersects_subscriptions_and_genre(monkeypatch):
     assert seen["with_watch_providers"] == "8|337"
     assert seen["with_watch_monetization_types"] == "flatrate"
     assert seen["with_genres"] == 18
+
+
+def test_streaming_series_poster_and_backdrop_survive_catalogue_rebuild(tmp_path):
+    store = Store(tmp_path / "streaming-media.sqlite")
+    store.initialize()
+    payload = InternalMediaInput(
+        id="2200aaaa-1234-4234-9234-220022002200",
+        kind="tvshow",
+        title="Example Series",
+        tmdb_id="12345",
+        poster_path="/series-poster.jpg",
+        backdrop_path="/series-backdrop.jpg",
+        format="",
+    )
+    created = store.save_internal_media(payload.model_dump())
+    item_id = created["id"]
+    assert store.artwork(item_id, "poster") == [
+        "https://image.tmdb.org/t/p/w500/series-poster.jpg"
+    ]
+    assert store.artwork(item_id, "fanart") == [
+        "https://image.tmdb.org/t/p/w1280/series-backdrop.jpg"
+    ]
+    with store.connect() as conn:
+        store._rebuild(conn, item_id)
+    assert store.artwork(item_id, "poster")
+    assert store.artwork(item_id, "fanart")
