@@ -62,7 +62,7 @@ def test_streaming_catalogue_metrics_use_canonical_tmdb_and_personal_state(tmp_p
     )
     result = endpoint()
     assert result["items"] == [{
-        "kind": "tv", "tmdb_id": 17774,
+        "kind": "tv", "tmdb_id": 17774, "work_id": media_id,
         "watch_status": "watched", "rating": 7.7, "user_rating": 9.5,
     }]
 
