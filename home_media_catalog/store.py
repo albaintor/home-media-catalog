@@ -2549,6 +2549,29 @@ class Store:
                 ids,
             ):
                 by_streaming[record["work_id"]].add(record["service"])
+            # Recover associations for titles saved before edition metadata
+            # carried provider keys, including works merged with Kodi or CLZ.
+            state_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='streaming_state'"
+            ).fetchone()
+            if state_table:
+                for entry in conn.execute(
+                    "SELECT ids.work_id,s.payload FROM identifiers ids "
+                    "JOIN works w ON w.id=ids.work_id "
+                    "JOIN streaming_state s ON s.key='item:' || "
+                    "(CASE WHEN w.kind='tvshow' THEN 'tv' ELSE 'movie' END) "
+                    "|| ':' || ids.value "
+                    f"WHERE ids.work_id IN ({slots}) AND ids.namespace='tmdb' "
+                    "AND w.kind IN ('movie','tvshow') AND s.deleted=0", ids
+                ):
+                    payload = json.loads(entry["payload"])
+                    for key in str(payload.get("services") or "").split(","):
+                        if key in {
+                            "netflix", "disney_plus", "prime_video",
+                            "apple_tv_plus", "hbo_max", "paramount_plus"
+                        }:
+                            by_streaming[entry["work_id"]].add(key)
         custom_titles = {}
         if ids:
             slots = ",".join("?" for _ in ids)
