@@ -48,6 +48,8 @@ The **internal catalogue** is available alongside Kodi, CLZ Movies, My Movies an
 
 TMDB identification requires access to TMDB: the server's configured API token for web/paired operation, or a TMDB token configured on-device for standalone mode. The catalogue still supports manual title entry without that service. Local and server-synchronized behavior depends on compatible client/server versions.
 
+For an inventory of barcode, disc-metadata and streaming providers—including which integrations are implemented in iOS versus the server, optional credentials, and unimplemented candidate resolvers—see [External data services](external-data-services.md).
+
 ## Full feature list
 
 - Title and original-title search remains available. **The current iOS development client enables advanced search by default** (with a one-time migration of older saved defaults), while users can still disable it in Filters and sorting. Advanced search covers synopses, genres, collections, cast and credits. Multiword person names such as **John Williams** are matched against the exact normalized credit-name index where available, avoiding false positives from independent tokens in unrelated metadata. If no credit is indexed, capitalized names fall back to adjacent FTS phrase matching; ordinary keyword searches still support flexible AND matching and prefix typing.
