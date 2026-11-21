@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import io
 import json
 import re
@@ -156,6 +157,77 @@ def _merge(store: Any, incoming: list[StreamingStateRow]) -> list[dict[str, Any]
     return [{"key": row["key"], "payload": json.loads(row["payload"]),
              "modified_at": row["modified_at"], "deleted": bool(row["deleted"])}
             for row in rows]
+
+
+def _streaming_edition_uuid(key: str) -> str:
+    """Use the same deterministic edition UUID as iOS' editionUUID(identity)."""
+    digest = bytearray(hashlib.sha256(("hmc-streaming:" + key).encode()).digest()[:16])
+    digest[6] = (digest[6] & 0x0F) | 0x40
+    digest[8] = (digest[8] & 0x3F) | 0x80
+    value = digest.hex()
+    return "-".join((value[:8], value[8:12], value[12:16],
+                     value[16:20], value[20:]))
+
+
+def _reconcile_streaming_catalogue(store: Any, rows: list[dict[str, Any]]) -> int:
+    """Materialize committed Streaming heart entries into the server catalogue.
+
+    A device using local-first storage can synchronize its Streaming state
+    before its asynchronous catalogue upload completes. This idempotent
+    reconciliation ensures web /media sees those titles in the meantime.
+    The deterministic edition key is identical to iOS, so the later regular
+    catalogue journal upload does not create a second internal edition.
+    Never remove catalogue entries just because a heart row was tombstoned.
+    """
+    wanted = []
+    for row in rows:
+        if row["deleted"] or not re.fullmatch(r"item:(movie|tv):[0-9]{1,24}", row["key"]):
+            continue
+        data = row["payload"]
+        if data.get("status") not in {"saved", "pending"}:
+            continue
+        kind = row["key"].split(":")[1]
+        tmdb_id = row["key"].split(":")[2]
+        title = data.get("title")
+        if (not isinstance(title, str) or not title.strip() or len(title.strip()) > 300
+                or data.get("tmdb_id") != tmdb_id or data.get("kind") != kind):
+            continue
+        service_names = data.get("services", "")
+        if not isinstance(service_names, str):
+            continue
+        services = [key for key in dict.fromkeys(service_names.split(","))
+                    if key in PROVIDERS]
+        year = data.get("year")
+        if not isinstance(year, str) or not year.isdecimal() or not 1870 <= int(year) <= 2200:
+            year = None
+        poster = data.get("poster_path")
+        if not isinstance(poster, str) or not re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", poster):
+            poster = None
+        backdrop = data.get("backdrop_path")
+        if not isinstance(backdrop, str) or not re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", backdrop):
+            backdrop = None
+        wanted.append({
+            "id": _streaming_edition_uuid(row["key"]),
+            "kind": "tvshow" if kind == "tv" else "movie",
+            "tmdb_id": tmdb_id, "title": title.strip(),
+            "original_title": title.strip(),
+            "year": int(year) if year is not None else None,
+            "poster_path": poster, "backdrop_path": backdrop,
+            "format": "", "streaming_services": services,
+        })
+    if not wanted:
+        return 0
+    with store.connect() as db:
+        known = {row["external_key"] for row in db.execute(
+            "SELECT external_key FROM records WHERE source_id='internal'"
+        )}
+    created = 0
+    for data in wanted:
+        if data["id"] in known:
+            continue
+        store.save_internal_media(data)
+        created += 1
+    return created
 
 
 def _provider_keys(selection: str) -> list[str]:
@@ -338,6 +410,9 @@ async def _search(token: str, selection: str, phrase: str, kind: str,
 
 def build_streaming_router(store: Any, settings: Any) -> APIRouter:
     router = APIRouter(prefix="/api/v1/streaming", tags=["Streaming"])
+    # Recover heart-saved titles from installs where iOS synced its state
+    # before the local-first media journal was uploaded to the NAS.
+    _reconcile_streaming_catalogue(store, _merge(store, []))
 
     @router.get("/providers", dependencies=[Depends(authenticated)])
     async def providers(region: str = Query("FR", pattern=r"^[A-Z]{2}$")):
@@ -503,6 +578,8 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
 
     @router.post("/state/sync", dependencies=[Depends(writable)])
     def sync_state(body: StreamingSyncInput):
-        return {"rows": _merge(store, body.changes)}
+        merged = _merge(store, body.changes)
+        _reconcile_streaming_catalogue(store, merged)
+        return {"rows": merged}
 
     return router

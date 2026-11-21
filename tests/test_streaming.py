@@ -302,3 +302,48 @@ def test_prime_only_accepts_primevideo_host_not_american_retail_asin():
         _official_link("https://www.amazon.fr/gp/video/detail/B09QH98YG1", "prime_video")
     with pytest.raises(HTTPException):
         _official_link("https://www.amazon.com/gp/video/detail/B09QH98YG1", "prime_video")
+
+
+
+def test_streaming_heart_state_materializes_media_for_web_video_catalogue(tmp_path):
+    """Local-first iOS state must also show up in server /media before journal upload."""
+    from home_media_catalog.streaming import _streaming_edition_uuid, _reconcile_streaming_catalogue
+    store = Store(tmp_path / "streaming-to-video.sqlite")
+    store.initialize()
+    movie = StreamingStateRow(
+        key="item:movie:550", modified_at=datetime(2026, 11, 21, tzinfo=UTC).isoformat(),
+        payload={"kind": "movie", "tmdb_id": "550", "title": "Sample streaming film",
+                 "year": "1999", "poster_path": "/movie.jpg",
+                 "services": "netflix,prime_video", "status": "saved"}
+    )
+    series = StreamingStateRow(
+        key="item:tv:780", modified_at=datetime(2026, 11, 21, tzinfo=UTC).isoformat(),
+        payload={"kind": "tv", "tmdb_id": "780", "title": "Sample streaming series",
+                 "services": "disney_plus", "status": "pending"}
+    )
+    rows = _merge(store, [movie, series])
+    assert _reconcile_streaming_catalogue(store, rows) == 2
+    assert _reconcile_streaming_catalogue(store, _merge(store, [])) == 0
+    listed = store.media(limit=20)["items"]
+    titles = {item["title"] for item in listed}
+    assert {"Sample streaming film", "Sample streaming series"} <= titles
+    assert len(listed) == 2
+    assert store.media(kind="movie")["total"] == 1
+    assert store.media(kind="tvshow")["total"] == 1
+    assert _streaming_edition_uuid("item:movie:550").count("-") == 4
+    film = next(item for item in listed if item["kind"] == "movie")
+    assert store.detail(film["id"])["streaming_services"] == ["netflix", "prime_video"]
+
+
+def test_tombstoned_heart_does_not_recreate_deleted_streaming_edition(tmp_path):
+    from home_media_catalog.streaming import _reconcile_streaming_catalogue
+    store = Store(tmp_path / "streaming-deleted.sqlite")
+    store.initialize()
+    deleted = StreamingStateRow(
+        key="item:movie:552", modified_at=datetime(2026, 11, 21, tzinfo=UTC).isoformat(),
+        payload={"kind": "movie", "tmdb_id": "552", "title": "Deleted",
+                 "services": "netflix", "status": "saved"},
+        deleted=True,
+    )
+    assert _reconcile_streaming_catalogue(store, _merge(store, [deleted])) == 0
+    assert store.media()["total"] == 0
