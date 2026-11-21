@@ -1,0 +1,30 @@
+name: Streaming integration
+on:
+  push:
+    paths:
+      - 'home_media_catalog/streaming.py'
+      - 'home_media_catalog/app.py'
+      - 'tests/test_streaming.py'
+      - '.github/workflows/streaming.yml'
+  pull_request:
+    paths:
+      - 'home_media_catalog/streaming.py'
+      - 'home_media_catalog/app.py'
+      - 'tests/test_streaming.py'
+      - '.github/workflows/streaming.yml'
+  workflow_dispatch:
+
+jobs:
+  streaming:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Test streaming state and provider adapters
+        run: pytest -q tests/test_streaming.py
+      - name: Check streaming module lint
+        run: ruff check home_media_catalog/streaming.py tests/test_streaming.py
