@@ -15,6 +15,7 @@ import re
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -45,6 +46,53 @@ class StreamingStateRow(BaseModel):
 
 class StreamingSyncInput(BaseModel):
     changes: list[StreamingStateRow] = Field(default_factory=list, max_length=1000)
+
+
+class StreamingLinkImportInput(BaseModel):
+    tmdb_id: int = Field(ge=1, le=999999999)
+    kind: str = Field(pattern=r"^(movie|tv)$")
+    service: str = Field(pattern=r"^[a-z_]{2,40}$")
+    url: str = Field(min_length=15, max_length=2000)
+    season: int | None = Field(default=None, ge=0, le=10000)
+    episode: int | None = Field(default=None, ge=1, le=10000)
+
+
+_LINK_HOSTS = {
+    "netflix": ("netflix.com",),
+    "disney_plus": ("disneyplus.com",),
+    "prime_video": ("primevideo.com", "amazon.fr", "amazon.com"),
+    "apple_tv_plus": ("tv.apple.com",),
+    "hbo_max": ("max.com", "hbomax.com"),
+    "paramount_plus": ("paramountplus.com",),
+}
+
+
+def _official_link(url: str, service: str) -> tuple[str, str]:
+    """Validate a user-shared official destination without scraping a provider."""
+    parsed = urlsplit(url.strip())
+    host = (parsed.hostname or "").lower()
+    allowed = _LINK_HOSTS.get(service, ())
+    if (parsed.scheme != "https" or parsed.username or parsed.password or parsed.port
+            or not allowed or not any(host == name or host.endswith("." + name)
+                                       for name in allowed)
+            or parsed.path in ("", "/") or len(url) > 2000):
+        raise HTTPException(422, "Invalid official streaming URL")
+    components = [item for item in parsed.path.split("/") if item]
+    if "search" in components:
+        raise HTTPException(422, "Search URLs are not direct content links")
+    provider_id = ""
+    if service == "netflix":
+        if len(components) < 2 or components[0] != "title" or not components[1].isdigit():
+            raise HTTPException(422, "Expected a Netflix title URL")
+        provider_id = components[1]
+    elif service == "prime_video" and "detail" in components:
+        index = components.index("detail") + 1
+        provider_id = components[index] if index < len(components) else ""
+    elif service == "apple_tv_plus":
+        provider_id = next((value for value in components if value.startswith("umc.cmc.")), "")
+        if not provider_id:
+            raise HTTPException(422, "Expected an Apple TV content URL")
+    return parsed.geturl(), provider_id
 
 
 class StreamingEpisodeImportInput(BaseModel):
@@ -421,6 +469,31 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
             )
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
+
+    @router.post("/links/import", dependencies=[Depends(writable)])
+    def import_provider_link(body: StreamingLinkImportInput):
+        """Resolve an official shared URL locally on the NAS and sync to iOS.
+
+        This deliberately does not infer Netflix/Disney/etc IDs from TMDB IDs.
+        Episodes have optional independent links; series links remain fallback.
+        """
+        if (body.season is None) != (body.episode is None):
+            raise HTTPException(422, "Season and episode must be supplied together")
+        if body.season is not None and body.kind != "tv":
+            raise HTTPException(422, "Episode links require a TV series")
+        if body.service not in PROVIDERS:
+            raise HTTPException(422, "Unsupported streaming provider")
+        url, provider_id = _official_link(body.url, body.service)
+        suffix = (f":s{body.season}e{body.episode}"
+                  if body.season is not None else "")
+        key = f"link:{body.kind}:{body.tmdb_id}:{body.service}{suffix}"
+        timestamp = datetime.now(UTC).isoformat(timespec="microseconds")
+        row = StreamingStateRow(
+            key=key, modified_at=timestamp,
+            payload={"url": url, "provider_id": provider_id,
+                     "source": "official_share_link"})
+        _merge(store, [row])
+        return {"key": key, "url": url, "provider_id": provider_id}
 
     @router.get("/state", dependencies=[Depends(authenticated)])
     def read_state():
