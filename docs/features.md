@@ -65,6 +65,28 @@ subscription availability or grant playback rights. [External data
 services](external-data-services.md) documents the sources and their
 limitations.
 
+## Unified iOS synchronization activity (branch `streaming`)
+
+Settings now exposes **one conditional Synchronization and activity entry**,
+driven by the same snapshot as the Settings tab badge. It is shown for active
+operations, pending changes, or failed tasks; once these clear, both the
+badge and the entry disappear. The detail page stays open if the final task
+finishes while it is being viewed. That single screen combines **catalogue
+jobs, Streaming state, local/remote artwork, personal changes, third-party
+writebacks, TMDB pending uploads and synchronization history**, with
+appropriate retry controls. The old separate **Synchronization history**
+and **External synchronization** Settings/Sources entries were removed.
+Manual **Synchronize catalog now** and **Refresh remote Kodi libraries**
+actions remain available in Settings → Sources even when no work is active.
+The app periodically refreshes the pending server writeback count while
+foregrounded so older failed outbound changes also affect the badge.
+
+When a Streaming sync response cannot be decoded, the iOS client now reports
+the actual missing JSON key or incompatible data path instead of the generic
+localized *data missing* message. The failed local change journal is kept
+for retry. This improves diagnostics but is **not** a substitute for running
+compatible NAS/server code.
+
 ## Built-in catalogue, barcode identification and collection grouping
 
 The **internal catalogue** is available alongside Kodi, CLZ Movies, My Movies and Filmotech. A movie, TV series or physical DVD/Blu-ray edition can be added without a playable file, an XML export or a Kodi instance. It is usable through the web server and in the native iPhone/iPad app, including iOS standalone mode.
