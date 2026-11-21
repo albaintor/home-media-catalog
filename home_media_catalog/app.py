@@ -450,6 +450,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "media_details_batch",
                 "tmdb_device_credentials",
                 "tmdb_rating_refresh",
+                "streaming_tmdb_discovery",
+                "streaming_chart_fallback",
+                "streaming_state_sync",
             ],
         }
 
