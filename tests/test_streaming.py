@@ -180,6 +180,28 @@ def test_discover_intersects_subscriptions_and_genre(monkeypatch):
 
 
 
+def test_discover_applies_public_score_bounds_before_pagination(monkeypatch):
+    seen = {}
+
+    async def fake_tmdb(_token, path, params):
+        seen.update(params)
+        assert path == "/discover/tv"
+        return {"page": 3, "total_pages": 12, "results": []}
+
+    monkeypatch.setattr(streaming, "_tmdb", fake_tmdb)
+    result = asyncio.run(streaming._discover(
+        "token", "netflix", "tv", 18, 3, "FR",
+        "popularity", "desc", "KR", "ko", 8.0, 9.5,
+    ))
+    assert result["page"] == 3
+    assert result["total_pages"] == 12
+    assert seen["vote_average.gte"] == 8.0
+    assert seen["vote_average.lte"] == 9.5
+    assert seen["vote_count.gte"] == 1
+    assert seen["with_origin_country"] == "KR"
+    assert seen["with_original_language"] == "ko"
+
+
 def test_kdrama_and_korean_movie_categories_keep_subscription_and_region(monkeypatch):
     captured = []
 
