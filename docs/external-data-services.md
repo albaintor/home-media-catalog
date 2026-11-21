@@ -64,6 +64,20 @@ availability, contractual authorization or current free-tier quotas is implied.
   unwatched episode.** That choice depends on the service's own application.
   The direct link may open an app through iOS universal links or remain in
   a browser; neither behavior nor direct playback is universally guaranteed.
+- **Native-app handoff (iOS):** a resolved official HTTPS destination is
+  first opened with `UIApplication.open` and `universalLinksOnly = true`,
+  which succeeds only when an installed app accepts that universal link.
+  For Prime Video, an official `app.primevideo.com/detail?gti=…` share link
+  is preferred when a validated GTI is known. If no universal-link association
+  accepts the URL, iOS also attempts a Prime-specific
+  `aiv://detail?asin=…` or `aiv://detail?gti=…` native scheme built from the
+  verified provider identifier—not from the TMDB ID. The `aiv` format is
+  known from third-party iOS link registrations, not a publicly guaranteed
+  Amazon API, so opening the intended screen still requires on-device testing.
+  Only if native attempts fail does HMC open the original working HTTPS
+  detail page in the browser. No `LSApplicationQueriesSchemes` entitlement is
+  required because this path calls `UIApplication.open` directly rather than
+  `canOpenURL`.
 - **Privacy and accuracy:** never manufacture Netflix/Prime/etc. IDs from TMDB
   IDs; validate the host and content path before storing a shared URL. A link
   can become obsolete or be unavailable in France. A universal link is not
