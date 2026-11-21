@@ -26,7 +26,8 @@ const state = {
   cache:new Map(),titles:new Map(),shelves:new Map(),
   observer:null,version:0,subview:null,selected:null,searchTimer:null,
   logos:{},detailCache:new Map(),metrics:new Map(),person:null,
-  personVersion:0,personReturnKey:null,personAvailabilityCache:new Map()
+  personVersion:0,personReturnKey:null,personAvailabilityCache:new Map(),
+  lists:[],collections:[],detailMessage:''
 };
 function preference(key,fallback) {
   const row=state.rows.find(r=>r.key==='prefs:'+key && !r.deleted);
@@ -138,7 +139,7 @@ async function api(route,options={}){
     try{const data=await response.json();message=data.detail||data.error?.message||message;}catch{}
     throw new Error(typeof message==='string'?message:JSON.stringify(message));
   }
-  return response.json();
+  return response.status===204?null:response.json();
 }
 function failure(text){$('streaming-error').textContent=text;$('streaming-error').hidden=false;}
 function servicesFor(title){
@@ -462,9 +463,104 @@ async function loadNext(){
     button.hidden=def.page>=def.total;
   }catch(e){failure(e.message);}finally{button.disabled=false;}
 }
+function renderListCollectionActions(){
+  if(state.session?.role!=='admin')return '';
+  const listOptions=state.lists.map(item=>
+    '<option value="'+esc(item.id)+'">'+esc(item.name)+'</option>').join('');
+  const collections=state.collections.filter(row=>row.is_manual===true);
+  const collectionOptions=collections.map(item=>
+    '<option value="'+esc(item.id)+'">'+esc(item.name)+'</option>').join('');
+  return '<div class="streaming-assignments">'+
+    '<label>Liste<select id="streaming-list-pick" aria-label="Choisir une liste">'+
+      (listOptions||'<option value="">Aucune liste</option>')+'</select></label>'+
+    '<button type="button" data-streaming-assign="list" '+
+      (!state.lists.length?'disabled':'')+'>Ajouter</button>'+
+    '<button type="button" data-streaming-new="list">+ Nouvelle liste</button>'+
+    '<label>Collection interne<select id="streaming-collection-pick" aria-label="Choisir une collection">'+
+      (collectionOptions||'<option value="">Aucune collection</option>')+'</select></label>'+
+    '<button type="button" data-streaming-assign="collection" '+
+      (!collections.length?'disabled':'')+'>Ajouter</button>'+
+    '<button type="button" data-streaming-new="collection">+ Nouvelle collection</button>'+
+    '</div>';
+}
+async function refreshListsCollections(){
+  try{
+    const [lists,collections]=await Promise.all([
+      api('lists'),api('collections')
+    ]);
+    state.lists=Array.isArray(lists)?lists:[];
+    state.collections=Array.isArray(collections)?collections:[];
+  }catch{/* Catalogue remains usable when list management is unavailable. */}
+}
+async function ensureWorkID(title){
+  const key=keyFor(title);
+  let workID=state.metrics.get(key)?.work_id||savedRow(title)?.payload?.work_id;
+  if(workID)return workID;
+  // Saving a Streaming heart materializes the canonical work on the server.
+  if(!savedRow(title)){
+    const saved=await save(title);
+    if(!saved)throw new Error('Could not save the title to the catalogue.');
+  } else {
+    await api('streaming/state/sync',{
+      method:'POST',headers:{
+        'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
+      },body:JSON.stringify({changes:[]})
+    });
+  }
+  const metrics=await api('streaming/catalogue-metrics');
+  state.metrics=new Map((metrics.items||[]).map(item=>
+    [item.kind+':'+item.tmdb_id,item]));
+  workID=state.metrics.get(key)?.work_id;
+  if(!workID)throw new Error('The title has not yet been indexed in the catalogue.');
+  return workID;
+}
+async function assignToListOrCollection(type,create=false){
+  const key=state.selected;
+  const title=state.titles.get(key);
+  if(!title||!['list','collection'].includes(type))return;
+  const existing=type==='list'?state.lists:state.collections.filter(row=>row.is_manual===true);
+  const id=create?'':$(type==='list'?'streaming-list-pick':'streaming-collection-pick')?.value;
+  if(!create&&!existing.some(item=>item.id===id))return;
+  let name='';
+  if(create){
+    name=prompt(type==='list'?'Nom de la nouvelle liste':'Nom de la nouvelle collection')?.trim();
+    if(!name)return;
+  }
+  try{
+    state.detailMessage='Enregistrement…';
+    renderTitleDetails(title,state.detailCache.get(key));
+    if(!state.session)state.session=await api('auth/session');
+    if(state.session.role!=='admin')throw new Error('Administrator access required.');
+    const workID=await ensureWorkID(title);
+    let targetID=id;
+    if(create){
+      const created=await api(type==='list'?'lists':'collections',{
+        method:'POST',headers:{
+          'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
+        },body:JSON.stringify({name})
+      });
+      targetID=created.id;
+    }
+    await api(type==='list'?'lists/'+encodeURIComponent(targetID)+'/items':
+      'collections/'+encodeURIComponent(targetID)+'/items',{
+      method:'POST',headers:{
+        'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
+      },body:JSON.stringify(type==='list'?{media_id:workID}:{media_ids:[workID]})
+    });
+    if(create)await refreshListsCollections();
+    state.detailMessage=type==='list'?'Ajouté à la liste.':'Ajouté à la collection.';
+  }catch(error){state.detailMessage='Échec de l’ajout : '+error.message;}
+  finally{
+    // The asynchronous save can rebuild the shelf map; keep the selected title.
+    state.titles.set(key,title);
+    if(state.selected===key&&$('streaming-title-dialog').open)
+      renderTitleDetails(title,state.detailCache.get(key));
+  }
+}
 function renderTitleDetails(title,full=null,loading=false,error='') {
   const key=keyFor(title);
   const saved=savedRow(title);
+  const work=state.metrics.get(key)?.work_id||saved?.payload?.work_id;
   const data=full||{};
   const titleText=data.title||title.title;
   const poster=posterURL(title.poster_path||data.poster_path,'w500');
@@ -507,10 +603,13 @@ function renderTitleDetails(title,full=null,loading=false,error='') {
     '<p>'+esc(meta)+'</p>'+
     '<div class="streaming-detail-actions"><button type="button" class="secondary" data-streaming-save-detail="'+
     esc(key)+'">'+esc(saved?'♥ In my catalog':'♡ Add to catalog')+'</button>'+
-    (saved?.payload?.work_id?
+    (work?
       '<button type="button" class="secondary" data-streaming-work="'+
-      esc(saved.payload.work_id)+'">Open catalog entry</button>':'')+
-    '</div><div class="streaming-detail-services">'+links+'</div></div></div>'+
+      esc(work)+'">Open catalog entry</button>':'')+
+    '</div>'+renderListCollectionActions()+
+    '<div class="streaming-detail-services">'+links+'</div>'+
+    (state.detailMessage?'<p class="streaming-detail-feedback" role="status">'+
+      esc(state.detailMessage)+'</p>':'')+'</div></div>'+
     (genres?'<div class="streaming-detail-genres">'+genres+'</div>':'')+
     (body?'<section class="streaming-detail-section"><h3>Synopsis</h3><p class="synopsis">'+esc(body)+'</p></section>':
       loading?'<p class="streaming-detail-loading">Loading synopsis…</p>':'')+
@@ -524,6 +623,7 @@ async function details(key) {
   const title=state.titles.get(key);
   if(!title)return;
   state.selected=key;
+  state.detailMessage='';
   const cached=state.detailCache.get(key);
   renderTitleDetails(title,cached||null,!cached);
   if(!$('streaming-title-dialog').open)$('streaming-title-dialog').showModal();
@@ -698,9 +798,11 @@ async function save(title){
       state.shelves.set(currentSubview.id,previousShelf);
       showSubview(currentSubview.id);
     }
+    state.titles.set(keyFor(title),title);
     if(state.selected===keyFor(title))void details(state.selected);
     if($('streaming-person-dialog').open)renderPerson();
-  }catch(e){failure(e.message);}
+    return true;
+  }catch(e){failure(e.message);return false;}
 }
 async function load(){
   if(state.loading)return;
@@ -722,6 +824,7 @@ async function load(){
     if(!['both','tv','movie'].includes(state.kind))state.kind='both';
     $('streaming-kind').value=state.kind;
     state.loaded=true;
+    await refreshListsCollections();
     renderBrowser();
     void loadProviderLogos();
   }catch(e){failure(e.message);}finally{
@@ -828,6 +931,13 @@ export function startStreaming(){
         detail:{mediaID:personCatalog.dataset.streamingCatalogItem}
       }));
       return;
+    }
+    const add=event.target.closest('[data-streaming-assign],[data-streaming-new]');
+    if(add){
+      void assignToListOrCollection(
+        add.dataset.streamingAssign||add.dataset.streamingNew,
+        !!add.dataset.streamingNew
+      );return;
     }
     const heart=event.target.closest('[data-streaming-heart],[data-streaming-save-detail]');
     if(heart){
