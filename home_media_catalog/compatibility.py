@@ -27,7 +27,9 @@ MIN_MOBILE_CONTRACT = 1
 # Contract 7 introduces per-installation streaming discovery and revisioned state
 # sync. Contract 6 clients remain supported; only clients requesting the new
 # streaming functionality require contract 7.
-MAX_MOBILE_CONTRACT = 7
+# Contract 8 adds title-specific provider opening and persisted TMDB backdrops
+# for streaming additions. Contract 7 clients remain supported.
+MAX_MOBILE_CONTRACT = 8
 
 
 def mobile_compatibility() -> dict[str, int]:
