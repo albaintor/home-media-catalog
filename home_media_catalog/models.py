@@ -173,6 +173,7 @@ class InternalMediaInput(StrictModel):
     edition_details: PhysicalEditionDetails | None = None
     poster_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
     backdrop_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
+    streaming_services: list[Literal["netflix", "disney_plus", "prime_video", "apple_tv_plus", "hbo_max", "paramount_plus"]] = Field(default_factory=list, max_length=6)
     physical_season: int | None = Field(default=None, ge=0, le=10000)
     physical_title: str | None = Field(default=None, max_length=300)
     physical_episode_count: int | None = Field(default=None, ge=0, le=10000)
