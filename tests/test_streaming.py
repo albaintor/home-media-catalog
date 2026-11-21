@@ -466,6 +466,84 @@ def test_prime_only_accepts_primevideo_host_not_american_retail_asin():
 
 
 
+
+
+def test_streaming_season_episodes_are_readable_without_catalogue_import(monkeypatch):
+    """The discovery sheet must not require a Streaming heart or catalog work."""
+    from types import SimpleNamespace
+
+    queries = []
+
+    async def fake_tmdb(_token, path, params):
+        queries.append((path, params))
+        return {"episodes": [
+            {"id": 123456, "episode_number": 1,
+             "name": "First episode", "overview": "Synopsis",
+             "air_date": "2026-01-01", "still_path": "/still.jpg"},
+            {"id": 123457, "episode_number": 2,
+             "name": "", "overview": "", "air_date": None,
+             "still_path": None},
+        ]}
+
+    monkeypatch.setattr(streaming, "_tmdb", fake_tmdb)
+    router = streaming.build_streaming_router(
+        None, SimpleNamespace(tmdb_api_token="test"))
+    endpoint = next(route.endpoint for route in router.routes
+                    if route.path.endswith(
+                        "/titles/tv/{tmdb_id}/seasons/{season_number}/episodes"))
+    result = asyncio.run(
+        endpoint(tmdb_id=987654321, season_number=2, language="fr-FR"))
+    assert queries == [
+        ("/tv/987654321/season/2", {"language": "fr-FR"})
+    ]
+    assert len(result["episodes"]) == 2
+    assert result["episodes"][0] == {
+        "season": 2, "episode": 1, "tmdb_id": 123456,
+        "title": "First episode", "overview": "Synopsis",
+        "air_date": "2026-01-01", "still_path": "/still.jpg",
+    }
+    assert result["episodes"][1]["title"] == "Episode 2"
+
+    # The second request comes from the metadata cache, without a second
+    # TMDB lookup or a media-catalog write.
+    again = asyncio.run(
+        endpoint(tmdb_id=987654321, season_number=2, language="fr-FR"))
+    assert again == result
+    assert len(queries) == 1
+
+
+def test_streaming_keyword_search_and_keyword_discover(monkeypatch):
+    from types import SimpleNamespace
+
+    observed = []
+
+    async def fake_tmdb(_token, path, params):
+        observed.append((path, params))
+        if path == "/search/keyword":
+            return {"results": [
+                {"id": 12345, "name": "time travel"},
+                {"id": 12345, "name": "duplicate"},
+                {"id": -1, "name": "invalid"},
+            ]}
+        return {"page": 1, "total_pages": 3, "results": []}
+
+    monkeypatch.setattr(streaming, "_tmdb", fake_tmdb)
+    router = streaming.build_streaming_router(
+        None, SimpleNamespace(tmdb_api_token="test"))
+    search = next(route.endpoint for route in router.routes
+                  if route.path.endswith("/categories/search"))
+    result = asyncio.run(search(q="travel"))
+    assert result == {"results": [{"id": 12345, "name": "time travel"}]}
+
+    discovery = asyncio.run(streaming._discover(
+        "test", "netflix", "tv", None, 1, "FR", "popularity",
+        keyword_id=12345,
+    ))
+    assert discovery["total_pages"] == 3
+    assert observed[-1][0] == "/discover/tv"
+    assert observed[-1][1]["with_keywords"] == 12345
+    assert observed[-1][1]["with_watch_monetization_types"] == "flatrate"
+
 def test_streaming_heart_state_materializes_media_for_web_video_catalogue(tmp_path):
     """Local-first iOS state must also show up in server /media before journal upload."""
     from home_media_catalog.streaming import _reconcile_streaming_catalogue, _streaming_edition_uuid
