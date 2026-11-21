@@ -378,3 +378,23 @@ def test_title_metadata_includes_summary_genres_cast_and_tv_seasons():
     assert result["year"] == 2025
     assert _title_metadata({"id": 8, "title": "Film", "runtime": 95}, "movie")[
         "runtime_minutes"] == 95
+
+
+
+def test_synopsis_from_streaming_journal_is_preserved_in_server_catalogue(tmp_path):
+    from home_media_catalog.streaming import _reconcile_streaming_catalogue
+    store = Store(tmp_path / "streaming-plot.sqlite")
+    store.initialize()
+    row = StreamingStateRow(
+        key="item:movie:889", modified_at=datetime(2026, 11, 21, tzinfo=UTC).isoformat(),
+        payload={
+            "kind": "movie", "tmdb_id": "889", "title": "Example",
+            "original_title": "Original Example", "overview": "Full plot summary",
+            "rating": "8.4", "status": "saved", "services": "netflix",
+        },
+    )
+    assert _reconcile_streaming_catalogue(store, _merge(store, [row])) == 1
+    result = store.media(kind="movie")["items"][0]
+    assert result["plot"] == "Full plot summary"
+    assert result["original_title"] == "Original Example"
+    assert result["rating"] == 8.4

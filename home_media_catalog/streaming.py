@@ -8,6 +8,7 @@ All persistent data belongs to the existing self-hosted catalogue database.
 from __future__ import annotations
 
 import asyncio
+import math
 import csv
 import hashlib
 import io
@@ -286,11 +287,24 @@ def _reconcile_streaming_catalogue(store: Any, rows: list[dict[str, Any]]) -> in
         backdrop = data.get("backdrop_path")
         if not isinstance(backdrop, str) or not re.fullmatch(r"/[A-Za-z0-9_.-]{1,150}", backdrop):
             backdrop = None
+        original = data.get("original_title")
+        if not isinstance(original, str) or not 1 <= len(original.strip()) <= 300:
+            original = title
+        overview = data.get("overview")
+        if not isinstance(overview, str) or len(overview) > 5000:
+            overview = None
+        try:
+            rating = float(data.get("rating", ""))
+            if not math.isfinite(rating) or not 0 <= rating <= 10:
+                rating = None
+        except (ValueError, TypeError):
+            rating = None
         wanted.append({
             "id": _streaming_edition_uuid(row["key"]),
             "kind": "tvshow" if kind == "tv" else "movie",
             "tmdb_id": tmdb_id, "title": title.strip(),
-            "original_title": title.strip(),
+            "original_title": original.strip(),
+            "plot": overview, "rating": rating,
             "year": int(year) if year is not None else None,
             "poster_path": poster, "backdrop_path": backdrop,
             "format": "", "streaming_services": services,

@@ -484,6 +484,8 @@ async function save(title){
     const nextTime=new Date(Math.max(Date.now(),Date.parse(original?.modified_at||'')+2||0)).toISOString();
     const payload={
       tmdb_id:String(title.id),kind:title.kind,title:title.title,
+      original_title:title.original_title||title.title,
+      overview:title.overview||'',rating:String(title.rating||0),
       year:title.year?String(title.year):'',poster_path:title.poster_path||'',
       backdrop_path:title.backdrop_path||'',services:membership.join(','),
       status:'pending'
