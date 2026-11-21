@@ -410,9 +410,6 @@ async def _search(token: str, selection: str, phrase: str, kind: str,
 
 def build_streaming_router(store: Any, settings: Any) -> APIRouter:
     router = APIRouter(prefix="/api/v1/streaming", tags=["Streaming"])
-    # Recover heart-saved titles from installs where iOS synced its state
-    # before the local-first media journal was uploaded to the NAS.
-    _reconcile_streaming_catalogue(store, _merge(store, []))
 
     @router.get("/providers", dependencies=[Depends(authenticated)])
     async def providers(region: str = Query("FR", pattern=r"^[A-Z]{2}$")):

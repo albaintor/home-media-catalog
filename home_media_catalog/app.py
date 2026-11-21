@@ -151,7 +151,7 @@ from .players import play
 from .players import probe as probe_player
 from .settings import Settings
 from .store import Store
-from .streaming import build_streaming_router
+from .streaming import _merge, _reconcile_streaming_catalogue, build_streaming_router
 from .sync import BusyError, SyncManager
 from .writeback import propagate_personal
 
@@ -201,6 +201,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
         await asyncio.to_thread(store.initialize)
+        # The catalogue tables exist only after initialize() within lifespan.
+        # Recover streaming hearts that arrived before local-first media uploads.
+        await asyncio.to_thread(
+            lambda: _reconcile_streaming_catalogue(store, _merge(store, []))
+        )
         await asyncio.to_thread(auth.load_devices)
         await sync.bootstrap_empty_catalogue()
         # Reconcile the persisted vector index on every server start. Scheduling

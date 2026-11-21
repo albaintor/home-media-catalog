@@ -307,7 +307,7 @@ def test_prime_only_accepts_primevideo_host_not_american_retail_asin():
 
 def test_streaming_heart_state_materializes_media_for_web_video_catalogue(tmp_path):
     """Local-first iOS state must also show up in server /media before journal upload."""
-    from home_media_catalog.streaming import _streaming_edition_uuid, _reconcile_streaming_catalogue
+    from home_media_catalog.streaming import _reconcile_streaming_catalogue, _streaming_edition_uuid
     store = Store(tmp_path / "streaming-to-video.sqlite")
     store.initialize()
     movie = StreamingStateRow(
