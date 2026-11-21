@@ -1,6 +1,7 @@
 // Streaming web parity: personal heart shelves plus TMDB-backed discovery
 // via the NAS. User state is synced with the iOS local-first journal.
 import { tr, displayLocale } from './i18n.js';
+import { bindRatingRange } from './rating-range.js';
 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c =>
@@ -78,13 +79,11 @@ function persistPreference(key,value){
     }catch(error){failure('Preference synchronization failed: '+error.message);}
   });
 }
+const streamingRatingRanges = {};
 function syncFilterPreferences(){
   $('streaming-watch-filter').value=preference('watch_filter','all');
-  for(const [id,key,fallback] of [
-    ['streaming-rating-min','rating_min',0],['streaming-rating-max','rating_max',10],
-    ['streaming-user-rating-min','user_rating_min',0],
-    ['streaming-user-rating-max','user_rating_max',10]
-  ])$(id).value=String(scoreLimit(key,fallback));
+  streamingRatingRanges.public?.set(scoreLimit('rating_min',0),scoreLimit('rating_max',10));
+  streamingRatingRanges.personal?.set(scoreLimit('user_rating_min',0),scoreLimit('user_rating_max',10));
   $('streaming-show-tops').checked=preference('show_tops','true')==='true';
   $('streaming-show-recent').checked=preference('show_recent','true')==='true';
   const subscribed=new Set(subscribedServices());
@@ -840,6 +839,15 @@ function route(){
 }
 export function startStreaming(){
   if(!$('streaming-page'))return;
+  function connectRange(prefix,minKey,maxKey,scope){
+    streamingRatingRanges[scope]=bindRatingRange(prefix,({min,max})=>{
+      if(min!==scoreLimit(minKey,0))persistPreference(minKey,String(min));
+      if(max!==scoreLimit(maxKey,10))persistPreference(maxKey,String(max));
+      renderBrowser();
+    });
+  }
+  connectRange('streaming-rating','rating_min','rating_max','public');
+  connectRange('streaming-user-rating','user_rating_min','user_rating_max','personal');
   try{state.region=localStorage.getItem('hmc-streaming-region')||'auto';}
   catch{state.region='auto';}
   if(![...$('streaming-region').options].some(x=>x.value===state.region))
@@ -854,9 +862,6 @@ export function startStreaming(){
     const target=event.target;
     const keyById={
       'streaming-watch-filter':'watch_filter',
-      'streaming-rating-min':'rating_min','streaming-rating-max':'rating_max',
-      'streaming-user-rating-min':'user_rating_min',
-      'streaming-user-rating-max':'user_rating_max',
       'streaming-show-tops':'show_tops','streaming-show-recent':'show_recent'
     };
     const key=keyById[target.id];
@@ -877,15 +882,7 @@ export function startStreaming(){
       persistPreference('genres',Array.from(chosen).sort().join(','));
     } else if(key){
       if(target.type==='checkbox')persistPreference(key,String(target.checked));
-      else if(target.type==='number'){
-        const value=Math.min(10,Math.max(0,Math.round((Number(target.value)||0)*2)/2));
-        const prefix=key.startsWith('user_')?'user_rating':'rating';
-        const partnerKey=key.endsWith('_min')?prefix+'_max':prefix+'_min';
-        const partner=scoreLimit(partnerKey,key.endsWith('_min')?10:0);
-        persistPreference(key,String(value));
-        if(key.endsWith('_min')&&value>partner)persistPreference(partnerKey,String(value));
-        if(key.endsWith('_max')&&value<partner)persistPreference(partnerKey,String(value));
-      }else persistPreference(key,target.value);
+      else persistPreference(key,target.value);
     }else return;
     renderBrowser();
   });
