@@ -181,3 +181,53 @@ def test_streaming_series_poster_and_backdrop_survive_catalogue_rebuild(tmp_path
 
 def test_streaming_artwork_requires_contract_eight():
     assert MAX_MOBILE_CONTRACT == 8
+
+
+def test_streaming_reference_episodes_have_watch_tracking_without_files(tmp_path):
+    store = Store(tmp_path / "episode-tracking.sqlite")
+    store.initialize()
+    created = store.save_internal_media(InternalMediaInput(
+        id="c100aaaa-1234-4234-9234-220022002200",
+        kind="tvshow", title="Series for Tracking",
+        tmdb_id="88888", format="",
+        poster_path="/series.jpg",
+        streaming_services=["prime_video"],
+    ).model_dump())
+    series_id = created["id"]
+    episode_info = [
+        {"season": 1, "episode": 1, "tmdb_id": 88001,
+         "title": "First episode", "overview": "First", "air_date": "2025-01-01"},
+        {"season": 1, "episode": 2, "tmdb_id": 88002,
+         "title": "Second episode", "overview": "Second", "air_date": "2025-01-08"},
+    ]
+    assert store.import_streaming_episodes(series_id, 88888, episode_info)["added"] == 2
+    assert store.import_streaming_episodes(series_id, 88888, episode_info)["added"] == 0
+    assert store.seasons(series_id)[0]["episode_count"] == 2
+    assert store.detail(series_id)["streaming_services"] == ["prime_video"]
+    result = store.set_episode_watch_status(series_id, True, season=1, up_to_episode=1)
+    assert result["updated"] == 1
+    seasons = store.seasons(series_id)
+    assert seasons[0]["watched_count"] == 1
+    children = store.media(kind="episode", parent_id=series_id, limit=10)["items"]
+    assert len(children) == 2
+    assert any(child["watch_status"] == "watched" for child in children)
+    assert all(child["source_types"] == ["internal"] for child in children)
+
+
+def test_legacy_streaming_state_recovers_service_after_catalogue_merge(tmp_path):
+    store = Store(tmp_path / "streaming-migration.sqlite")
+    store.initialize()
+    created = store.save_internal_media(InternalMediaInput(
+        id="c200aaaa-1234-4234-9234-220022002200",
+        kind="tvshow", title="Older Streamed Series",
+        tmdb_id="99999", format="",
+    ).model_dump())
+    work_id = created["id"]
+    _merge(store, [
+        StreamingStateRow(
+            key="item:tv:99999", payload={"tmdb_id": "99999", "kind": "tv",
+                                          "services": "netflix", "status": "saved"},
+            modified_at=datetime(2026, 11, 21, tzinfo=UTC).isoformat(),
+        )
+    ])
+    assert store.detail(work_id)["streaming_services"] == ["netflix"]
