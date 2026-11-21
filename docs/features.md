@@ -89,11 +89,24 @@ actions remain available in Settings → Sources even when no work is active.
 The app periodically refreshes the pending server writeback count while
 foregrounded so older failed outbound changes also affect the badge.
 
-When a Streaming sync response cannot be decoded, the iOS client now reports
-the actual missing JSON key or incompatible data path instead of the generic
-localized *data missing* message. The failed local change journal is kept
-for retry. This improves diagnostics but is **not** a substitute for running
-compatible NAS/server code.
+**Streaming synchronization:** a specific iOS decoder bug previously
+produced `rows.Index 0.modified_at` even when the server correctly returned
+that JSON field. The shared `JSONDecoder` converts snake_case keys to
+camelCase, so the `StreamingSyncRow` model must declare `modifiedAt`
+rather than an explicit `"modified_at"` coding key. The iOS `streaming`
+branch includes this correction. Until the response can be decoded, local
+changes remain pending in SQLite; a successful retry then acknowledges
+matching revisions and clears the count. Genuine schema incompatibilities
+continue to report their precise JSON key path, and the local journal
+is never discarded on decode failure.
+
+**Streaming playback fallback:** iOS first attempts a verified provider
+title URL as a native universal link. For Prime Video, if no installed app
+accepts that direct link, it opens the provider's search for the original
+title; this avoids a broken web-only Prime detail route or silently
+rejecting an intentional `/search` URL. Netflix, Disney+ and other services
+retain their verified title-page browser fallback. A failed regional
+availability request does not disable search for a configured provider.
 
 ## Built-in catalogue, barcode identification and collection grouping
 
