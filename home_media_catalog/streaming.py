@@ -534,6 +534,29 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         _CACHE[cache_key] = (time.monotonic(), result)
         return result
 
+    @router.get("/catalogue-metrics", dependencies=[Depends(authenticated)])
+    def catalogue_metrics():
+        """Read-only Kodi/internal-catalogue status and personal scores by TMDB ID.
+
+        A discoverable title is not automatically a catalogue entry. Only
+        authenticated, actually catalogued titles have personal metadata.
+        """
+        with store.connect() as db:
+            rows = db.execute(
+                "SELECT i.value AS tmdb_id, w.kind, w.watch_status, "
+                "w.rating, w.user_rating "
+                "FROM identifiers i JOIN works w ON w.id=i.work_id "
+                "WHERE i.namespace='tmdb' AND w.kind IN ('movie','tvshow')"
+            ).fetchall()
+        return {"items": [
+            {"kind": "tv" if row["kind"] == "tvshow" else "movie",
+             "tmdb_id": int(row["tmdb_id"]),
+             "watch_status": row["watch_status"] or "unknown",
+             "rating": row["rating"], "user_rating": row["user_rating"]}
+            for row in rows
+            if str(row["tmdb_id"]).isdecimal()
+        ]}
+
     @router.get("/providers", dependencies=[Depends(authenticated)])
     async def providers(region: str = Query("FR", pattern=r"^[A-Z]{2}$")):
         token = settings.tmdb_api_token.strip()

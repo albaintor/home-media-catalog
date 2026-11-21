@@ -1,6 +1,7 @@
 """Transactional local catalogue. SQLite never shares Kodi's schema or writes to MariaDB."""
 
 import hashlib
+import math
 import json
 import re
 import sqlite3
@@ -2911,6 +2912,10 @@ class Store:
         year_max: int | None = None,
         rating_min: float | None = None,
         user_rating_min: float | None = None,
+        rating_gt: float | None = None,
+        rating_lt: float | None = None,
+        user_rating_gt: float | None = None,
+        user_rating_lt: float | None = None,
         ids: list[str] | None = None,
         recent_days: int | None = None,
         sort: str = "date_added",
@@ -3106,6 +3111,16 @@ class Store:
         if user_rating_min is not None:
             clauses.append("w.user_rating>=?")
             params.append(user_rating_min)
+        # Strict thresholds intentionally exclude unrated media (NULL).
+        for value, column, operator in (
+            (rating_gt, "rating", ">"), (rating_lt, "rating", "<"),
+            (user_rating_gt, "user_rating", ">"), (user_rating_lt, "user_rating", "<"),
+        ):
+            if value is not None:
+                if not math.isfinite(value) or not 0 <= value <= 10:
+                    raise ValueError("Rating threshold must be between 0 and 10.")
+                clauses.append(f"w.{column}{operator}?")
+                params.append(value)
         requested_formats = [format] if isinstance(format, str) else (format or [])
         if len(requested_formats) > 20 or any(
             not isinstance(label, str) or not 1 <= len(label.strip()) <= 120
