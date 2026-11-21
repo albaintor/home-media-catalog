@@ -60,7 +60,9 @@ class StreamingLinkImportInput(BaseModel):
 _LINK_HOSTS = {
     "netflix": ("netflix.com",),
     "disney_plus": ("disneyplus.com",),
-    "prime_video": ("primevideo.com", "amazon.fr", "amazon.com"),
+    # Amazon retail-region ASIN links are not portable Prime Video links.
+    # Only platform-native HTTPS details are accepted for sync/import.
+    "prime_video": ("primevideo.com",),
     "apple_tv_plus": ("tv.apple.com",),
     "hbo_max": ("max.com", "hbomax.com"),
     "paramount_plus": ("paramountplus.com",),
