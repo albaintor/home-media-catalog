@@ -403,7 +403,9 @@ async def _tmdb(token: str, path: str, params: dict[str, Any]) -> dict[str, Any]
 async def _discover(token: str, service: str, kind: str, genre: int | None,
                     page: int, region: str, sort: str,
                     order: str = "desc", origin_country: str | None = None,
-                    original_language: str | None = None) -> dict[str, Any]:
+                    original_language: str | None = None,
+                    rating_min: float | None = None,
+                    rating_max: float | None = None) -> dict[str, Any]:
     # TMDB sorts the entire matching catalogue *before* pagination. Sorting
     # only the 20 titles returned by each page produces misleading results.
     field = {
@@ -433,6 +435,12 @@ async def _discover(token: str, service: str, kind: str, genre: int | None,
         params["with_origin_country"] = origin_country
     if original_language:
         params["with_original_language"] = original_language
+    if rating_min is not None:
+        params["vote_average.gte"] = rating_min
+    if rating_max is not None:
+        params["vote_average.lte"] = rating_max
+    if (rating_min is not None or rating_max is not None) and sort != "rating":
+        params["vote_count.gte"] = 1
     result = await _tmdb(token, "/discover/" + ("tv" if kind == "tv" else "movie"), params)
     return {
         "items": [_item(row, kind) for row in result.get("results", []) if row.get("id")],
@@ -712,9 +720,12 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         order: str = Query("desc", pattern=r"^(asc|desc)$"),
         origin_country: str | None = Query(None, pattern=r"^[A-Z]{2}$"),
         original_language: str | None = Query(None, pattern=r"^[a-z]{2}$"),
+        rating_min: float | None = Query(None, ge=0, le=10),
+        rating_max: float | None = Query(None, ge=0, le=10),
     ):
         return await _discover(settings.tmdb_api_token.strip(), service, kind, genre, page,
-                               region, sort, order, origin_country, original_language)
+                               region, sort, order, origin_country, original_language,
+                               rating_min, rating_max)
 
     @router.get("/search", dependencies=[Depends(authenticated)])
     async def search(
