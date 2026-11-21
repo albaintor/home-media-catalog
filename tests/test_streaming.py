@@ -231,3 +231,41 @@ def test_legacy_streaming_state_recovers_service_after_catalogue_merge(tmp_path)
         )
     ])
     assert store.detail(work_id)["streaming_services"] == ["netflix"]
+
+
+def test_official_provider_links_validate_identity_and_do_not_accept_search():
+    from home_media_catalog.streaming import _official_link
+    url, provider_id = _official_link(
+        "https://www.netflix.com/title/81234567", "netflix")
+    assert provider_id == "81234567"
+    assert url == "https://www.netflix.com/title/81234567"
+    url, provider_id = _official_link(
+        "https://tv.apple.com/fr/show/example/umc.cmc.example", "apple_tv_plus")
+    assert provider_id == "umc.cmc.example"
+    with pytest.raises(HTTPException):
+        _official_link("https://www.netflix.com/search?q=example", "netflix")
+    with pytest.raises(HTTPException):
+        _official_link("https://netflix.com.evil.example/title/81234567", "netflix")
+    with pytest.raises(HTTPException):
+        _official_link("http://www.netflix.com/title/81234567", "netflix")
+    with pytest.raises(HTTPException):
+        _official_link("https://www.netflix.com/title/not-an-id", "netflix")
+
+
+def test_streaming_provider_link_sync_reconciliation(tmp_path):
+    store = Store(tmp_path / "streaming-links.sqlite")
+    store.initialize()
+    base = datetime(2026, 11, 21, tzinfo=UTC)
+    def link(timestamp, url):
+        return StreamingStateRow(
+            key="link:tv:1399:netflix:s1e2",
+            payload={"url": url, "provider_id": "81234567",
+                     "source": "official_share_link"},
+            modified_at=timestamp.isoformat())
+    first = _merge(store, [link(base, "https://www.netflix.com/title/81234567")])
+    assert first[0]["payload"]["provider_id"] == "81234567"
+    refreshed = _merge(store, [link(base + timedelta(seconds=5),
+                                    "https://www.netflix.com/title/87654321")])
+    assert refreshed[0]["payload"]["url"].endswith("87654321")
+    unchanged = _merge(store, [link(base, "https://www.netflix.com/title/81234567")])
+    assert unchanged == refreshed
