@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from home_media_catalog import streaming
+from home_media_catalog.compatibility import MAX_MOBILE_CONTRACT
 from home_media_catalog.models import InternalMediaInput
 from home_media_catalog.store import Store
 from home_media_catalog.streaming import (
@@ -176,3 +177,7 @@ def test_streaming_series_poster_and_backdrop_survive_catalogue_rebuild(tmp_path
         store._rebuild(conn, item_id)
     assert store.artwork(item_id, "poster")
     assert store.artwork(item_id, "fanart")
+
+
+def test_streaming_artwork_requires_contract_eight():
+    assert MAX_MOBILE_CONTRACT == 8
