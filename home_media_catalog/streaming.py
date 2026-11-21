@@ -160,6 +160,40 @@ def _merge(store: Any, incoming: list[StreamingStateRow]) -> list[dict[str, Any]
             for row in rows]
 
 
+
+def _streaming_trailers(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Only verified YouTube trailers/teasers from TMDB may be opened."""
+    videos = raw.get("videos") or {}
+    entries = videos.get("results", []) if isinstance(videos, dict) else []
+    if not isinstance(entries, list):
+        return []
+    trailers = []
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("site") != "YouTube":
+            continue
+        if entry.get("type") not in {"Trailer", "Teaser"}:
+            continue
+        key = entry.get("key")
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{11}", key):
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        language = entry.get("iso_639_1")
+        trailers.append({
+            "key": key,
+            "name": str(entry.get("name") or "Trailer")[:160],
+            "type": entry["type"],
+            "official": entry.get("official") is True,
+            "language": language if language in {"fr", "en"} else None,
+        })
+    trailers.sort(key=lambda item: (item["type"] != "Trailer",
+                                    not item["official"],
+                                    item["language"] != "fr"))
+    return trailers[:8]
+
+
 def _title_metadata(raw: dict[str, Any], kind: str) -> dict[str, Any]:
     """Project TMDB film/TV details to a bounded, shared web/native contract.
 
@@ -235,6 +269,7 @@ def _title_metadata(raw: dict[str, Any], kind: str) -> dict[str, Any]:
         "cast": cast,
         "crew": crew[:16],
         "seasons": seasons,
+        "trailers": _streaming_trailers(raw),
         "runtime_minutes": runtimes,
         "status": raw.get("status") or "",
     }
@@ -528,15 +563,26 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         """
         if kind not in {"movie", "tv"} or tmdb_id < 1 or tmdb_id > 999999999:
             raise HTTPException(422, "Invalid TMDB title identity")
-        cache_key = f"tmdb-title-details:{language}:{kind}:{tmdb_id}"
+        cache_key = f"tmdb-title-details-videos:{language}:{kind}:{tmdb_id}"
         cached = _CACHE.get(cache_key)
         if cached is not None and time.monotonic() - cached[0] < 6 * 3600:
             return cached[1]
         raw = await _tmdb(
             settings.tmdb_api_token.strip(), f"/{kind}/{tmdb_id}",
-            {"language": language, "append_to_response": "credits"},
+            {"language": language, "append_to_response": "credits,videos"},
         )
         result = _title_metadata(raw, kind)
+        if not result["trailers"] and language != "en-US":
+            # A film may have no localized video even when an English trailer
+            # exists. Keep the details usable if the fallback is unavailable.
+            try:
+                other = await _tmdb(
+                    settings.tmdb_api_token.strip(), f"/{kind}/{tmdb_id}/videos",
+                    {"language": "en-US"},
+                )
+                result["trailers"] = _streaming_trailers({"videos": other})
+            except (httpx.HTTPError, HTTPException, ValueError, KeyError):
+                pass
         if len(_CACHE) >= 160:
             # Bound global, per-installation metadata cache.
             oldest = next(iter(_CACHE))
@@ -698,7 +744,7 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
             except (httpx.HTTPError, ValueError, KeyError, HTTPException):
                 pass
         result = await _discover(settings.tmdb_api_token.strip(), service, kind, None,
-                                 1, region, "popularity")
+                                 1, region, "popularity", "desc")
         return {"items": result["items"][:10], "ranking_type": "tmdb_popularity",
                 "source": "tmdb", "region": region}
 
