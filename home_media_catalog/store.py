@@ -2537,6 +2537,18 @@ class Store:
         ids = [row["id"] for row in rows]
         by_work = cls._sources_for_works(conn, ids)
         collection_sources = cls._collection_sources_for_works(conn, ids)
+        # Only a recorded streaming association qualifies for the launch menu.
+        # Never infer it from a generic internal-collection edition.
+        by_streaming: dict[str, set[str]] = defaultdict(set)
+        if ids:
+            slots = ",".join("?" for _ in ids)
+            for record in conn.execute(
+                "SELECT r.work_id, j.value AS service FROM records r, "
+                "json_each(r.payload, '$.metadata.streaming_services') j "
+                f"WHERE r.work_id IN ({slots}) AND j.type='text'",
+                ids,
+            ):
+                by_streaming[record["work_id"]].add(record["service"])
         custom_titles = {}
         if ids:
             slots = ",".join("?" for _ in ids)
@@ -2603,6 +2615,7 @@ class Store:
                 cls._summary(row), resumes.get(row["id"])
             )
             item.update(progress.get(row["id"], {}))
+            item["streaming_services"] = sorted(by_streaming.get(row["id"], set()))
             if title := custom_titles.get(row["id"]):
                 item["provider_title"] = item["title"]
                 item["custom_title"] = title
