@@ -43,6 +43,21 @@ def test_streaming_web_exposes_native_watch_and_rating_filters():
     assert "deleted:!!existing" in script
 
 
+def test_streaming_web_manages_subscriptions_lists_and_collections():
+    html = (WEB / "index.html").read_text()
+    script = (WEB / "streaming.js").read_text()
+    assert 'id="streaming-subscription-options"' in html
+    assert "data-streaming-subscription" in script
+    assert "persistPreference('subscriptions'" in script
+    assert "renderListCollectionActions()" in script
+    assert "ensureWorkID(title)" in script
+    assert "data-streaming-assign" in script
+    assert "data-streaming-new" in script
+    assert "collections/'+encodeURIComponent(targetID)+'/items" in script
+    assert "lists/'+encodeURIComponent(targetID)+'/items" in script
+    assert "response.status===204?null:response.json()" in script
+
+
 def test_streaming_cast_has_two_source_person_filmography():
     html = (WEB / "index.html").read_text()
     script = (WEB / "streaming.js").read_text()
