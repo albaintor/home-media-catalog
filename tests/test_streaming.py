@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import HTTPException
 
-from home_media_catalog.store import Store
 from home_media_catalog import streaming
+from home_media_catalog.store import Store
 from home_media_catalog.streaming import (
     StreamingStateRow,
     _availability_keys,
