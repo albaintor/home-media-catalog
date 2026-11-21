@@ -20,28 +20,27 @@ availability, contractual authorization or current free-tier quotas is implied.
 | --- | --- | --- | --- | --- |
 | **TMDB (The Movie Database)** | **Active** (on-device API token for standalone discovery) | **Active** (configured `TMDB_API_TOKEN`) | Movie/series IDs, posters, episodes, regional SVOD provider availability and search; **does not return a reliable Netflix/Disney+/Prime Video content ID or direct provider playback URL** | [TMDB API](https://developer.themoviedb.org/docs/getting-started), [watch providers](https://developer.themoviedb.org/reference/tv-series-watch-providers) |
 | **Wikidata external provider identifiers** | **Active**: device queries an exact TMDB movie/series ID via SPARQL (`P4947` / `P4983`) and resolves supported Netflix (`P1874`), Prime Video (`P14462` GTI, `P14440`/`P8055`), Disney+ (`P13902`/`P7596`/`P7595`) and Apple TV (`P9751`/`P9586`) links | **Not used** for this streaming resolution | Automatic iOS-first provider-link discovery; unambiguous provider IDs are mapped to validated official URLs and locally cached, then synced when authorized. Availability and universal-link app handoff remain provider-dependent | [Wikidata Query Service](https://query.wikidata.org/), [property P14440](https://www.wikidata.org/wiki/Property:P14440) |
+| **Streaming Availability API (Movie of the Night)** | **Optional** when a personal API key is configured in iOS **Customize Streaming**; exact TMDB ID, FR streaming options, title/season/episode links | **Not called** by the server | Provides actual per-service destinations for Netflix, Prime Video, Disney+, Apple TV, Max and Paramount+ when listed; only subscription (not rental/addon) destinations are considered; key remains in iOS Keychain | [API docs](https://docs.movieofthenight.com/), [authentication](https://docs.movieofthenight.com/guide/authentication), [show lookup](https://docs.movieofthenight.com/resource/shows) |
 | **Official Netflix Top 10 (Tudum)** | Not an iOS ID resolver | **Active**, used for the Netflix-specific ranking when available | Country-specific historical weekly rankings, **not** viewing history, provider IDs or deep links | [Netflix Tudum Top 10](https://www.netflix.com/tudum/top10), [country TSV used by HMC](https://www.netflix.com/tudum/top10/data/all-weeks-countries.tsv) |
 | **Official streaming-service URLs** (Netflix, Disney+, Prime Video, Apple TV, Max, Paramount+) | **Active** for automatically resolved links, previously synchronized links and fallback title search | **Active** for validating/importing official links via API | Open a known verified title/episode URL or fall back to a provider-scoped title search. Automatic Wikidata resolution only covers supported provider identifiers; not a universal deep-link API | [Netflix](https://www.netflix.com/), [Disney+](https://www.disneyplus.com/), [Prime Video](https://www.primevideo.com/), [Apple TV](https://tv.apple.com/), [Max](https://www.max.com/), [Paramount+](https://www.paramountplus.com/) |
 
 ### Link lifecycle and limitations
 
-- **iOS-first:** tapping **Open on [platform]** checks the device's known
-  `link:movie:…`, `link:tv:…` and optional episode records, then attempts
-  an **automatic Wikidata lookup using the exact TMDB ID**. A single valid
-  provider ID is converted to an official destination, retained in the local
-  `StreamingLibrary` journal subject to the catalogue-storage preference,
-  and synchronized to the server when connected with write access. The manual
-  "Associate copied streaming link" UI has been removed. A lookup miss, HTTP
-  failure or unsupported provider leads to a normal title search. Failed
-  lookups are remembered briefly in device memory to avoid repeated requests.
-- **Verified built-in title exception:** the iOS app includes a reviewed
-  official Prime Video title URL for *The Lord of the Rings: The Rings of Power*
-  (TMDB TV `84773` → `https://www.primevideo.com/detail/0TUVXIO58IUNEPNBF8363Z7YGL`).
-  It is preferred over a previously stored Amazon Video ASIN-based URL,
-  cached with provenance `verified_official_catalogue` and synchronized
-  through the normal streaming state journal. This is a **single verified
-  entry**, not an automatic Prime Video ID conversion for every series. Prime's
-  title page includes a season selector; exact episode playback is not guaranteed.
+- **iOS-first:** **Open on [platform]** uses the locally known URL
+  (including synchronized mappings), then optionally queries **Streaming
+  Availability API v4** using the exact TMDB identifier and country `fr`,
+  then queries **Wikidata** for exact provider IDs. Only validated official
+  HTTPS destinations are cached in `StreamingLibrary` and synchronized to
+  the NAS when connected with write access. The API key is optional, stored
+  only in the iOS Keychain; no manual per-title link association is required.
+  When no trustworthy direct URL is available, HMC opens the provider's title
+  search. Brief negative caching avoids repeated failing network requests.
+- **Generic resolution:** no hardcoded TMDB-to-provider exception for
+  *The Rings of Power* or any other individual work. Prime Video GTI and Prime
+  Video ID links use Wikidata's official `/detail/` formatter; legacy Amazon
+  Video ASIN records may open the Amazon France detail page, which is not
+  guaranteed to launch Prime Video. The optional streaming API can supply a
+  more appropriate Prime Video destination for the French catalogue.
 - **Bidirectional sync:** `GET /api/v1/streaming/state` and
   `POST /api/v1/streaming/state/sync` merge these records by timestamp via
   `streaming_state`. A server administrator can also submit a verified URL
@@ -59,29 +58,28 @@ availability, contractual authorization or current free-tier quotas is implied.
   can become obsolete or be unavailable in France. A universal link is not
   proof that content is included in the user's subscription.
 
-### Additional streaming URL resolvers considered, **not integrated**
+### Other streaming URL resolvers considered, **not integrated**
 
-Wikidata resolution is implemented for the supported provider properties above.
-The following **additional** APIs are not yet called by HMC:
+Wikidata and the optional Streaming Availability API are already used in iOS
+as described above. The following integrations are **not** implemented:
 
 | Candidate | Potential use | Important constraint | Reference |
 | --- | --- | --- | --- |
-| **Streaming Availability API (Movie of the Night)** | Query a TMDB/IMDb identifier for country/service streaming options and direct destinations | API key, quotas, attribution, licensing and storage rights must be checked before integration | [API docs](https://docs.movieofthenight.com/), [show lookup](https://docs.movieofthenight.com/resource/shows), [authentication](https://docs.movieofthenight.com/guide/authentication) |
 | **JustWatch official API / widget / exports** | Regional offers and provider navigation | Official integrations are partner-oriented; no HMC integration; unofficial GraphQL access is not a stable public contract | [JustWatch partner docs](https://apis.justwatch.com/docs/) |
 | **Watchmode** | Match TMDB/IMDb IDs to availability and provider destinations | Account and plan limitations; deep-link/episode features and usage rights vary | [Watchmode API](https://api.watchmode.com/docs), [pricing](https://api.watchmode.com/pricing) |
 
-**Current iOS order:** known local/synchronized link → exact TMDB-to-Wikidata
-mapping for supported properties → provider title search. **Potential future
-enhancement:** add a licensed streaming-link API between Wikidata and search,
-subject to access and storage rights. The server does not perform the automatic
-lookup on behalf of iOS.
+**Current iOS order:** local/synchronized URL → optional authenticated
+Streaming Availability API (country France, exact TMDB ID) → Wikidata external
+provider identifiers → service-scoped title search. Series and episodes use
+their own direct provider URLs when supplied; otherwise the title/series
+destination is used. App handoff relies on the service's supported universal
+links and is not guaranteed. No server-side identifier resolution is required.
 
-For example, Wikidata associates TMDB TV ID `84773` (*The Lord of the Rings:
-The Rings of Power*) with the Amazon Video ASIN `B09QH98YG1`. A Prime Video mobile GTI link, if supplied, is preferred over a regular
-`/detail/` ID; otherwise the
-documented Amazon Video detail URL may be opened. A valid Amazon Video URL
-does **not** guarantee that iOS opens the Prime Video app instead of a browser,
-or that it selects a particular season or episode.
+The free API account, if chosen, is created by the user with the upstream
+provider; quotas, attribution and persistence rights depend on the current
+service terms. This is **not** a mandatory prerequisite for offline catalogue
+use or provider searches. Availability coverage and direct-link validity
+are not guaranteed for every media item or region.
 
 ## Physical-disc barcode and technical metadata lookup
 
