@@ -67,9 +67,12 @@ availability, contractual authorization or current free-tier quotas is implied.
 - **Native-app handoff (iOS):** a resolved official HTTPS destination is
   first opened with `UIApplication.open` and `universalLinksOnly = true`,
   which succeeds only when an installed app accepts **that exact URL**.
-  **Prime Video:** the app accepts genuine `app.primevideo.com/detail?gti=…`
-  share destinations when the GTI is supplied by an actual provider data
-  source. An unrelated `www.primevideo.com/detail/…` web catalogue ID is
+  **Prime Video:** the app attempts genuine `app.primevideo.com/detail?gti=…`
+  share destinations when a GTI is supplied by the exact provider link from
+  an API or by Wikidata's **P14462**. The latter is always formatted as
+  `https://app.primevideo.com/detail?gti={GTI}&territory=FR`; a cached
+  web link can be upgraded automatically if such a GTI is discovered.
+  An unrelated `www.primevideo.com/detail/…` web catalogue ID is
   **not** a GTI or ASIN and cannot be blindly translated to an `aiv://` link.
   The previous experimental `aiv://detail?asin=…` fallback was removed after
   it opened Prime Video but produced an *unable to access video* error for
