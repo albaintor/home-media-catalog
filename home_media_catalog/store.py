@@ -1127,6 +1127,88 @@ class Store:
             work_id = current["work_id"]
         return {"id": work_id, "item_id": external_key}
 
+    def import_streaming_episodes(
+        self, parent_id: str, tmdb_id: int, episodes: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        """Create reference-only TV episodes for watch tracking.
+
+        Never create fake playback files and never replace existing Kodi or
+        collection episodes with the same season/episode coordinates.
+        """
+        if not 0 < tmdb_id < 1_000_000_000 or len(episodes) > 1500:
+            raise ValueError("Invalid TMDB series or episode count")
+        from uuid import NAMESPACE_URL, uuid5
+
+        imported = 0
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            parent = conn.execute(
+                "SELECT kind FROM works WHERE id=?", (parent_id,)
+            ).fetchone()
+            if not parent or parent["kind"] != "tvshow":
+                raise ValueError("Unknown TV series")
+            ids = {
+                row["value"] for row in conn.execute(
+                    "SELECT value FROM identifiers WHERE work_id=? AND namespace='tmdb'",
+                    (parent_id,),
+                )
+            }
+            if ids and str(tmdb_id) not in ids:
+                raise ValueError("TMDB series ID differs from catalogue work")
+            conn.execute(
+                "INSERT OR IGNORE INTO sources(id,name,type,enabled,config) VALUES(?,?,?,?,?)",
+                ("internal", "Internal catalog", "internal", 1, "{}"),
+            )
+            occupied = {
+                (row["season"], row["episode"])
+                for row in conn.execute(
+                    "SELECT season,episode FROM works WHERE parent_id=? AND kind='episode'",
+                    (parent_id,),
+                )
+            }
+            for entry in episodes:
+                season, number = entry.get("season"), entry.get("episode")
+                if (not isinstance(season, int) or isinstance(season, bool)
+                        or not isinstance(number, int) or isinstance(number, bool)
+                        or not 0 <= season <= 10000 or not 1 <= number <= 10000):
+                    continue
+                if (season, number) in occupied:
+                    continue
+                title = str(entry.get("title") or f"Episode {number}")[:300]
+                external_key = f"streaming-tv-{tmdb_id}-s{season}-e{number}"
+                if conn.execute(
+                    "SELECT 1 FROM records WHERE source_id='internal' AND external_key=?",
+                    (external_key,),
+                ).fetchone():
+                    continue
+                work_id = str(uuid5(NAMESPACE_URL, f"hmc:{parent_id}:{external_key}"))
+                conn.execute("INSERT OR IGNORE INTO works(id,kind) VALUES(?, 'episode')", (work_id,))
+                released = str(entry.get("air_date") or "")
+                year = int(released[:4]) if re.fullmatch(r"[0-9]{4}", released[:4]) else None
+                poster_path = entry.get("still_path")
+                poster = (["https://image.tmdb.org/t/p/w500" + poster_path]
+                          if isinstance(poster_path, str) and re.fullmatch(
+                              r"/[A-Za-z0-9_.-]{1,150}", poster_path) else [])
+                record = Record(
+                    external_key=external_key, kind="episode", title=title,
+                    identifiers={"tmdb": str(entry["tmdb_id"])}
+                    if isinstance(entry.get("tmdb_id"), int) else {},
+                    year=year, plot=str(entry.get("overview") or "")[:5000],
+                    date_added=now(), poster=poster,
+                    metadata={"streaming_reference": True, "streaming_parent_tmdb": tmdb_id},
+                )
+                payload = asdict(record)
+                payload.update(parent_id=parent_id, season=season, episode=number)
+                conn.execute(
+                    "INSERT INTO records(id,work_id,source_id,external_key,payload) "
+                    "VALUES(?,?,?,?,?)",
+                    (str(uuid4()), work_id, "internal", external_key, encode(payload)),
+                )
+                self._rebuild(conn, work_id)
+                occupied.add((season, number))
+                imported += 1
+        return {"added": imported, "total": len(episodes)}
+
     @staticmethod
     def _editor_payload(conn: sqlite3.Connection, work_id: str) -> dict[str, Any]:
         row = conn.execute("SELECT payload FROM enrichment WHERE work_id=?", (work_id,)).fetchone()
