@@ -31,6 +31,49 @@ def _row(key: str, stamp: datetime, value: str, deleted: bool = False):
     )
 
 
+def test_independent_streaming_personal_watched_and_rating_sync_without_heart(tmp_path):
+    """Streaming personal state must never require or create a catalogue work."""
+    store = Store(tmp_path / "personal.sqlite")
+    store.initialize()
+    now = datetime(2026, 11, 21, tzinfo=UTC)
+    original = StreamingStateRow(
+        key="personal:movie:12345",
+        payload={"watched": "true", "rating": "8.5"},
+        modified_at=now.isoformat(), deleted=False,
+    )
+    received = _merge(store, [original])
+    personal = next(r for r in received if r["key"] == original.key)
+    assert personal["payload"] == {"watched": "true", "rating": "8.5"}
+    assert store.media(kind="movie")["total"] == 0
+
+    # Device B modifies only the watched status, retaining the rating.
+    revision = StreamingStateRow(
+        key=original.key,
+        payload={"watched": "false", "rating": "8.5"},
+        modified_at=(now + timedelta(seconds=1)).isoformat(),
+        deleted=False,
+    )
+    changed = _merge(store, [revision])
+    assert next(r for r in changed if r["key"] == original.key)["payload"] == {
+        "watched": "false", "rating": "8.5",
+    }
+    assert _merge(store, [original]) == changed  # stale device cannot overwrite B
+    assert store.media(kind="movie")["total"] == 0
+
+    # Clearing the rating is an explicit override and stays synchronized.
+    cleared = StreamingStateRow(
+        key=original.key,
+        payload={"watched": "false", "rating_cleared": "true"},
+        modified_at=(now + timedelta(seconds=2)).isoformat(),
+        deleted=False,
+    )
+    result = _merge(store, [cleared])
+    assert next(r for r in result if r["key"] == original.key)["payload"] == {
+        "watched": "false", "rating_cleared": "true",
+    }
+    assert store.media(kind="movie")["total"] == 0
+
+
 def test_streaming_rows_merge_per_key_and_keep_tombstones(tmp_path):
     store = Store(tmp_path / "catalogue.sqlite")
     store.initialize()
