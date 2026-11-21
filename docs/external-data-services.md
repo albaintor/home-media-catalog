@@ -34,6 +34,14 @@ availability, contractual authorization or current free-tier quotas is implied.
   "Associate copied streaming link" UI has been removed. A lookup miss, HTTP
   failure or unsupported provider leads to a normal title search. Failed
   lookups are remembered briefly in device memory to avoid repeated requests.
+- **Verified built-in title exception:** the iOS app includes a reviewed
+  official Prime Video title URL for *The Lord of the Rings: The Rings of Power*
+  (TMDB TV `84773` → `https://www.primevideo.com/detail/0TUVXIO58IUNEPNBF8363Z7YGL`).
+  It is preferred over a previously stored Amazon Video ASIN-based URL,
+  cached with provenance `verified_official_catalogue` and synchronized
+  through the normal streaming state journal. This is a **single verified
+  entry**, not an automatic Prime Video ID conversion for every series. Prime's
+  title page includes a season selector; exact episode playback is not guaranteed.
 - **Bidirectional sync:** `GET /api/v1/streaming/state` and
   `POST /api/v1/streaming/state/sync` merge these records by timestamp via
   `streaming_state`. A server administrator can also submit a verified URL
