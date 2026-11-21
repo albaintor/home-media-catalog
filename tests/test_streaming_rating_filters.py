@@ -65,3 +65,50 @@ def test_streaming_catalogue_metrics_use_canonical_tmdb_and_personal_state(tmp_p
         "kind": "tv", "tmdb_id": 17774,
         "watch_status": "watched", "rating": 7.7, "user_rating": 9.5,
     }]
+
+
+
+def test_inclusive_rating_ranges_and_combined_predicates(tmp_path):
+    store = Store(tmp_path / "rating-ranges.sqlite")
+    store.initialize()
+    movie_a = store.save_internal_media(InternalMediaInput(
+        id="dbba2222-1234-4234-9234-220022002231",
+        kind="movie", title="Range A", tmdb_id="17791",
+        rating=8.5, format="",
+    ).model_dump())["id"]
+    movie_b = store.save_internal_media(InternalMediaInput(
+        id="dbba2222-1234-4234-9234-220022002232",
+        kind="movie", title="Range B", tmdb_id="17792",
+        rating=7.0, format="",
+    ).model_dump())["id"]
+    store.update_personal(movie_a, {"user_rating": 6.5})
+    store.update_personal(movie_b, {"user_rating": 9.0})
+    assert store.media()["total"] == 2
+    assert {row["id"] for row in store.media(rating_min=7, rating_max=8.5)["items"]} == {
+        movie_a, movie_b
+    }
+    assert {row["id"] for row in store.media(rating_min=8, rating_max=9)["items"]} == {
+        movie_a
+    }
+    assert {row["id"] for row in store.media(user_rating_min=8, user_rating_max=10)["items"]} == {
+        movie_b
+    }
+    assert {row["id"] for row in store.media(
+        rating_min=7, rating_max=8.5, user_rating_min=6, user_rating_max=7
+    )["items"]} == {movie_a}
+    from pytest import raises
+
+    with raises(ValueError):
+        store.media(rating_min=8, rating_max=7)
+
+
+def test_default_full_range_does_not_hide_unrated_titles(tmp_path):
+    store = Store(tmp_path / "rating-unrated.sqlite")
+    store.initialize()
+    store.save_internal_media(InternalMediaInput(
+        id="dbba2222-1234-4234-9234-220022002233",
+        kind="movie", title="Unrated Film", tmdb_id="17793", format="",
+    ).model_dump())
+    assert store.media()["total"] == 1
+    # Selecting a narrower range correctly excludes scores not supplied.
+    assert store.media(rating_min=0, rating_max=9)["total"] == 0

@@ -2911,7 +2911,9 @@ class Store:
         year_min: int | None = None,
         year_max: int | None = None,
         rating_min: float | None = None,
+        rating_max: float | None = None,
         user_rating_min: float | None = None,
+        user_rating_max: float | None = None,
         rating_gt: float | None = None,
         rating_lt: float | None = None,
         user_rating_gt: float | None = None,
@@ -3105,12 +3107,23 @@ class Store:
         if year_max is not None:
             clauses.append("w.year<=?")
             params.append(year_max)
-        if rating_min is not None:
-            clauses.append("w.rating>=?")
-            params.append(rating_min)
-        if user_rating_min is not None:
-            clauses.append("w.user_rating>=?")
-            params.append(user_rating_min)
+        # Inclusive score ranges. Unrated (NULL) entries only disappear when
+        # either bound is supplied, never for an untouched [0,10] control.
+        for lower, upper, column in (
+            (rating_min, rating_max, "rating"),
+            (user_rating_min, user_rating_max, "user_rating"),
+        ):
+            for value in (lower, upper):
+                if value is not None and (not math.isfinite(value) or not 0 <= value <= 10):
+                    raise ValueError("Rating bounds must be between 0 and 10.")
+            if lower is not None and upper is not None and lower > upper:
+                raise ValueError("Rating minimum cannot exceed maximum.")
+            if lower is not None:
+                clauses.append(f"w.{column}>=?")
+                params.append(lower)
+            if upper is not None:
+                clauses.append(f"w.{column}<=?")
+                params.append(upper)
         # Strict thresholds intentionally exclude unrated media (NULL).
         for value, column, operator in (
             (rating_gt, "rating", ">"), (rating_lt, "rating", "<"),
