@@ -47,6 +47,11 @@ class StreamingSyncInput(BaseModel):
     changes: list[StreamingStateRow] = Field(default_factory=list, max_length=1000)
 
 
+class StreamingEpisodeImportInput(BaseModel):
+    tmdb_id: int = Field(ge=1, le=999999999)
+
+
+
 def _stamp(value: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -359,6 +364,55 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
                                  1, region, "popularity")
         return {"items": result["items"][:10], "ranking_type": "tmdb_popularity",
                 "source": "tmdb", "region": region}
+
+    @router.post("/series/{media_id}/episodes/import", dependencies=[Depends(writable)])
+    async def import_series_episodes(media_id: str, body: StreamingEpisodeImportInput):
+        """Materialize TMDB reference episodes under a canonical catalogue TV show.
+
+        Episodes carry no playable file; personal watched overrides use the
+        existing /media/{id}/personal and /episodes/watch endpoints.
+        """
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", media_id):
+            raise HTTPException(422, "Invalid media ID")
+        detail = await asyncio.to_thread(store.detail, media_id)
+        if detail is None or detail.get("kind") != "tvshow":
+            raise HTTPException(404, "Unknown TV series")
+        known = detail.get("identifiers", {}).get("tmdb") or []
+        if known and str(body.tmdb_id) not in [str(value) for value in known]:
+            raise HTTPException(409, "TMDB identity mismatch")
+        token = settings.tmdb_api_token.strip()
+        series = await _tmdb(token, f"/tv/{body.tmdb_id}", {"language": "fr-FR"})
+        numbers = [
+            season["season_number"]
+            for season in series.get("seasons", [])
+            if isinstance(season, dict)
+            and isinstance(season.get("season_number"), int)
+            and 0 <= season["season_number"] <= 10000
+        ][:60]
+        limit = asyncio.Semaphore(5)
+
+        async def get_season(number: int) -> list[dict[str, Any]]:
+            async with limit:
+                data = await _tmdb(token, f"/tv/{body.tmdb_id}/season/{number}",
+                                   {"language": "fr-FR"})
+            return [
+                {"season": number, "episode": item.get("episode_number"),
+                 "tmdb_id": item.get("id"),
+                 "title": item.get("name") or f"Episode {item.get('episode_number')}",
+                 "overview": item.get("overview") or "",
+                 "air_date": item.get("air_date") or "",
+                 "still_path": item.get("still_path")}
+                for item in data.get("episodes", []) if isinstance(item, dict)
+            ]
+
+        results = await asyncio.gather(*(get_season(n) for n in numbers))
+        episodes = [entry for season in results for entry in season][:1500]
+        try:
+            return await asyncio.to_thread(
+                store.import_streaming_episodes, media_id, body.tmdb_id, episodes
+            )
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
 
     @router.get("/state", dependencies=[Depends(authenticated)])
     def read_state():
