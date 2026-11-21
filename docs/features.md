@@ -60,11 +60,13 @@ simply the user's configured subscriptions. Missing provider membership
 may be checked against the actual **French** TMDB/connected-server
 availability before a Streaming card displays logos.
 
-Streaming **title detail sheets** now use a compact vertical action rail next
-to the synopsis, matching the icon-only controls of the regular movie/series
-details: **Play**, **save to catalogue**, **add to list**, and **add to collection**.
-Actions keep VoiceOver labels but no longer render blue text buttons. When
-more than one provider carries a title, Play prompts for a service.
+Streaming **title detail sheets** now reuse the **same compact horizontal
+icon-only action row and `CompactMediaActionStyle`** as the regular movie/series
+details. The actions are positioned between the media header and synopsis:
+**Play**, **save to catalogue**, **add to list**, and **add to collection**.
+Buttons share the standard equal-width capsule appearance, not a separate
+vertical floating panel or blue text buttons. Actions retain VoiceOver labels;
+when more than one provider carries a title, Play prompts for a service.
 
 These are iOS presentation features and do not alter server streaming
 subscription availability or grant playback rights. [External data
