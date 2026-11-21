@@ -57,6 +57,46 @@ def test_streaming_rows_merge_per_key_and_keep_tombstones(tmp_path):
     assert len(_merge(store, [])) == 2
 
 
+def test_category_and_region_preferences_merge_bidirectionally(tmp_path):
+    store = Store(tmp_path / "catalogue.sqlite")
+    store.initialize()
+    start = datetime(2026, 11, 21, tzinfo=UTC)
+    initial = _merge(store, [
+        _row("prefs:genres", start, "action,drama,k_drama"),
+        _row("prefs:catalogue_region", start, "FR"),
+    ])
+    by_key = {row["key"]: row["payload"]["value"] for row in initial}
+    assert by_key == {
+        "prefs:genres": "action,drama,k_drama",
+        "prefs:catalogue_region": "FR",
+    }
+
+    # A second device can change either preference. Both devices receive
+    # the same merged journal, with other keys left untouched.
+    newer = _merge(store, [
+        _row("prefs:genres", start + timedelta(seconds=2), "anime,crime"),
+        _row("prefs:catalogue_region", start + timedelta(seconds=3), "automatic"),
+    ])
+    by_key = {row["key"]: row["payload"]["value"] for row in newer}
+    assert by_key["prefs:genres"] == "anime,crime"
+    assert by_key["prefs:catalogue_region"] == "automatic"
+
+    # A stale device must not overwrite a newer change.
+    stale = _merge(store, [
+        _row("prefs:genres", start + timedelta(seconds=1), "drama"),
+        _row("prefs:catalogue_region", start + timedelta(seconds=1), "US"),
+    ])
+    assert {row["key"]: row["payload"]["value"] for row in stale} == by_key
+
+    # The selected list is permitted to be empty and remains a real value.
+    cleared = _merge(store, [
+        _row("prefs:genres", start + timedelta(seconds=4), ""),
+    ])
+    assert next(row for row in cleared if row["key"] == "prefs:genres")["payload"] == {
+        "value": ""
+    }
+
+
 def test_same_timestamp_reconciliation_is_independent_of_input_order(tmp_path):
     store = Store(tmp_path / "catalogue.sqlite")
     store.initialize()
