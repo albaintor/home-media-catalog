@@ -169,6 +169,34 @@
           <select id="streaming-kind" aria-label="Type de média"><option value="both">Films et séries</option><option value="movie">Films</option><option value="tv">Séries</option></select>
           <select id="streaming-region" aria-label="Région des services"><option value="FR">France</option><option value="BE">Belgique</option><option value="CH">Suisse</option><option value="CA">Canada</option><option value="US">États-Unis</option><option value="GB">Royaume-Uni</option><option value="DE">Allemagne</option><option value="ES">Espagne</option><option value="IT">Italie</option><option value="KR">Corée du Sud</option><option value="JP">Japon</option></select>
         </div>
+        <details id="streaming-customize" class="streaming-customize">
+          <summary>Personnaliser le streaming</summary>
+          <div class="streaming-customize-grid">
+            <label>État de visionnage dans le catalogue
+              <select id="streaming-watch-filter"><option value="all">Tous</option><option value="watched">Vus</option><option value="unwatched">Non vus</option></select>
+            </label>
+            <fieldset class="streaming-rating-filter">
+              <legend>Note publique (TMDB)</legend>
+              <label>Minimum<input id="streaming-rating-min" type="number" min="0" max="10" step=".5" value="0"></label>
+              <label>Maximum<input id="streaming-rating-max" type="number" min="0" max="10" step=".5" value="10"></label>
+            </fieldset>
+            <fieldset class="streaming-rating-filter">
+              <legend>Ma note (catalogue)</legend>
+              <label>Minimum<input id="streaming-user-rating-min" type="number" min="0" max="10" step=".5" value="0"></label>
+              <label>Maximum<input id="streaming-user-rating-max" type="number" min="0" max="10" step=".5" value="10"></label>
+            </fieldset>
+            <fieldset class="streaming-toggle-filter">
+              <legend>Découverte</legend>
+              <label><input id="streaming-show-tops" type="checkbox" checked> Top 10</label>
+              <label><input id="streaming-show-recent" type="checkbox" checked> Nouveautés</label>
+            </fieldset>
+            <fieldset class="streaming-genre-filter">
+              <legend>Genres proposés</legend>
+              <div id="streaming-genre-options"></div>
+            </fieldset>
+          </div>
+          <p class="muted streaming-filter-hint">Les notes et les statuts personnels proviennent du catalogue. Les titres sans note ne sont exclus que lorsque la plage de notes est restreinte.</p>
+        </details>
         <div id="streaming-services" class="streaming-service-chips" role="group" aria-label="Services de streaming"></div>
         <div id="streaming-error" class="error-banner streaming-error" role="alert" hidden></div>
         <section id="streaming-saved" class="streaming-shelves" aria-label="Mes contenus streaming"></section>
@@ -183,6 +211,10 @@
       <dialog id="streaming-title-dialog" class="streaming-title-dialog" aria-labelledby="streaming-detail-heading">
         <button id="streaming-detail-close" type="button" class="dialog-close" aria-label="Fermer">×</button>
         <div id="streaming-title-content"></div>
+      </dialog>
+      <dialog id="streaming-person-dialog" class="streaming-title-dialog streaming-person-dialog" aria-labelledby="streaming-person-heading">
+        <button id="streaming-person-close" type="button" class="dialog-close" aria-label="Fermer la fiche personne">×</button>
+        <div id="streaming-person-content"></div>
       </dialog>
     </section>
     <section id="music-page" class="catalogue music-page" aria-labelledby="music-title" hidden>
