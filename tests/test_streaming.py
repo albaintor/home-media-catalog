@@ -153,6 +153,49 @@ def test_discover_intersects_subscriptions_and_genre(monkeypatch):
     assert seen["with_genres"] == 18
 
 
+
+@pytest.mark.parametrize(
+    "kind,sort,order,expected",
+    [
+        ("movie", "popularity", "desc", "popularity.desc"),
+        ("movie", "title", "asc", "title.asc"),
+        ("tv", "title", "desc", "name.desc"),
+        ("movie", "original_title", "asc", "original_title.asc"),
+        ("tv", "original_title", "desc", "original_name.desc"),
+        ("movie", "year", "asc", "primary_release_date.asc"),
+        ("tv", "year", "desc", "first_air_date.desc"),
+        ("movie", "rating", "asc", "vote_average.asc"),
+        ("tv", "rating", "desc", "vote_average.desc"),
+        ("tv", "recent", "asc", "first_air_date.desc"),
+    ],
+)
+def test_streaming_discovery_sorting_precedes_pagination(
+    monkeypatch, kind, sort, order, expected
+):
+    seen = {}
+
+    async def fake_tmdb(_token, path, params):
+        seen.update(params)
+        assert path == "/discover/" + kind
+        return {"page": 2, "total_pages": 6, "results": [
+            {"id": 1, "title": "Example", "name": "Example", "vote_average": 7.5}
+        ]}
+
+    monkeypatch.setattr(streaming, "_tmdb", fake_tmdb)
+    result = asyncio.run(streaming._discover(
+        "token", "netflix", kind, None, 2, "FR", sort, order
+    ))
+    assert seen["page"] == 2
+    assert seen["sort_by"] == expected
+    assert result["page"] == 2
+    assert result["total_pages"] == 6
+    assert len(result["items"]) == 1
+    assert result["ranking_type"] == "tmdb_" + sort
+    if sort == "rating":
+        assert seen["vote_count.gte"] == 100
+    if sort in {"year", "recent"}:
+        assert seen["first_air_date.lte" if kind == "tv" else "primary_release_date.lte"]
+
 def test_streaming_series_poster_and_backdrop_survive_catalogue_rebuild(tmp_path):
     store = Store(tmp_path / "streaming-media.sqlite")
     store.initialize()
