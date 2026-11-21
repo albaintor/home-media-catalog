@@ -118,7 +118,11 @@ function posterURL(raw,base='w342'){
     ? 'https://image.tmdb.org/t/p/'+base+raw:'';
 }
 function validRegion(){
-  const v=state.region.toUpperCase();
+  let v=state.region.toUpperCase();
+  if(v==='AUTO'){
+    try{v=new Intl.Locale(navigator.language||'fr-FR').region?.toUpperCase()||'FR';}
+    catch{v=(navigator.language||'fr-FR').split('-')[1]?.toUpperCase()||'FR';}
+  }
   return /^[A-Z]{2}$/.test(v)?v:'FR';
 }
 async function api(route,options={}){
@@ -539,7 +543,7 @@ function personCatalogueCard(item){
   if(!item||typeof item.id!=='string'||!/^[a-z0-9_-]{1,128}$/i.test(item.id))return '';
   const image=new URL('api/v1/media/'+encodeURIComponent(item.id)+'/artwork/poster',root).href;
   return '<button type="button" class="streaming-catalog-result" data-streaming-catalog-item="'+
-    esc(item.id)+'"><img src="'+esc(image)+'" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">'+
+    esc(item.id)+'"><img src="'+esc(image)+'" alt="" loading="lazy">'+
     '<span><strong>'+esc(item.title||'')+'</strong><small>'+esc(item.year||'')+
     (item.watch_status==='watched'?' · Vu':'')+'</small></span></button>';
 }
@@ -691,6 +695,7 @@ async function save(title){
       showSubview(currentSubview.id);
     }
     if(state.selected===keyFor(title))void details(state.selected);
+    if($('streaming-person-dialog').open)renderPerson();
   }catch(e){failure(e.message);}
 }
 async function load(){
@@ -700,7 +705,7 @@ async function load(){
   $('streaming-error').hidden=true;
   try{
     const [response,session,metrics]=await Promise.all([
-      api('streaming/state'),api('auth/session'),api('streaming/catalogue-metrics')
+      api('streaming/state'),api('auth/session'),api('streaming/catalogue-metrics').catch(()=>({items:[]}))
     ]);
     state.metrics=new Map((metrics.items||[]).map(m=>[m.kind+':'+m.tmdb_id,m]));
     if(!Array.isArray(response.rows))throw new Error('Invalid streaming state.');
@@ -728,18 +733,44 @@ function route(){
 }
 export function startStreaming(){
   if(!$('streaming-page'))return;
-  try{
-    const cached=localStorage.getItem('hmc-streaming-region');
-    const language=navigator.language||'fr-FR';
-    const guessed=language.split('-').slice(-1)[0].toUpperCase();
-    state.region=cached||(/^[A-Z]{2}$/.test(guessed)?guessed:'FR');
-  }catch{state.region='FR';}
-  if(![...$('streaming-region').options].some(x=>x.value===state.region))state.region='FR';
+  try{state.region=localStorage.getItem('hmc-streaming-region')||'auto';}
+  catch{state.region='auto';}
+  if(![...$('streaming-region').options].some(x=>x.value===state.region))
+    state.region='auto';
   $('streaming-region').value=state.region;
   $('streaming-region').addEventListener('change',e=>{
     state.region=e.target.value;
     try{localStorage.setItem('hmc-streaming-region',state.region);}catch{}
     state.cache.clear();state.logos={};renderBrowser();void loadProviderLogos();
+  });
+  $('streaming-customize').addEventListener('change',event=>{
+    const target=event.target;
+    const keyById={
+      'streaming-watch-filter':'watch_filter',
+      'streaming-rating-min':'rating_min','streaming-rating-max':'rating_max',
+      'streaming-user-rating-min':'user_rating_min',
+      'streaming-user-rating-max':'user_rating_max',
+      'streaming-show-tops':'show_tops','streaming-show-recent':'show_recent'
+    };
+    const key=keyById[target.id];
+    if(target.dataset.streamingGenre){
+      const genre=target.dataset.streamingGenre;
+      const chosen=new Set(preference('genres','action,drama,comedy').split(',').filter(Boolean));
+      if(target.checked)chosen.add(genre);else chosen.delete(genre);
+      persistPreference('genres',Array.from(chosen).sort().join(','));
+    } else if(key){
+      if(target.type==='checkbox')persistPreference(key,String(target.checked));
+      else if(target.type==='number'){
+        const value=Math.min(10,Math.max(0,Math.round((Number(target.value)||0)*2)/2));
+        const prefix=key.startsWith('user_')?'user_rating':'rating';
+        const partnerKey=key.endsWith('_min')?prefix+'_max':prefix+'_min';
+        const partner=scoreLimit(partnerKey,key.endsWith('_min')?10:0);
+        persistPreference(key,String(value));
+        if(key.endsWith('_min')&&value>partner)persistPreference(partnerKey,String(value));
+        if(key.endsWith('_max')&&value<partner)persistPreference(partnerKey,String(value));
+      }else persistPreference(key,target.value);
+    }else return;
+    renderBrowser();
   });
   $('streaming-search').addEventListener('input',e=>{
     state.query=e.target.value;
@@ -760,6 +791,30 @@ export function startStreaming(){
     persistPreference('visible_services',state.visible.join(','));renderBrowser();
   });
   $('streaming-page').addEventListener('click',event=>{
+    const member=event.target.closest('[data-streaming-person]');
+    if(member){void openPerson(member.dataset.streamingPerson);return;}
+    const personTab=event.target.closest('[data-streaming-person-tab]');
+    if(personTab&&state.person){
+      state.person.tab=personTab.dataset.streamingPersonTab;
+      renderPerson();
+      if(state.person.tab==='streaming'&&!state.person.checked)
+        void loadPersonStreamingMore();
+      return;
+    }
+    const personMore=event.target.closest('[data-streaming-person-more]');
+    if(personMore){
+      if(personMore.dataset.streamingPersonMore==='catalog')void loadPersonCatalogueMore();
+      else void loadPersonStreamingMore();
+      return;
+    }
+    const personCatalog=event.target.closest('[data-streaming-catalog-item]');
+    if(personCatalog){
+      state.personReturnKey=null;closePerson();
+      window.dispatchEvent(new CustomEvent('streaming-open-media',{
+        detail:{mediaID:personCatalog.dataset.streamingCatalogItem}
+      }));
+      return;
+    }
     const heart=event.target.closest('[data-streaming-heart],[data-streaming-save-detail]');
     if(heart){
       const title=state.titles.get(heart.dataset.streamingHeart||heart.dataset.streamingSaveDetail);
@@ -767,7 +822,10 @@ export function startStreaming(){
       return;
     }
     const tile=event.target.closest('[data-streaming-card]');
-    if(tile){void details(tile.dataset.streamingCard);return;}
+    if(tile){
+      if($('streaming-person-dialog').open){state.personReturnKey=null;closePerson();}
+      void details(tile.dataset.streamingCard);return;
+    }
     const more=event.target.closest('[data-streaming-more]');
     if(more){showSubview(more.dataset.streamingMore);return;}
     const work=event.target.closest('[data-streaming-work]');
@@ -778,7 +836,17 @@ export function startStreaming(){
   });
   $('streaming-back').addEventListener('click',closeSubview);
   $('streaming-subview-more').addEventListener('click',()=>void loadNext());
-  $('streaming-detail-close').addEventListener('click',()=>{$('streaming-title-dialog').close();state.selected=null;});
+  $('streaming-detail-close').addEventListener('click',()=>{
+    $('streaming-title-dialog').close();state.selected=null;
+  });
+  $('streaming-person-close').addEventListener('click',closePerson);
+  $('streaming-person-dialog').addEventListener('close',()=>{
+    ++state.personVersion;
+    const returnKey=state.personReturnKey;
+    state.personReturnKey=null;
+    state.person=null;
+    if(returnKey&&window.location.hash==='#streaming')void details(returnKey);
+  });
   $('streaming-title-dialog').addEventListener('close',()=>{state.selected=null;});
   window.addEventListener('hashchange',route);
   window.addEventListener('media-app-ready',route);
