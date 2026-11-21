@@ -2540,6 +2540,9 @@ class Store:
         collection_sources = cls._collection_sources_for_works(conn, ids)
         # Only a recorded streaming association qualifies for the launch menu.
         # Never infer it from a generic internal-collection edition.
+        # Explicit provenance: a heart-saved Streaming edition is not the
+        # same as a physical/internal edition that happens to be streamable.
+        by_streaming_reference: set[str] = set()
         by_streaming: dict[str, set[str]] = defaultdict(set)
         if ids:
             slots = ",".join("?" for _ in ids)
@@ -2550,6 +2553,13 @@ class Store:
                 ids,
             ):
                 by_streaming[record["work_id"]].add(record["service"])
+            for record in conn.execute(
+                "SELECT DISTINCT work_id FROM records "
+                "WHERE work_id IN (" + slots + ") AND source_id='internal' "
+                "AND json_extract(payload, '$.metadata.streaming_reference')=1",
+                ids,
+            ):
+                by_streaming_reference.add(record["work_id"])
             # Recover associations for titles saved before edition metadata
             # carried provider keys, including works merged with Kodi or CLZ.
             state_table = conn.execute(
@@ -2640,6 +2650,7 @@ class Store:
             )
             item.update(progress.get(row["id"], {}))
             item["streaming_services"] = sorted(by_streaming.get(row["id"], set()))
+            item["streaming_reference"] = row["id"] in by_streaming_reference
             if title := custom_titles.get(row["id"]):
                 item["provider_title"] = item["title"]
                 item["custom_title"] = title
