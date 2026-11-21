@@ -1051,6 +1051,11 @@ class Store:
                     else ["https://image.tmdb.org/t/p/w500" + path]
                     if path and data.get("tmdb_id") else []
                 )
+                backdrop = data.get("backdrop_path")
+                fanart = (
+                    ["https://image.tmdb.org/t/p/w1280" + backdrop]
+                    if backdrop and data.get("tmdb_id") else []
+                )
                 record = Record(
                     external_key=external_key,
                     kind=kind,
@@ -1063,6 +1068,7 @@ class Store:
                     formats=merge_disc_formats([], data.get("format", ""), data.get("technical_formats") or []),
                     date_added=now(),
                     poster=poster,
+                    fanart=fanart,
                     metadata={
                         **self._physical_edition_fields(data.get("edition_details")),
                         "barcode": barcode, "internal": True,
