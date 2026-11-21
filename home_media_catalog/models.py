@@ -172,6 +172,7 @@ class InternalMediaInput(StrictModel):
     technical_formats: list[Literal["480p", "480i", "576p", "576i", "720p", "1080p", "1080i", "4K", "HDR10", "HDR10+", "Dolby Vision", "HLG", "Dolby Atmos", "DTS:X", "Dolby TrueHD", "DTS-HD MA", "DTS-HD", "DTS-HD HR", "Dolby Digital+", "Dolby Digital", "DTS", "LPCM", "PCM", "Auro-3D"]] = Field(default_factory=list, max_length=32)
     edition_details: PhysicalEditionDetails | None = None
     poster_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
+    backdrop_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
     physical_season: int | None = Field(default=None, ge=0, le=10000)
     physical_title: str | None = Field(default=None, max_length=300)
     physical_episode_count: int | None = Field(default=None, ge=0, le=10000)
