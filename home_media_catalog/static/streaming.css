@@ -143,3 +143,45 @@
 .streaming-assignments button{min-height:35px;padding:7px 9px;font-size:11px;white-space:nowrap}
 .streaming-detail-feedback{font-size:12px;color:var(--accent);margin:8px 0}
 @media(max-width:650px){.streaming-assignments{grid-template-columns:minmax(110px,1fr) auto}.streaming-assignments [data-streaming-new]{grid-column:1/-1;justify-self:start}}
+
+/* Align streaming choices in logical rows: status, scoring and subscriptions. */
+.streaming-customize-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-areas:"watch discovery" "public personal" "subscriptions genres";
+  gap:16px;align-items:stretch
+}
+.streaming-customize-grid>label:first-child{
+  grid-area:watch;display:flex;flex-direction:column;
+  justify-content:start;gap:9px;
+  padding:12px 15px;border-radius:10px;border:1px solid var(--border);
+  background:var(--surface);color:var(--text);font-weight:600;min-width:0
+}
+.streaming-customize-grid>label:first-child select{margin-top:auto;min-height:42px}
+.streaming-customize-grid>[data-rating-range="streaming-rating"]{grid-area:public}
+.streaming-customize-grid>[data-rating-range="streaming-user-rating"]{grid-area:personal}
+.streaming-customize-grid>.streaming-subscription-filter{grid-area:subscriptions}
+.streaming-customize-grid>.streaming-content-filter{grid-area:discovery}
+.streaming-customize-grid>.streaming-genre-filter{grid-area:genres}
+.streaming-customize-grid>fieldset{min-width:0;margin:0}
+.streaming-customize .rating-range-control{display:block;min-inline-size:0}
+.streaming-customize-grid>.streaming-toggle-filter,
+.streaming-customize-grid>.streaming-genre-filter{
+  padding:12px 15px;background:var(--surface);border-radius:10px;gap:10px
+}
+.streaming-customize-grid>.streaming-toggle-filter legend,
+.streaming-customize-grid>.streaming-genre-filter legend{
+  font-weight:650;color:var(--text)
+}
+#streaming-subscription-options{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;
+}
+#streaming-subscription-options label{min-width:0;font-size:12px}
+#streaming-genre-options{grid-template-columns:repeat(2,minmax(0,1fr));max-height:unset}
+@media(max-width:690px){
+  .streaming-customize-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"watch" "discovery" "public" "personal" "subscriptions" "genres"}
+  #streaming-subscription-options,#streaming-genre-options{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:380px){
+  #streaming-subscription-options,#streaming-genre-options{grid-template-columns:minmax(0,1fr)}
+}
