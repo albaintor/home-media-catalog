@@ -59,7 +59,7 @@ _RESPONSE_LANGUAGE_NAMES = {
 }
 
 
-def _response_language(request: "StreamingAIInput") -> str:
+def _response_language(request: StreamingAIInput) -> str:
     # Legacy clients did not send a language; choose a useful regional
     # fallback but always honor a newer client's explicit app language.
     return request.response_language or ("fr" if request.region == "FR" else "en")
