@@ -15,7 +15,7 @@ import json
 import math
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .auth import authenticated, writable
+from .watch_progress import decode_episodes, encode_episodes, effective_series_status
 
 TMDB = "https://api.themoviedb.org/3"
 NETFLIX_COUNTRIES = "https://www.netflix.com/tudum/top10/data/all-weeks-countries.tsv"
@@ -159,6 +160,174 @@ def _merge(store: Any, incoming: list[StreamingStateRow]) -> list[dict[str, Any]
              "modified_at": row["modified_at"], "deleted": bool(row["deleted"])}
             for row in rows]
 
+
+
+def _reconcile_watch_progress(store: Any, rows: list[dict[str, Any]]) -> int:
+    """Project the shared local-first journal into the canonical catalogue.
+
+    The inventory is public reference metadata. An arrival can change a
+    series' derived status, but never modifies its watched snapshot. User edits
+    from either client are kept in the same bidirectional journal.
+    """
+    states = {
+        row["key"]: row["payload"]
+        for row in rows if not row["deleted"] and isinstance(row["payload"], dict)
+    }
+    changed = 0
+    with store.connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        series = db.execute(
+            "SELECT DISTINCT i.work_id,i.value AS tmdb_id "
+            "FROM identifiers i JOIN works w ON w.id=i.work_id "
+            "WHERE i.namespace='tmdb' AND w.kind='tvshow'"
+        ).fetchall()
+        for series_row in series:
+            tmdb_id = str(series_row["tmdb_id"])
+            personal = states.get("personal:tv:" + tmdb_id)
+            inventory = states.get("inventory:tv:" + tmdb_id)
+            status = effective_series_status(personal, inventory)
+            if status is None:
+                continue
+            available = decode_episodes(inventory.get("episodes"))
+            baseline = decode_episodes(personal.get("watched_episode_snapshot"))
+            try:
+                overrides = json.loads(personal.get("episode_overrides") or "{}")
+            except (ValueError, TypeError):
+                overrides = {}
+            if not isinstance(overrides, dict):
+                overrides = {}
+            for row in db.execute(
+                "SELECT id,season,episode,watch_status FROM works "
+                "WHERE kind='episode' AND parent_id=?",
+                (series_row["work_id"],)
+            ).fetchall():
+                coord = (row["season"], row["episode"])
+                if coord not in available:
+                    continue
+                key = f"{coord[0]}:{coord[1]}"
+                watched = overrides.get(key, coord in baseline)
+                if not isinstance(watched, bool):
+                    watched = coord in baseline
+                if (row["watch_status"] == "watched") != watched:
+                    db.execute(
+                        "INSERT INTO personal(work_id,watched) VALUES(?,?) "
+                        "ON CONFLICT(work_id) DO UPDATE SET watched=excluded.watched",
+                        (row["id"], int(watched)),
+                    )
+                    store._rebuild(db, row["id"])
+                    changed += 1
+            current = db.execute("SELECT watch_status FROM works WHERE id=?",
+                                 (series_row["work_id"],)).fetchone()
+            if current and current["watch_status"] != status:
+                db.execute("UPDATE works SET watch_status=? WHERE id=?",
+                           (status, series_row["work_id"]))
+                changed += 1
+    return changed
+
+
+def _mirror_catalogue_personal(
+    store: Any, media_id: str, *, watched: bool | None = None,
+    rating_changed: bool = False, rating: float | None = None,
+) -> None:
+    """Server/web personal edits become journal revisions visible to every iOS device."""
+    detail = store.detail(media_id)
+    if not detail or detail.get("kind") not in ("movie", "tvshow"):
+        return
+    raw_ids = (detail.get("identifiers") or {}).get("tmdb") or []
+    if isinstance(raw_ids, (str, int)):
+        raw_ids = [raw_ids]
+    tmdb_id = next((str(item) for item in raw_ids
+                    if str(item).isdecimal() and int(item) > 0), None)
+    if tmdb_id is None or (watched is None and not rating_changed):
+        return
+    kind = "tv" if detail["kind"] == "tvshow" else "movie"
+    personal_key = f"personal:{kind}:{tmdb_id}"
+    rows = _merge(store, [])
+    existing = next((row for row in rows
+                     if row["key"] == personal_key and not row["deleted"]), None)
+    payload = dict(existing["payload"]) if existing else {}
+    now_stamp = datetime.now(UTC)
+    if existing:
+        now_stamp = max(now_stamp, _stamp(existing["modified_at"]) + timedelta(microseconds=1))
+    should_mark = watched if watched is not None else (True if rating_changed and rating is not None else None)
+    if should_mark is not None:
+        payload["watched"] = "true" if should_mark else "false"
+        payload["watch_schema"] = "2"
+        payload.pop("episode_overrides", None)
+        if should_mark:
+            payload["watched_at"] = now_stamp.isoformat(timespec="microseconds")
+            inventory = next((row["payload"] for row in rows
+                              if row["key"] == f"inventory:tv:{tmdb_id}"
+                              and not row["deleted"]), None)
+            if kind == "tv" and inventory:
+                payload["watched_episode_snapshot"] = inventory.get("episodes", "")
+            else:
+                payload.pop("watched_episode_snapshot", None)
+        else:
+            payload.pop("watched_at", None)
+            payload["watched_episode_snapshot"] = ""
+    if rating_changed:
+        if rating is not None:
+            payload["rating"] = str(rating)
+            payload.pop("rating_cleared", None)
+        else:
+            payload.pop("rating", None)
+            payload["rating_cleared"] = "true"
+    merged = _merge(store, [StreamingStateRow(
+        key=personal_key, payload=payload,
+        modified_at=now_stamp.isoformat(timespec="microseconds"))])
+    if kind == "tv":
+        _reconcile_watch_progress(store, merged)
+
+
+def _mirror_catalogue_episode_edit(
+    store: Any, media_id: str, *, watched: bool,
+    season: int | None, up_to_episode: int | None,
+) -> None:
+    """Represent web-side season/episode watch edits in the iOS journal."""
+    detail = store.detail(media_id)
+    if not detail or detail.get("kind") != "tvshow":
+        return
+    raw_ids = (detail.get("identifiers") or {}).get("tmdb") or []
+    if isinstance(raw_ids, (str, int)):
+        raw_ids = [raw_ids]
+    tmdb_id = next((str(value) for value in raw_ids
+                    if str(value).isdecimal() and int(value) > 0), None)
+    if not tmdb_id:
+        return
+    key = f"personal:tv:{tmdb_id}"
+    rows = _merge(store, [])
+    existing = next((row for row in rows if row["key"] == key and not row["deleted"]), None)
+    payload = dict(existing["payload"]) if existing else {}
+    try:
+        overrides = json.loads(payload.get("episode_overrides") or "{}")
+    except (TypeError, ValueError):
+        overrides = {}
+    if not isinstance(overrides, dict):
+        overrides = {}
+    with store.connect() as db:
+        episodes = db.execute(
+            "SELECT season,episode FROM works WHERE parent_id=? AND kind='episode'",
+            (media_id,)
+        ).fetchall()
+    for episode_row in episodes:
+        number = episode_row["season"]
+        episode_number = episode_row["episode"]
+        if number is None or episode_number is None or number == 0:
+            continue
+        if season is not None and number != season:
+            continue
+        if up_to_episode is not None and episode_number > up_to_episode:
+            continue
+        overrides[f"{number}:{episode_number}"] = watched
+    payload["episode_overrides"] = json.dumps(overrides, separators=(",", ":"))
+    payload.setdefault("watched", "false")
+    payload["watch_schema"] = "2"
+    now_stamp = datetime.now(UTC)
+    if existing:
+        now_stamp = max(now_stamp, _stamp(existing["modified_at"]) + timedelta(microseconds=1))
+    _merge(store, [StreamingStateRow(key=key, payload=payload,
+                                   modified_at=now_stamp.isoformat(timespec="microseconds"))])
 
 
 def _streaming_trailers(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -962,6 +1131,7 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
     def sync_state(body: StreamingSyncInput):
         merged = _merge(store, body.changes)
         _reconcile_streaming_catalogue(store, merged)
+        _reconcile_watch_progress(store, merged)
         return {"rows": merged}
 
     return router
