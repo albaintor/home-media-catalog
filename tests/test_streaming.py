@@ -280,6 +280,69 @@ def test_search_is_consolidated_and_excludes_rentals(monkeypatch):
     assert result["ranking_type"] == "search"
 
 
+def test_category_search_preserves_genre_language_country_keyword_and_svod(monkeypatch):
+    requested = []
+
+    async def fake_tmdb(_token, path, _params):
+        requested.append(path)
+        if path == "/search/tv":
+            return {"results": [
+                {"id": 101, "name": "Matching K-drama", "genre_ids": [18],
+                 "original_language": "ko", "origin_country": ["KR"]},
+                {"id": 102, "name": "Wrong genre", "genre_ids": [35],
+                 "original_language": "ko", "origin_country": ["KR"]},
+                {"id": 103, "name": "Wrong language", "genre_ids": [18],
+                 "original_language": "en", "origin_country": ["KR"]},
+                {"id": 104, "name": "Wrong keyword", "genre_ids": [18],
+                 "original_language": "ko", "origin_country": ["KR"]},
+            ]}
+        if path == "/tv/101/keywords":
+            return {"results": [{"id": 701}]}
+        if path == "/tv/104/keywords":
+            return {"results": [{"id": 999}]}
+        if path == "/tv/101/watch/providers":
+            return {"results": {"FR": {"flatrate": [{"provider_id": 8}],
+                                        "rent": [{"provider_id": 11}]}}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(streaming, "_tmdb", fake_tmdb)
+    result = asyncio.run(streaming._search(
+        "token", "netflix,mubi", "Drama", "tv", "FR",
+        genre=18, origin_country="KR", original_language="ko",
+        keyword_id=701,
+    ))
+    assert [title["id"] for title in result["items"]] == [101]
+    assert result["items"][0]["service_keys"] == ["netflix"]
+    assert "/tv/102/keywords" not in requested
+    assert "/tv/103/keywords" not in requested
+    assert "/tv/104/watch/providers" not in requested
+
+
+def test_movie_category_search_uses_verified_production_country(monkeypatch):
+    async def fake_tmdb(_token, path, _params):
+        if path == "/search/movie":
+            return {"results": [
+                {"id": 201, "title": "French movie",
+                 "genre_ids": [35], "original_language": "fr"},
+                {"id": 202, "title": "Foreign movie",
+                 "genre_ids": [35], "original_language": "fr"},
+            ]}
+        if path == "/movie/201":
+            return {"production_countries": [{"iso_3166_1": "FR"}]}
+        if path == "/movie/202":
+            return {"production_countries": [{"iso_3166_1": "CA"}]}
+        if path == "/movie/201/watch/providers":
+            return {"results": {"FR": {"flatrate": [{"provider_id": 8}]}}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(streaming, "_tmdb", fake_tmdb)
+    result = asyncio.run(streaming._search(
+        "token", "netflix", "movie", "movie", "FR",
+        genre=35, origin_country="FR", original_language="fr",
+    ))
+    assert [title["id"] for title in result["items"]] == [201]
+
+
 def test_discover_intersects_subscriptions_and_genre(monkeypatch):
     seen = {}
 
