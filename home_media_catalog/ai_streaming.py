@@ -7,9 +7,11 @@ persisted. A model can refine relevance, but never assert streaming availability
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import re
+import time
 from collections import defaultdict
 from typing import Any, Literal
 
@@ -19,6 +21,10 @@ from pydantic import BaseModel, Field
 from .ai_rerank import rerank_candidates
 from .streaming import _availability, _merge, _provider_ids, _provider_keys, _tmdb, _item
 from .watch_progress import effective_series_status
+
+# Public TMDB metadata only; personal viewing histories are not cached.
+_TMDB_CACHE: dict[str, tuple[float, dict]] = {}
+_AVAILABILITY_CACHE: dict[str, tuple[float, list[str]]] = {}
 
 
 class StreamingAIInput(BaseModel):
@@ -87,8 +93,8 @@ def _build_profile(catalogue_rows: list[dict], journal: list[dict]) -> dict[str,
         })
         if "rating" in payload or payload.get("rating_cleared") == "true":
             entry["rating"] = _number(payload.get("rating"))
-        if payload.get("watched") == "true":
-            entry["seen"] = True
+        if payload.get("watched") in ("true", "false"):
+            entry["seen"] = payload["watched"] == "true"
         if match[1] == "tv":
             inventory = states.get("inventory:" + identity)
             status = effective_series_status(payload, inventory)
@@ -192,9 +198,21 @@ async def recommend_streaming(
     kinds = ("movie", "tv") if kind == "both" else (kind,)
     locale = "fr-FR" if request.region == "FR" else "en-US"
     semaphore = asyncio.Semaphore(5)
+    credential_scope = hashlib.sha256(token.encode()).hexdigest()[:12]
+
     async def fetch(path: str, params: dict) -> dict:
+        cache_key = credential_scope + ":" + path + ":" + json.dumps(
+            params, sort_keys=True, separators=(",", ":")
+        )
+        cached = _TMDB_CACHE.get(cache_key)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
         async with semaphore:
-            return await _tmdb(token, path, params)
+            result = await _tmdb(token, path, params)
+        if len(_TMDB_CACHE) > 400:
+            _TMDB_CACHE.pop(next(iter(_TMDB_CACHE)))
+        _TMDB_CACHE[cache_key] = time.monotonic() + 900, result
+        return result
 
     seeds = profile["seeds"][:6]
     dislikes = profile["negative"][:3]
