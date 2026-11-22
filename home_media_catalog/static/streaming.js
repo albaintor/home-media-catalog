@@ -916,6 +916,7 @@ function renderTitleDetails(title,full=null,loading=false,error='') {
     '<span><strong>'+esc(s.title||('Season '+s.number))+'</strong><small>'+
     esc((s.episode_count||0)+' episodes')+'</small></span></div>').join('');
   const rating=Number(data.rating||title.rating)||0;
+  const personal=personalRatingFor(title);
   const popularity=popularityIndex(data)??popularityIndex(title);
   const meta=[title.kind==='tv'?'Series':'Movie',data.year||title.year,
     data.runtime_minutes?data.runtime_minutes+' min':'',
@@ -928,7 +929,10 @@ function renderTitleDetails(title,full=null,loading=false,error='') {
     (data.original_title&&data.original_title!==titleText?
       '<p class="streaming-original-title">'+esc(data.original_title)+'</p>':'')+
     '<p>'+esc(meta)+'</p>'+
-    (displayPreference('popularity')&&popularity!=null?
+    (personal!=null?
+      '<p class="streaming-popularity-label"><span aria-hidden="true">☆</span> Ma note <span class="streaming-popularity-value">'+
+      esc(personal.toFixed(1))+'/10</span></p>':'')+
+    (popularity!=null?
       '<p class="streaming-popularity-label"><span aria-hidden="true">↗</span> Popularité TMDB <span class="streaming-popularity-value">'+
       esc(Math.round(popularity))+'</span></p>':'')+
     '<div class="streaming-detail-actions"><button type="button" class="secondary" data-streaming-save-detail="'+
