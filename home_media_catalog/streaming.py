@@ -276,9 +276,13 @@ def _reconcile_watch_progress(store: Any, rows: list[dict[str, Any]]) -> int:
                 (series_row["work_id"],)
             ).fetchall():
                 coord = (row["season"], row["episode"])
-                if coord not in available:
-                    continue
                 key = f"{coord[0]}:{coord[1]}"
+                # The iPhone may have changed an episode before its public
+                # TMDB inventory was uploaded. Explicit local overrides and
+                # watched snapshots must still be applied to canonical episodes.
+                if (coord not in available and coord not in baseline
+                        and key not in overrides):
+                    continue
                 watched = overrides.get(key, coord in baseline)
                 if not isinstance(watched, bool):
                     watched = coord in baseline
@@ -426,6 +430,7 @@ def _mirror_catalogue_personal(
 def _mirror_catalogue_episode_edit(
     store: Any, media_id: str, *, watched: bool,
     season: int | None, up_to_episode: int | None,
+    targeted_episode: int | None = None,
 ) -> None:
     """Represent web-side season/episode watch edits in the iOS journal."""
     detail = store.detail(media_id)
@@ -474,7 +479,8 @@ def _mirror_catalogue_episode_edit(
             continue
         coordinate = (number, episode_number)
         matches = (season is None or number == season) and (
-            up_to_episode is None or episode_number <= up_to_episode)
+            up_to_episode is None or episode_number <= up_to_episode) and (
+            targeted_episode is None or episode_number == targeted_episode)
         if matches:
             if watched:
                 snapshot.add(coordinate)
