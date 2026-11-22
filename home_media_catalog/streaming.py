@@ -259,10 +259,10 @@ def _reconcile_watch_progress(store: Any, rows: list[dict[str, Any]]) -> int:
             tmdb_id = str(series_row["tmdb_id"])
             personal = states.get("personal:tv:" + tmdb_id)
             inventory = states.get("inventory:tv:" + tmdb_id)
-            status = effective_series_status(personal, inventory)
-            if status is None:
+            if personal is None:
                 continue
-            available = decode_episodes(inventory.get("episodes"))
+            status = effective_series_status(personal, inventory)
+            available = decode_episodes((inventory or {}).get("episodes"))
             baseline = decode_episodes(personal.get("watched_episode_snapshot"))
             try:
                 overrides = json.loads(personal.get("episode_overrides") or "{}")
@@ -294,9 +294,23 @@ def _reconcile_watch_progress(store: Any, rows: list[dict[str, Any]]) -> int:
                     )
                     store._rebuild(db, row["id"])
                     changed += 1
+            if status is None:
+                # An iPhone may upload a watched episode before the public
+                # inventory row. Compute series progress from the imported
+                # canonical episodes without fabricating an aired inventory.
+                counts = db.execute(
+                    "SELECT COUNT(*) AS total,"
+                    " SUM(CASE WHEN watch_status='watched' THEN 1 ELSE 0 END) AS watched "
+                    "FROM works WHERE parent_id=? AND kind='episode'",
+                    (series_row["work_id"],),
+                ).fetchone()
+                if counts["total"]:
+                    count = counts["watched"] or 0
+                    status = ("watched" if count == counts["total"] else
+                              "in_progress" if count else "unwatched")
             current = db.execute("SELECT watch_status FROM works WHERE id=?",
                                  (series_row["work_id"],)).fetchone()
-            if current and current["watch_status"] != status:
+            if status is not None and current and current["watch_status"] != status:
                 db.execute("UPDATE works SET watch_status=? WHERE id=?",
                            (status, series_row["work_id"]))
                 changed += 1
