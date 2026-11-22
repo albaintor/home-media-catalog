@@ -196,9 +196,14 @@
         <details id="streaming-customize" class="streaming-customize">
           <summary>Personnaliser le streaming</summary>
           <div class="streaming-customize-grid">
-            <label>État de visionnage dans le catalogue
-              <select id="streaming-watch-filter"><option value="all">Tous</option><option value="watched">Vus</option><option value="unwatched">Non vus</option></select>
-            </label>
+            <div class="streaming-personal-filter-controls">
+              <label>État de visionnage
+                <select id="streaming-watch-filter"><option value="all">Tous</option><option value="watched">Vus</option><option value="unwatched">Non vus</option></select>
+              </label>
+              <label>Note personnelle
+                <select id="streaming-personal-rating-filter"><option value="all">Toutes</option><option value="rated">Notées</option><option value="unrated">Non notées</option></select>
+              </label>
+            </div>
             <fieldset class="rating-range-control" data-rating-range="streaming-rating">
               <legend>Note publique (TMDB)</legend>
               <div class="rating-range-values"><output id="streaming-rating-min-value" for="streaming-rating-min">0</output><span aria-hidden="true">–</span><output id="streaming-rating-max-value" for="streaming-rating-max">10</output></div>
@@ -252,6 +257,7 @@
               <option value="popularity">Popularité TMDB</option>
               <option value="rating">Note publique</option>
               <option value="user_rating">Ma note</option>
+              <option value="date_added">Date d'ajout</option>
               <option value="title">Titre</option>
               <option value="year">Année</option>
             </select>
