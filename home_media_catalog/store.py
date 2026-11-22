@@ -1818,6 +1818,20 @@ class Store:
                         "INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
                         (work_id, now()),
                     )
+                    if old_images[0] != current["poster"]:
+                        # Composite thumbnails depend on member posters.
+                        # Their versioned URLs must change with the poster,
+                        # even when the collection/list membership did not.
+                        conn.execute(
+                            "UPDATE collections SET revision=revision+1 WHERE id IN "
+                            "(SELECT collection_id FROM collection_items WHERE work_id=?)",
+                            (work_id,),
+                        )
+                        conn.execute(
+                            "UPDATE lists SET revision=revision+1 WHERE id IN "
+                            "(SELECT list_id FROM list_items WHERE work_id=?)",
+                            (work_id,),
+                        )
             if deleted or reassigned:
                 self._prune(conn)
             # Includes legacy works imported before title matching existed. Only
