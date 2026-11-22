@@ -1,20 +1,20 @@
 """Administrator-scoped, TLS-only AI API key exchange with iOS."""
 import stat
 
+import conftest
 from fastapi.testclient import TestClient
 
-from conftest import ADMIN, READ
 from home_media_catalog.app import create_app
 from home_media_catalog.settings import Settings
 
 PATH = "/api/v1/ai/device-credentials"
-ADMIN_AUTH = {"Authorization": f"Bearer {ADMIN}"}
-READ_AUTH = {"Authorization": f"Bearer {READ}"}
+ADMIN_AUTH = {"Authorization": f"Bearer {conftest.ADMIN}"}
+READ_AUTH = {"Authorization": f"Bearer {conftest.READ}"}
 PERSONAL_KEY = "sk-test-personal-credential-only"
 
 
 def test_ai_device_credentials_require_https_admin_bearer(tmp_path):
-    app = create_app(Settings(data_dir=tmp_path, api_token=ADMIN, read_token=READ))
+    app = create_app(Settings(data_dir=tmp_path, api_token=conftest.ADMIN, read_token=conftest.READ))
     with TestClient(app, base_url="http://testserver") as client:
         assert client.get(PATH, headers=ADMIN_AUTH).status_code == 403
         assert client.put(PATH, headers=ADMIN_AUTH, json={
