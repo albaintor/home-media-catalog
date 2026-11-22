@@ -360,6 +360,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and response.status_code == 200
         ):
             response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        elif (
+            "/api/v1/media/" in path
+            and "/artwork/" in path
+            and response.status_code in (200, 304)
+            and response.headers.get("ETag")
+        ):
+            # Media artwork is private (authenticated), but rarely changes.
+            # The content ETag avoids downloading unchanged bytes after one
+            # day; the artwork-change cursor busts only the affected browser
+            # URL immediately when an administrator replaces a poster.
+            response.headers["Cache-Control"] = "private, max-age=86400, must-revalidate"
         else:
             response.headers["Cache-Control"] = "private, no-store"
         return response
@@ -3632,20 +3643,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(authenticated)],
         responses={200: {"content": {"image/jpeg": {}, "image/png": {}, "image/webp": {}}}},
     )
-    async def media_artwork(media_id: str, aspect: Literal["poster", "fanart"]):
+    async def media_artwork(media_id: str, aspect: Literal["poster", "fanart"],
+                            request: Request):
         candidates = await asyncio.to_thread(store.artwork, media_id, aspect)
         try:
             data, content_type = await app.state.artwork.get(candidates)
-            return Response(data, media_type=content_type)
         except ArtworkError as exc:
-            if aspect == "poster":
-                repaired = await recover_poster_on_demand(
-                    media_id, broken_source=bool(candidates)
-                )
-                if repaired:
-                    data, content_type = repaired
-                    return Response(data, media_type=content_type)
-            raise HTTPException(404, str(exc)) from exc
+            if aspect != "poster":
+                raise HTTPException(404, str(exc)) from exc
+            repaired = await recover_poster_on_demand(
+                media_id, broken_source=bool(candidates)
+            )
+            if not repaired:
+                raise HTTPException(404, str(exc)) from exc
+            data, content_type = repaired
+        # The validator is derived from the actual image bytes. When its
+        # reference is updated without changing the media ID, clients still
+        # receive the new content instead of a stale unconditional 200.
+        etag = '"' + hashlib.sha256(data).hexdigest() + '"'
+        if etag in request.headers.get("if-none-match", "").split(","):
+            return Response(status_code=304, headers={"ETag": etag})
+        return Response(data, media_type=content_type, headers={"ETag": etag})
 
     @app.post(
         API + "/connections/mariadb/databases",
