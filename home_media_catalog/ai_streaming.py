@@ -239,6 +239,23 @@ async def recommend_streaming(
     good_genres = [genre for genre, value in
                    sorted(affinity.items(), key=lambda pair: -pair[1])
                    if value > 0][:3]
+    genre_labels = {
+        item["id"]: item["name"]
+        for _, detail in seed_pairs
+        for item in detail.get("genres", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), int)
+        and isinstance(item.get("name"), str)
+    }
+    for category in kinds:
+        try:
+            genre_data = await fetch("/genre/" + category + "/list", {"language": locale})
+            genre_labels.update({
+                item["id"]: item["name"] for item in genre_data.get("genres", [])
+                if isinstance(item, dict) and isinstance(item.get("id"), int)
+                and isinstance(item.get("name"), str)
+            })
+        except HTTPException:
+            pass
 
     async def discover(category: str, genre: int | None, page: int) -> tuple[str, list]:
         args = {
@@ -257,15 +274,31 @@ async def recommend_streaming(
         except HTTPException:
             return category, []
 
+    async def similar_seed(seed: dict) -> tuple[str, list]:
+        category, number = seed["id"].split(":")
+        if category not in kinds:
+            return category, []
+        try:
+            data = await fetch(
+                f"/{category}/{number}/recommendations",
+                {"language": locale, "page": 1},
+            )
+            return category, data.get("results") or []
+        except HTTPException:
+            return category, []
+
     jobs = [discover(cat, genre, 1) for cat in kinds for genre in good_genres[:3]]
     jobs.extend(discover(cat, None, page) for cat in kinds for page in (1, 2))
+    jobs.extend(similar_seed(seed) for seed in seeds[:4])
     found = await asyncio.gather(*jobs)
-    if not any(rows for _, rows in found):
-        raise HTTPException(502, "TMDB discovery returned no candidates for these subscriptions.")
 
     blocked = set(profile["seen"])
     blocked.update(key for key in request.excluded_ids if re.fullmatch(r"(movie|tv):[1-9]\d{0,8}", key))
-    language = _language_hint(request.prompt)
+    full_prompt = (
+        ("Previous search: " + request.previous_prompt + "\n")
+        if request.previous_prompt else ""
+    ) + request.prompt
+    language = _language_hint(full_prompt)
     candidates: dict[str, tuple[float, dict]] = {}
     query_text = " ".join([plan.semantic_query or "", *plan.retrieval_terms[:6]])
     for category, rows in found:
