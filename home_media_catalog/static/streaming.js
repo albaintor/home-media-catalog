@@ -344,8 +344,10 @@ function renderSaved(){
   $('streaming-saved').innerHTML=groups.map(([kind,heading])=>{
     const titles=personalRows(kind).map(normalizeTitle);
     const visible=titles.filter(matchesStreamingFilters);
+    state.shelves.set('saved-'+kind,{
+      id:'saved-'+kind,heading,items:titles,kind,saved:true,page:1,total:1
+    });
     if(!visible.length)return '';
-    state.shelves.set('saved-'+kind,{heading,items:visible,kind,saved:true});
     return shelf('saved-'+kind,heading,visible.map(card).join(''),'',true,kind);
   }).join('');
 }
@@ -423,6 +425,47 @@ async function retrieve(def,page=1){
   state.cache.set(key,value);
   return value;
 }
+function renderDiscoveryShelf(element,def,providedNote){
+  const visible=(def.items||[]).filter(matchesStreamingFilters).slice(0,12);
+  const note=providedNote??(def.sort==='top'?
+    (def.ranking==='official_weekly'?'Official':'TMDB'):'');
+  const content=visible.length?visible.map(card).join(''):
+    '<p class="streaming-shelf-message">No titles match the active filters.</p>';
+  element.innerHTML=shelf(def.id,def.heading,content,note,
+    def.page<def.total||visible.length>0,def.kind,def.genreKey,def.sort);
+}
+function refreshVisibleCards(){
+  document.querySelectorAll('#streaming-page .streaming-tile[data-streaming-title]')
+    .forEach(element=>{
+      const title=state.titles.get(element.dataset.streamingTitle);
+      if(title)element.outerHTML=card(title);
+    });
+  if(state.selected&&$('streaming-title-dialog').open){
+    const title=state.titles.get(state.selected);
+    if(title)renderTitleDetails(title,state.detailCache.get(state.selected));
+  }
+}
+function refreshFilteredViews(){
+  renderSaved();
+  if(!state.query.trim()||state.query.trim().length<2){
+    document.querySelectorAll('#streaming-discover [data-discovery-key]')
+      .forEach(element=>{
+        const def=state.shelves.get(element.dataset.discoveryKey);
+        if(def?.loaded&&def.items?.length)renderDiscoveryShelf(element,def);
+      });
+  }else{
+    document.querySelectorAll('#streaming-discover [data-streaming-shelf]')
+      .forEach(element=>{
+        const def=state.shelves.get(element.dataset.streamingShelf);
+        if(!def)return;
+        const visible=def.items.filter(matchesStreamingFilters);
+        element.innerHTML=shelf(def.id,def.heading,visible.map(card).join(''),
+          '',true,def.kind);
+      });
+  }
+  if(state.subview)renderSubviewGrid();
+}
+
 function setupDiscover(){
   state.version++;
   if(state.observer)state.observer.disconnect();
@@ -440,7 +483,8 @@ function setupDiscover(){
     const element=document.createElement('div');
     element.dataset.discoveryKey=def.id;
     element.innerHTML=shelf(def.id,def.heading,
-      '<div class="streaming-shelf-loading">Loading…</div>','',false);
+      '<div class="streaming-shelf-loading">Loading…</div>','',false,
+      def.kind,def.genreKey,def.sort);
     list.append(element);
   }
   async function populate(element) {
@@ -451,23 +495,22 @@ function setupDiscover(){
     try{
       const result=await retrieve(def);
       if(version!==state.version)return;
-      def.items=(Array.isArray(result.items)?result.items:[]).filter(matchesStreamingFilters);
+      def.items=Array.isArray(result.items)?result.items:[];
+      def.page=1;
       def.total=result.total_pages||1;
+      def.ranking=result.ranking_type;
       if(def.sort==='top'&&result.ranking_type==='official_weekly')
         def.heading=def.kind==='tv'?'Top 10 series · Netflix (weekly)':
           'Top 10 movies · Netflix (weekly)';
       const note=def.sort==='top'&&result.ranking_type==='official_weekly'?'Official':
         def.sort==='top'?'TMDB':'';
-      element.innerHTML=def.items.length
-        ?shelf(id,def.heading,def.items.slice(0,20).map(card).join(''),note,
-          def.items.length>0)
-        :shelf(id,def.heading,'<p class="streaming-shelf-message">'+
-          esc('No titles available for this selection.')+'</p>','',false);
+      renderDiscoveryShelf(element,def,note);
     }catch(e){
       if(version!==state.version)return;
       def.loaded=false;
       element.innerHTML=shelf(id,def.heading,
-        '<p class="streaming-shelf-message">'+esc(e.message)+'</p>','',false);
+        '<p class="streaming-shelf-message">'+esc(e.message)+'</p>','',false,
+        def.kind,def.genreKey,def.sort);
     }
   }
   if('IntersectionObserver' in window){
@@ -506,13 +549,14 @@ async function performSearch(){
     if(gen!==searchGeneration)return;
     $('streaming-discover').innerHTML='';
     for(const kind of (state.kind==='both'?['tv','movie']:[state.kind])){
-      const items=(result.items||[]).filter(x=>x.kind===kind&&matchesStreamingFilters(x));
-      if(!items.length)continue;
+      const allItems=(result.items||[]).filter(x=>x.kind===kind);
+      const items=allItems.filter(matchesStreamingFilters);
+      if(!allItems.length)continue;
       const id='search-'+kind;
       const heading=kind==='tv'?'Series · search results':'Movies · search results';
-      state.shelves.set(id,{id,kind,heading,items,saved:true});
+      state.shelves.set(id,{id,kind,heading,items:allItems,saved:true,page:1,total:1});
       $('streaming-discover').insertAdjacentHTML('beforeend',
-        shelf(id,heading,items.map(card).join('')));
+        shelf(id,heading,items.map(card).join(''),'',true,kind));
     }
     if(!$('streaming-discover').childElementCount)
       $('streaming-discover').innerHTML='<p class="streaming-shelf-message">No titles found.</p>';
