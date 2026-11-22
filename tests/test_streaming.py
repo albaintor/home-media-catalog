@@ -931,3 +931,70 @@ def test_synopsis_from_streaming_journal_is_preserved_in_server_catalogue(tmp_pa
     assert result["plot"] == "Full plot summary"
     assert result["original_title"] == "Original Example"
     assert result["rating"] == 8.4
+
+
+def test_device_first_catalogue_personal_reconciliation(tmp_path):
+    """The NAS materializes an iPhone journal without a second media PATCH."""
+    from home_media_catalog.streaming import _reconcile_catalogue_personal
+
+    store = Store(tmp_path / "device-first-personal.sqlite")
+    store.initialize()
+    created = store.save_internal_media(InternalMediaInput(
+        id="f31a0000-1234-4234-9234-220022002200",
+        kind="movie", title="Device rated film",
+        tmdb_id="75321", format="",
+    ).model_dump())
+    stamp = datetime(2026, 11, 22, tzinfo=UTC)
+    rating = StreamingStateRow(
+        key="personal:movie:75321",
+        payload={"rating": "8.5", "watched": "true"},
+        modified_at=stamp.isoformat(),
+    )
+    merged = _merge(store, [rating])
+    assert _reconcile_catalogue_personal(store, merged) == 1
+    detail = store.detail(created["id"])
+    assert detail["personal"]["user_rating"] == 8.5
+    assert detail["watch_status"] == "watched"
+    assert _reconcile_catalogue_personal(store, merged) == 0
+
+    cleared = StreamingStateRow(
+        key=rating.key,
+        payload={"rating_cleared": "true", "watched": "false"},
+        modified_at=(stamp + timedelta(seconds=1)).isoformat(),
+    )
+    merged = _merge(store, [cleared])
+    assert _reconcile_catalogue_personal(store, merged) == 1
+    detail = store.detail(created["id"])
+    assert detail["user_rating"] is None
+    assert detail["watch_status"] == "unwatched"
+
+
+def test_device_episode_overrides_reconcile_without_tmdb_inventory(tmp_path):
+    """A watched episode on iPhone can arrive before its TMDB inventory."""
+    from home_media_catalog.streaming import _reconcile_watch_progress
+
+    store = Store(tmp_path / "device-first-episodes.sqlite")
+    store.initialize()
+    created = store.save_internal_media(InternalMediaInput(
+        id="f31b0000-1234-4234-9234-220022002200",
+        kind="tvshow", title="Device watched series",
+        tmdb_id="75322", format="", streaming_services=["prime_video"],
+    ).model_dump())
+    sid = created["id"]
+    store.import_streaming_episodes(sid, 75322, [
+        {"season": 1, "episode": 1, "title": "First"},
+        {"season": 1, "episode": 2, "title": "Second"},
+    ])
+    state = StreamingStateRow(
+        key="personal:tv:75322",
+        payload={"watched": "false", "watch_schema": "2",
+                 "episode_overrides": '{"1:1":true,"1:2":false}'},
+        modified_at=datetime(2026, 11, 22, tzinfo=UTC).isoformat(),
+    )
+    merged = _merge(store, [state])
+    assert _reconcile_watch_progress(store, merged) >= 1
+    episodes = store.media(kind="episode", parent_id=sid, limit=10)["items"]
+    by_number = {item["episode"]: item["watch_status"] for item in episodes}
+    assert by_number == {1: "watched", 2: "unwatched"}
+    assert store.seasons(sid)[0]["watched_count"] == 1
+    assert _reconcile_watch_progress(store, merged) == 0
