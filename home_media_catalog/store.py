@@ -1711,6 +1711,13 @@ class Store:
                 r["external_key"]: r
                 for r in conn.execute("SELECT * FROM records WHERE source_id=?", (source_id,))
             }
+            # Compare image references only for works that existed before this
+            # import. A first import must not flood the artwork-change feed with
+            # thousands of already-new posters.
+            previous_artwork = {
+                row["id"]: (row["poster"], row["fanart"])
+                for row in conn.execute("SELECT id,poster,fanart FROM works")
+            }
             # Only changed/removed works need their metadata and FTS rebuilt.
             # A no-op snapshot must not rewrite thousands of SQLite rows.
             affected = set()
@@ -1798,6 +1805,19 @@ class Store:
                 raise RuntimeError("Snapshot reconciliation mismatch; transaction rolled back.")
             for work_id in affected:
                 self._rebuild(conn, work_id)
+                old_images = previous_artwork.get(work_id)
+                if old_images is None:
+                    continue
+                current = conn.execute(
+                    "SELECT poster,fanart FROM works WHERE id=?", (work_id,)
+                ).fetchone()
+                if current and old_images != (current["poster"], current["fanart"]):
+                    # The iOS replica and web clients invalidate only this
+                    # work's stored poster/fanart, not the whole artwork cache.
+                    conn.execute(
+                        "INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
+                        (work_id, now()),
+                    )
             if deleted or reassigned:
                 self._prune(conn)
             # Includes legacy works imported before title matching existed. Only
