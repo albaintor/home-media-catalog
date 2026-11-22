@@ -668,6 +668,7 @@ function renderTitleDetails(title,full=null,loading=false,error='') {
     '<span><strong>'+esc(s.title||('Season '+s.number))+'</strong><small>'+
     esc((s.episode_count||0)+' episodes')+'</small></span></div>').join('');
   const rating=Number(data.rating||title.rating)||0;
+  const popularity=popularityIndex(data)??popularityIndex(title);
   const meta=[title.kind==='tv'?'Series':'Movie',data.year||title.year,
     data.runtime_minutes?data.runtime_minutes+' min':'',
     rating>0?'★ '+rating.toFixed(1)+'/10':''].filter(Boolean).join(' · ');
@@ -679,6 +680,9 @@ function renderTitleDetails(title,full=null,loading=false,error='') {
     (data.original_title&&data.original_title!==titleText?
       '<p class="streaming-original-title">'+esc(data.original_title)+'</p>':'')+
     '<p>'+esc(meta)+'</p>'+
+    (displayPreference('popularity')&&popularity!=null?
+      '<p class="streaming-popularity-label"><span aria-hidden="true">↗</span> Popularité TMDB <span class="streaming-popularity-value">'+
+      esc(Math.round(popularity))+'</span></p>':'')+
     '<div class="streaming-detail-actions"><button type="button" class="secondary" data-streaming-save-detail="'+
     esc(key)+'">'+esc(saved?'♥ In my catalog':'♡ Add to catalog')+'</button>'+
     (work?
@@ -686,7 +690,6 @@ function renderTitleDetails(title,full=null,loading=false,error='') {
       esc(work)+'">Open catalog entry</button>':'')+
     '</div>'+renderListCollectionActions()+
     '<div class="streaming-detail-services">'+links+'</div>'+
-    (displayPreference('popularity')&&popularityIndex(data)??false?'':'')+
     (state.detailMessage?'<p class="streaming-detail-feedback" role="status">'+
       esc(state.detailMessage)+'</p>':'')+'</div></div>'+
     (genres?'<div class="streaming-detail-genres">'+genres+'</div>':'')+
