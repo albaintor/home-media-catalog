@@ -234,6 +234,11 @@ async def recommend_streaming(
             if isinstance(genre_id, int):
                 affinity[genre_id] += weight
 
+    full_prompt = (
+        ("Previous search: " + request.previous_prompt + "\n")
+        if request.previous_prompt else ""
+    ) + request.prompt
+    language = _language_hint(full_prompt)
     # A single discover response is already filtered to paid subscriptions in
     # the selected country; seed-based recommendations must be verified later.
     good_genres = [genre for genre, value in
@@ -268,6 +273,8 @@ async def recommend_streaming(
         }
         if genre is not None:
             args["with_genres"] = genre
+        if language:
+            args["with_original_language"] = language
         try:
             result = await fetch("/discover/" + category, args)
             return category, result.get("results") or []
@@ -294,11 +301,6 @@ async def recommend_streaming(
 
     blocked = set(profile["seen"])
     blocked.update(key for key in request.excluded_ids if re.fullmatch(r"(movie|tv):[1-9]\d{0,8}", key))
-    full_prompt = (
-        ("Previous search: " + request.previous_prompt + "\n")
-        if request.previous_prompt else ""
-    ) + request.prompt
-    language = _language_hint(full_prompt)
     candidates: dict[str, tuple[float, dict]] = {}
     query_text = " ".join([plan.semantic_query or "", *plan.retrieval_terms[:6]])
     for category, rows in found:
@@ -320,7 +322,7 @@ async def recommend_streaming(
             if identity not in candidates or score > candidates[identity][0]:
                 candidates[identity] = score, {**_item(row, category), "genre_ids": row.get("genre_ids") or []}
 
-    ordered = sorted(candidates.items(), key=lambda entry: -entry[1][0])[:40]
+    ordered = sorted(candidates.items(), key=lambda entry: -entry[1][0])[:32]
 
     async def verify(identity: str, item: dict) -> tuple[str, dict, list[str]]:
         category, number = identity.split(":")
