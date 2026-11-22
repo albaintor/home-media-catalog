@@ -3,16 +3,22 @@ on:
   push:
     paths:
       - 'home_media_catalog/ai_streaming.py'
+      - 'home_media_catalog/ai.py'
+      - 'home_media_catalog/app.py'
       - 'home_media_catalog/ai_providers.py'
       - 'home_media_catalog/ai_rerank.py'
       - 'tests/test_ai_streaming.py'
+      - 'tests/test_ai_device_credentials.py'
       - '.github/workflows/streaming-ai-recommendations.yml'
   pull_request:
     paths:
       - 'home_media_catalog/ai_streaming.py'
+      - 'home_media_catalog/ai.py'
+      - 'home_media_catalog/app.py'
       - 'home_media_catalog/ai_providers.py'
       - 'home_media_catalog/ai_rerank.py'
       - 'tests/test_ai_streaming.py'
+      - 'tests/test_ai_device_credentials.py'
       - '.github/workflows/streaming-ai-recommendations.yml'
 permissions:
   contents: read
@@ -26,5 +32,5 @@ jobs:
           python-version: '3.12'
       - run: pip install -e '.[dev]'
       - run: python -m compileall -q home_media_catalog/ai_streaming.py
-      - run: ruff check home_media_catalog/ai_streaming.py tests/test_ai_streaming.py
-      - run: pytest -q tests/test_ai_streaming.py
+      - run: ruff check home_media_catalog/ai_streaming.py home_media_catalog/ai.py home_media_catalog/app.py tests/test_ai_streaming.py tests/test_ai_device_credentials.py
+      - run: pytest -q tests/test_ai_streaming.py tests/test_ai_device_credentials.py
