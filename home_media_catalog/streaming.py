@@ -299,6 +299,65 @@ def _reconcile_watch_progress(store: Any, rows: list[dict[str, Any]]) -> int:
     return changed
 
 
+
+def _reconcile_catalogue_personal(
+    store: Any, rows: list[dict[str, Any]],
+) -> int:
+    """Project device-authored Streaming edits into existing catalogue works.
+
+    Streaming rows are edited on the iPhone first. /state/sync reconciles the
+    journal, then the NAS updates its canonical /media read model without
+    requiring a separate, failure-prone PATCH from the same device. Never
+    create catalogue entries merely because a Streaming title was rated.
+    """
+    states = {
+        row["key"]: row["payload"]
+        for row in rows if not row["deleted"] and isinstance(row["payload"], dict)
+        and row["key"].startswith("personal:")
+    }
+    if not states:
+        return 0
+
+    with store.connect() as db:
+        matches = db.execute(
+            "SELECT DISTINCT w.id AS work_id,w.kind,w.user_rating,w.watch_status,"
+            " i.value AS tmdb_id,p.user_rating AS personal_rating,"
+            " p.watched AS personal_watched "
+            "FROM works w JOIN identifiers i ON i.work_id=w.id "
+            "LEFT JOIN personal p ON p.work_id=w.id "
+            "WHERE i.namespace='tmdb' AND w.kind IN ('movie','tvshow')"
+        ).fetchall()
+
+    changed = 0
+    for row in matches:
+        kind = "tv" if row["kind"] == "tvshow" else "movie"
+        payload = states.get(f"personal:{kind}:{row['tmdb_id']}")
+        if payload is None:
+            continue
+        updates: dict[str, Any] = {}
+        if "rating" in payload:
+            try:
+                rating = float(payload["rating"])
+            except (TypeError, ValueError):
+                rating = None
+            if rating is not None and math.isfinite(rating) and 0 <= rating <= 10:
+                if row["personal_rating"] != rating or row["user_rating"] != rating:
+                    updates["user_rating"] = rating
+        elif payload.get("rating_cleared") == "true":
+            if row["personal_rating"] is not None or row["user_rating"] is not None:
+                updates["user_rating"] = None
+
+        # A movie has a single watched flag. For TV, the episode inventory and
+        # partial progress remain authoritative in _reconcile_watch_progress.
+        if kind == "movie" and payload.get("watched") in {"true", "false"}:
+            watched = payload["watched"] == "true"
+            if row["personal_watched"] is None or bool(row["personal_watched"]) != watched:
+                updates["watched"] = watched
+        if updates and store.update_personal(row["work_id"], updates):
+            changed += 1
+    return changed
+
+
 def _mirror_catalogue_personal(
     store: Any, media_id: str, *, watched: bool | None = None,
     rating_changed: bool = False, rating: float | None = None,
@@ -1309,6 +1368,7 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
     def sync_state(body: StreamingSyncInput):
         merged = _merge(store, body.changes)
         _reconcile_streaming_catalogue(store, merged)
+        _reconcile_catalogue_personal(store, merged)
         _reconcile_watch_progress(store, merged)
         return {"rows": merged}
 
