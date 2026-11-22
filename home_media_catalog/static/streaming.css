@@ -211,6 +211,9 @@
 .streaming-tile .streaming-score-stack .streaming-popularity{color:#fac77c}
 .streaming-popularity-label{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}
 .streaming-popularity-label .streaming-popularity-value{font-weight:700;color:var(--text)}
+.streaming-subview-search{display:block;max-width:460px;margin:12px 0 16px;font-size:12px;color:var(--muted)}
+.streaming-subview-search span{display:block;margin-bottom:6px}
+.streaming-subview-search input{display:block;width:100%;min-height:42px;background:var(--surface)}
 .streaming-subview-controls{display:flex;flex-wrap:wrap;gap:12px;margin:4px 0 16px}
 .streaming-subview-controls label{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--muted)}
 .streaming-subview-controls select{min-height:37px;min-width:135px;padding:5px 9px}
