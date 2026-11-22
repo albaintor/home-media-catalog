@@ -9,7 +9,8 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c =>
 const root = new URL('.', window.location.href);
 const names = {
   netflix:'Netflix',disney_plus:'Disney+',prime_video:'Prime Video',
-  apple_tv_plus:'Apple TV+',hbo_max:'HBO Max',paramount_plus:'Paramount+'
+  apple_tv_plus:'Apple TV+',hbo_max:'HBO Max',paramount_plus:'Paramount+',
+  crunchyroll:'Crunchyroll',rakuten_viki:'Rakuten Viki',mubi:'MUBI'
 };
 const genreOptions = [
   ['action','Action & adventure',28,10759],
@@ -19,7 +20,13 @@ const genreOptions = [
   ['science_fiction','Science fiction & fantasy',878,10765],
   ['family','Family',10751,10751],
   ['animation','Animation',16,16],
-  ['documentary','Documentary',99,99]
+  ['documentary','Documentary',99,99],
+  ['adventure','Adventure',12,null],
+  ['fantasy','Fantasy',14,null],
+  ['mystery','Mystery',9648,9648],
+  ['thriller','Thriller',53,null],
+  ['horror','Horror',27,null],
+  ['romance','Romance',10749,null]
 ];
 const state = {
   rows:[], visible:[],subscriptions:[], kind:'both', region:'FR',
@@ -155,6 +162,9 @@ function providerSearchURL(key,title) {
     case 'apple_tv_plus':return 'https://tv.apple.com/'+validRegion().toLowerCase()+'/search?term='+q;
     case 'hbo_max':return 'https://play.max.com/search?q='+q;
     case 'paramount_plus':return 'https://www.paramountplus.com/search/?q='+q;
+    case 'crunchyroll':return 'https://www.crunchyroll.com/search?q='+q;
+    case 'rakuten_viki':return 'https://www.viki.com/search?q='+q;
+    case 'mubi':return 'https://mubi.com/search?query='+q;
     default:return '';
   }
 }
@@ -169,7 +179,9 @@ function directURL(title,key){
     const u=new URL(raw),host=u.hostname.toLowerCase();
     const allowed={netflix:['netflix.com'],disney_plus:['disneyplus.com'],
       prime_video:['primevideo.com'],apple_tv_plus:['tv.apple.com'],
-      hbo_max:['max.com','hbomax.com'],paramount_plus:['paramountplus.com']}[key]||[];
+      hbo_max:['max.com','hbomax.com'],paramount_plus:['paramountplus.com'],
+      crunchyroll:['crunchyroll.com'],rakuten_viki:['viki.com'],
+      mubi:['mubi.com']}[key]||[];
     return u.protocol==='https:'&&!u.username&&!u.password&&
       allowed.some(h=>host===h||host.endsWith('.'+h))?u.href:'';
   }catch{return ''}
@@ -181,7 +193,8 @@ function providerIcon(key) {
       esc('https://image.tmdb.org/t/p/w92'+path)+'" alt="">';
   const initials={
     netflix:'N',disney_plus:'D+',prime_video:'Prime',apple_tv_plus:'',
-    hbo_max:'Max',paramount_plus:'P+'
+    hbo_max:'Max',paramount_plus:'P+',crunchyroll:'C',
+    rakuten_viki:'V',mubi:'M'
   };
   return '<span class="streaming-logo-fallback '+esc(key)+'" aria-hidden="true">'+
     esc(initials[key]||'?')+'</span>';
@@ -278,9 +291,12 @@ function computeShelves(){
   if(preference('show_recent','true')==='true')
     for(const kind of kinds) result.push({kind,sort:'recent',genre:null,
       heading:kind==='tv'?'Recently available · series':'Recently available · movies'});
-  for(const g of genres)for(const kind of kinds)
-    result.push({kind,sort:'popularity',genre:kind==='tv'?g[3]:g[2],
+  for(const g of genres)for(const kind of kinds){
+    const genre=kind==='tv'?g[3]:g[2];
+    if(genre==null)continue;
+    result.push({kind,sort:'popularity',genre,genreKey:g[0],
       heading:g[1]+' · '+(kind==='tv'?'series':'movies')});
+  }
   return result;
 }
 let activeLoads=0;
