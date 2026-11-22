@@ -1641,14 +1641,34 @@ class Store:
             return {"id": row["work_id"], "item_id": external_key.lower()}
 
     def delete_internal_media(self, external_key: str) -> None:
-        """Only remove the requested internal edition, never external sources."""
+        """Remove one internal edition, preserving external editions.
+
+        A Streaming reference removed via heart or context menu explicitly
+        leaves *all* lists and editable collections as well, even if the work
+        also has a physical/Kodi edition. Keep other editions intact.
+        """
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT id,work_id FROM records WHERE source_id='internal' AND external_key=?",
+                "SELECT id,work_id,payload FROM records "
+                "WHERE source_id='internal' AND external_key=?",
                 (external_key.lower(),),
             ).fetchone()
             if row is None:
                 raise KeyError(external_key)
+            payload = json.loads(row["payload"])
+            if payload.get("metadata", {}).get("streaming_reference") is True:
+                work_id = row["work_id"]
+                conn.execute(
+                    "UPDATE lists SET revision=revision+1 WHERE id IN "
+                    "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,),
+                )
+                conn.execute(
+                    "UPDATE collections SET revision=revision+1 WHERE id IN "
+                    "(SELECT collection_id FROM collection_items WHERE work_id=?)",
+                    (work_id,),
+                )
+                conn.execute("DELETE FROM list_items WHERE work_id=?", (work_id,))
+                conn.execute("DELETE FROM collection_items WHERE work_id=?", (work_id,))
             conn.execute("DELETE FROM records WHERE id=?", (row["id"],))
             self._rebuild(conn, row["work_id"])
             self._prune(conn)
