@@ -1,20 +1,20 @@
 """Administrator-scoped, TLS-only AI API key exchange with iOS."""
 import stat
 
-import conftest
+from conftest import ADMIN, READ
 from fastapi.testclient import TestClient
 
 from home_media_catalog.app import create_app
 from home_media_catalog.settings import Settings
 
 PATH = "/api/v1/ai/device-credentials"
-ADMIN_AUTH = {"Authorization": f"Bearer {conftest.ADMIN}"}
-READ_AUTH = {"Authorization": f"Bearer {conftest.READ}"}
+ADMIN_AUTH = {"Authorization": f"Bearer {ADMIN}"}
+READ_AUTH = {"Authorization": f"Bearer {READ}"}
 PERSONAL_KEY = "sk-test-personal-credential-only"
 
 
 def test_ai_device_credentials_require_https_admin_bearer(tmp_path):
-    app = create_app(Settings(data_dir=tmp_path, api_token=conftest.ADMIN, read_token=conftest.READ))
+    app = create_app(Settings(data_dir=tmp_path, api_token=ADMIN, read_token=READ))
     with TestClient(app, base_url="http://testserver") as client:
         assert client.get(PATH, headers=ADMIN_AUTH).status_code == 403
         assert client.put(PATH, headers=ADMIN_AUTH, json={
@@ -37,7 +37,7 @@ def test_ai_device_credentials_require_https_admin_bearer(tmp_path):
 
 
 def test_ai_key_provisioning_is_fill_only_and_private(tmp_path):
-    app = create_app(Settings(data_dir=tmp_path, api_token=conftest.ADMIN, read_token=conftest.READ))
+    app = create_app(Settings(data_dir=tmp_path, api_token=ADMIN, read_token=READ))
     with TestClient(app, base_url="https://testserver") as client:
         value = {"provider": "anthropic", "model": "claude-haiku-5-5",
                  "api_key": PERSONAL_KEY}
@@ -49,7 +49,8 @@ def test_ai_key_provisioning_is_fill_only_and_private(tmp_path):
         assert repeated.status_code == 200
         assert repeated.json()["imported"] is False
         secret = client.get(PATH, headers=ADMIN_AUTH)
-        assert secret.json() == value
+        assert {k: secret.json()[k] for k in value} == value
+        assert secret.json()["revision"] == 1
         assert "no-store" in secret.headers["cache-control"]
         assert PERSONAL_KEY not in client.get("/api/v1/discovery").text
         assert PERSONAL_KEY not in client.get("/api/v1/ai/status",
@@ -60,7 +61,7 @@ def test_ai_key_provisioning_is_fill_only_and_private(tmp_path):
     config = tmp_path / "ai-settings.json"
     assert stat.S_IMODE(config.stat().st_mode) == 0o600
     with TestClient(create_app(Settings(
-        data_dir=tmp_path, api_token=conftest.ADMIN, read_token=conftest.READ,
+        data_dir=tmp_path, api_token=ADMIN, read_token=READ,
     )), base_url="https://testserver") as client:
         assert client.get(PATH, headers=ADMIN_AUTH).json()["api_key"] == PERSONAL_KEY
 
