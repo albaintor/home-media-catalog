@@ -221,6 +221,11 @@
               <legend>Mes abonnements</legend>
               <div id="streaming-subscription-options"></div>
             </fieldset>
+            <fieldset class="streaming-toggle-filter streaming-display-filter">
+              <legend>Affichage</legend>
+              <label><input id="streaming-show-personal-rating" type="checkbox"> Afficher ma note sur les affiches</label>
+              <label><input id="streaming-show-popularity" type="checkbox"> Afficher la popularité TMDB</label>
+            </fieldset>
             <fieldset class="streaming-toggle-filter streaming-content-filter">
               <legend>Découverte</legend>
               <label><input id="streaming-show-tops" type="checkbox" checked> Top 10</label>
@@ -241,8 +246,26 @@
       <section id="streaming-subview" class="streaming-subview" hidden>
         <button id="streaming-back" class="secondary" type="button">← Retour au streaming</button>
         <h2 id="streaming-subview-title"></h2>
+        <div class="streaming-subview-controls">
+          <label for="streaming-subview-sort">Trier par
+            <select id="streaming-subview-sort">
+              <option value="popularity">Popularité TMDB</option>
+              <option value="rating">Note publique</option>
+              <option value="user_rating">Ma note</option>
+              <option value="title">Titre</option>
+              <option value="year">Année</option>
+            </select>
+          </label>
+          <label for="streaming-subview-order">Ordre
+            <select id="streaming-subview-order">
+              <option value="desc">Décroissant</option>
+              <option value="asc">Croissant</option>
+            </select>
+          </label>
+        </div>
         <div id="streaming-subview-grid" class="streaming-grid"></div>
         <button id="streaming-subview-more" class="secondary" type="button" hidden>Afficher davantage de titres</button>
+        <div id="streaming-subview-trigger" aria-hidden="true"></div>
       </section>
       <dialog id="streaming-title-dialog" class="streaming-title-dialog" aria-labelledby="streaming-detail-heading">
         <button id="streaming-detail-close" type="button" class="dialog-close" aria-label="Fermer">×</button>
