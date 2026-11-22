@@ -37,7 +37,7 @@ def test_ai_device_credentials_require_https_admin_bearer(tmp_path):
 
 
 def test_ai_key_provisioning_is_fill_only_and_private(tmp_path):
-    app = create_app(Settings(data_dir=tmp_path, api_token=ADMIN, read_token=READ))
+    app = create_app(Settings(data_dir=tmp_path, api_token=conftest.ADMIN, read_token=conftest.READ))
     with TestClient(app, base_url="https://testserver") as client:
         value = {"provider": "anthropic", "model": "claude-haiku-5-5",
                  "api_key": PERSONAL_KEY}
@@ -60,6 +60,6 @@ def test_ai_key_provisioning_is_fill_only_and_private(tmp_path):
     config = tmp_path / "ai-settings.json"
     assert stat.S_IMODE(config.stat().st_mode) == 0o600
     with TestClient(create_app(Settings(
-        data_dir=tmp_path, api_token=ADMIN, read_token=READ,
+        data_dir=tmp_path, api_token=conftest.ADMIN, read_token=conftest.READ,
     )), base_url="https://testserver") as client:
         assert client.get(PATH, headers=ADMIN_AUTH).json()["api_key"] == PERSONAL_KEY
