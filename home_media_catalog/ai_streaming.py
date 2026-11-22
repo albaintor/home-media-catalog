@@ -49,10 +49,78 @@ _STREAMING_RECOMMENDATION_SCHEMA = {
 }
 
 
+
+# Language used in the response is independent of the original audio language
+# of the requested titles, and of the TMDB watch region.
+_RESPONSE_LANGUAGE_NAMES = {
+    "fr": "French", "en": "English", "es": "Spanish", "de": "German",
+    "it": "Italian", "pt": "Portuguese", "nl": "Dutch", "ja": "Japanese",
+    "ko": "Korean", "zh": "Chinese",
+}
+
+
+def _response_language(request: "StreamingAIInput") -> str:
+    # Legacy clients did not send a language; choose a useful regional
+    # fallback but always honor a newer client's explicit app language.
+    return request.response_language or ("fr" if request.region == "FR" else "en")
+
+
+def _looks_english(text: str) -> bool:
+    """Detect obvious English leakage in an otherwise French recommendation."""
+    tokens = re.findall(r"[a-zà-ÿ]+", text.casefold())
+    if len(tokens) < 9:
+        return False
+    english = {"the", "this", "that", "with", "your", "you", "which", "because",
+               "while", "would", "their", "these", "story", "characters",
+               "from", "about", "offers", "based", "shows", "into", "through"}
+    french = {"le", "la", "les", "des", "une", "est", "dans", "avec", "pour", "vous",
+              "qui", "que", "sur", "dont", "ses", "son", "cette", "aux", "elle"}
+    en_count = sum(t in english for t in tokens)
+    fr_count = sum(t in french for t in tokens)
+    return en_count >= 2 and en_count >= fr_count + 2
+
+
+async def _ensure_recommendation_language(
+    matched: list[dict], summary: str, language: str,
+    model: str, api_key: str, provider: str,
+) -> tuple[list[dict], str]:
+    """Repair occasional English leakage without a second call in normal cases."""
+    if language != "fr" or not (
+        _looks_english(summary) or
+        any(_looks_english(item["reason"]) for item in matched)
+    ):
+        return matched, summary
+    try:
+        repair = await generate_json(
+            "Translate all provided explanations into idiomatic French (fr-FR). "
+            "Preserve proper names, the exact IDs, meaning, caveats and item "
+            "order. Do not add information or omit an item. Reply ONLY in French "
+            "in taste_summary and each reason.",
+            json.dumps({"taste_summary": summary, "matches": matched},
+                       ensure_ascii=False),
+            _STREAMING_RECOMMENDATION_SCHEMA, model, api_key,
+            provider=provider, max_output_tokens=7500,
+            schema_name="streaming_recommendation_translation",
+        )
+        translated = {
+            entry["id"]: str(entry.get("reason") or "").strip()[:650]
+            for entry in repair.get("matches", [])
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+        }
+        repaired = [
+            {"id": item["id"], "reason": translated.get(item["id"]) or item["reason"]}
+            for item in matched
+        ]
+        return repaired, str(repair.get("taste_summary") or summary).strip()[:1500]
+    except Exception:
+        # A translation failure must not hide already verified recommendations.
+        return matched, summary
+
+
 async def explain_streaming_recommendations(
     user_request: str, favorites: list[dict], dislikes: list[dict],
     candidates: list[dict], model: str, api_key: str, *, provider: str,
-    mixed: list[dict] | None = None,
+    mixed: list[dict] | None = None, response_language: str = "fr",
 ) -> tuple[list[dict], str]:
     """Provide a contextual taste analysis and grounded, ordered recommendations.
 
@@ -61,9 +129,15 @@ async def explain_streaming_recommendations(
     """
     if not candidates:
         return [], ""
+    language_name = _RESPONSE_LANGUAGE_NAMES.get(response_language, response_language)
     instructions = (
         "You are a thoughtful film and TV recommendation editor. "
-        "Write in the language of the user's request. Personalize using only "
+        f"MANDATORY OUTPUT LANGUAGE: {language_name} ({response_language}). "
+        "Write ALL prose in that language, including taste_summary and every "
+        "match.reason, even if the user's query, title, synopsis, genres, "
+        "or any input evidence is in another language. "
+        "Keep original proper names unchanged. "
+        "Personalize using only "
         "the provided user ratings, requested preferences and candidate metadata. "
         "Identify specific tastes: narrative pace, romantic or suspenseful stakes, "
         "character dynamics, genre blends and atmosphere ONLY when the supplied "
@@ -94,6 +168,7 @@ async def explain_streaming_recommendations(
         instructions,
         json.dumps({
             "user_request": user_request,
+            "response_language": response_language,
             "liked": favorites,
             "disliked": dislikes,
             "mixed": mixed or [],
@@ -113,7 +188,10 @@ async def explain_streaming_recommendations(
             seen.add(identity)
         if len(matched) >= 15:
             break
-    return matched, str(parsed.get("taste_summary") or "").strip()[:1500]
+    summary = str(parsed.get("taste_summary") or "").strip()[:1500]
+    return await _ensure_recommendation_language(
+        matched, summary, response_language, model, api_key, provider,
+    )
 
 
 class StreamingAIInput(BaseModel):
@@ -121,6 +199,9 @@ class StreamingAIInput(BaseModel):
     kind: Literal["tv", "movie", "both"] = "tv"
     services: list[str] = Field(min_length=1, max_length=9)
     region: str = Field(default="FR", pattern=r"^[A-Z]{2}$")
+    response_language: str | None = Field(
+        default=None, pattern=r"^[a-z]{2,3}$",
+    )
     # Locally pending changes must not appear as recommendations before sync.
     excluded_ids: list[str] = Field(default_factory=list, max_length=2000)
     previous_prompt: str | None = Field(default=None, max_length=500)
@@ -313,11 +394,20 @@ async def recommend_streaming(
     if not token:
         raise HTTPException(503, "Configure TMDB on the server for streaming AI search.")
     profile = await asyncio.to_thread(_catalogue_profile, store)
+    response_language = _response_language(request)
+    is_french = response_language == "fr"
     if not profile["seeds"]:
         return {
             "items": [], "total": 0, "relevance_reasons": {},
-            "profile_count": 0, "note": "Mark or rate some titles as watched to personalize recommendations.",
-            "assistant_message": "No viewing history is available yet.",
+            "profile_count": 0,
+            "note": (
+                "Marquez ou notez quelques titres vus pour personnaliser les recommandations."
+                if is_french else "Mark or rate some titles as watched to personalize recommendations."
+            ),
+            "assistant_message": (
+                "Aucun historique de visionnage disponible."
+                if is_french else "No viewing history is available yet."
+            ),
             "taste_summary": "",
         }
 
@@ -565,6 +655,7 @@ async def recommend_streaming(
                 for identity, item in available
             ],
             model, api_key, provider=provider, mixed=mixed_evidence,
+            response_language=response_language,
         )
         reasons = {entry["id"]: entry["reason"] for entry in explanations}
         # Keep model ordering: its comparison of tastes is more meaningful
@@ -578,9 +669,19 @@ async def recommend_streaming(
         "items": items, "total": len(items), "relevance_reasons": reasons,
         "profile_count": profile["rated_count"],
         "taste_summary": taste_summary,
-        "note": None if profile["rated_count"] else "Recommendations use watched history; ratings improve accuracy.",
+        "note": None if profile["rated_count"] else (
+            "Les recommandations utilisent les titres vus ; les notes améliorent leur pertinence."
+            if is_french else "Recommendations use watched history; ratings improve accuracy."
+        ),
         "assistant_message": (
-            f"{len(items)} suggestions available in {request.region} on the selected subscriptions."
-            if items else "No sufficiently relevant unwatched titles were confirmed."
+            (
+                f"{len(items)} recommandations disponibles sur les abonnements sélectionnés en {request.region}."
+                if is_french else
+                f"{len(items)} suggestions available in {request.region} on the selected subscriptions."
+            ) if items else (
+                "Aucun titre inédit suffisamment pertinent et disponible n'a été confirmé."
+                if is_french else
+                "No sufficiently relevant unwatched titles were confirmed."
+            )
         ),
     }
