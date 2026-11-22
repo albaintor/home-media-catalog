@@ -2275,11 +2275,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 background_tasks.add_task(
                     finish_episode_watch_writebacks, result["ids"], data.watched
                 )
-            await asyncio.to_thread(
-                _mirror_catalogue_episode_edit, store, media_id,
-                watched=data.watched, season=data.season,
-                up_to_episode=data.up_to_episode,
-            )
+            if result["updated"]:
+                # If journal reconciliation already applied the device edit,
+                # avoid rewriting its revision with a newer NAS timestamp.
+                await asyncio.to_thread(
+                    _mirror_catalogue_episode_edit, store, media_id,
+                    watched=data.watched, season=data.season,
+                    up_to_episode=data.up_to_episode,
+                )
             return {key: value for key, value in result.items() if key != "ids"}
 
     @app.get(
@@ -2449,7 +2452,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             if changes:
                 await asyncio.to_thread(store.update_personal, media_id, changes)
-                if "watched" in changes or "user_rating" in changes:
+                if detail["kind"] == "episode" and "watched" in changes:
+                    # A web/older-iOS single-episode edit must update the same
+                    # Streaming journal, not merely the canonical work table.
+                    parent = detail.get("parent_id")
+                    season = detail.get("season")
+                    number = detail.get("episode")
+                    if parent and isinstance(season, int) and isinstance(number, int):
+                        await asyncio.to_thread(
+                            _mirror_catalogue_episode_edit, store, parent,
+                            watched=changes["watched"], season=season,
+                            up_to_episode=None, targeted_episode=number,
+                        )
+                elif "watched" in changes or "user_rating" in changes:
                     await asyncio.to_thread(
                         _mirror_catalogue_personal, store, media_id,
                         watched=changes.get("watched"),
