@@ -720,13 +720,26 @@ function renderSubviewGrid(){
   $('streaming-subview-more').hidden=!!def.saved||def.page>=def.total;
   $('streaming-subview-more').disabled=!!def.loadingNext;
 }
+function maybeResumeSubviewPagination(){
+  if(!state.subview||$('streaming-subview').hidden)return;
+  const def=state.shelves.get(state.subview.id);
+  if(!def||def.saved||def.loadingNext||def.page>=def.total)return;
+  // Avoid downloading an unbounded number of pages when a very restrictive
+  // filter yields no posters. The manual "More" button remains available.
+  if((def.autoBlankPages||0)>=4&&
+     !def.items.some(matchesStreamingFilters))return;
+  const trigger=$('streaming-subview-trigger');
+  const rect=trigger.getBoundingClientRect();
+  if(rect.top<=window.innerHeight+220&&rect.bottom>=-100)
+    void loadNext(true);
+}
 function connectStreamingSubviewObserver(){
   if(streamingSubviewObserver)streamingSubviewObserver.disconnect();
   if(!('IntersectionObserver' in window))return;
   streamingSubviewObserver=new IntersectionObserver(entries=>{
-    if(entries.some(entry=>entry.isIntersecting)&&state.subview)
-      void loadNext();
-  },{rootMargin:'180px'});
+    if(entries.some(entry=>entry.isIntersecting))
+      maybeResumeSubviewPagination();
+  },{rootMargin:'220px'});
   streamingSubviewObserver.observe($('streaming-subview-trigger'));
 }
 function showSubview(id){
@@ -740,6 +753,7 @@ function showSubview(id){
   renderSubviewGrid();
   connectStreamingSubviewObserver();
   if(!same)$('streaming-subview').scrollIntoView({block:'start'});
+  requestAnimationFrame(maybeResumeSubviewPagination);
 }
 function closeSubview(){
   state.subview=null;
@@ -747,10 +761,11 @@ function closeSubview(){
   $('streaming-subview').hidden=true;
   $('streaming-browser').hidden=false;
 }
-async function loadNext(){
+async function loadNext(automatic=false){
   const id=state.subview?.id;
   const def=state.shelves.get(id);
   if(!def||def.saved||def.loadingNext||def.page>=def.total)return;
+  if(!automatic)def.autoBlankPages=0;
   def.loadingNext=true;
   $('streaming-subview-more').disabled=true;
   try{
@@ -759,10 +774,19 @@ async function loadNext(){
     def.items.push(...(response.items||[]).filter(x=>!present.has(keyFor(x))));
     def.page++;
     def.total=response.total_pages||def.total;
+    if(automatic){
+      def.autoBlankPages=def.items.some(matchesStreamingFilters)?0:
+        (def.autoBlankPages||0)+1;
+    }
     if(state.subview?.id===id)renderSubviewGrid();
   }catch(e){failure(e.message);}finally{
     def.loadingNext=false;
-    if(state.subview?.id===id)renderSubviewGrid();
+    if(state.subview?.id===id){
+      renderSubviewGrid();
+      // An empty/short result can leave the sentinel continuously visible.
+      // IntersectionObserver does not emit again without a visibility change.
+      requestAnimationFrame(maybeResumeSubviewPagination);
+    }
   }
 }
 function renderListCollectionActions(){
@@ -1279,6 +1303,7 @@ export function startStreaming(){
   });
   $('streaming-back').addEventListener('click',closeSubview);
   $('streaming-subview-more').addEventListener('click',()=>void loadNext());
+  window.addEventListener('scroll',maybeResumeSubviewPagination,{passive:true});
   $('streaming-subview-sort').addEventListener('change',event=>{
     const def=state.shelves.get(state.subview?.id);
     if(!def)return;
