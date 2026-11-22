@@ -18,10 +18,37 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&
 const stateLabels = {watched:tr('Vu'),unwatched:tr('Non vu'),in_progress:tr('En cours'),unknown:tr('État non renseigné')};
 const kindLabels = {movie:tr('Film'),tvshow:tr('Série'),episode:tr('Épisode')};
 const baseURL = new URL('.', window.location.href);
-const url = (path) => new URL(path.replace(/^\/+/, ''), baseURL).href;
 const preferenceKey = `kodi_library_preferences_v1:${baseURL.pathname}`;
 function readStorage(key) { try { return localStorage.getItem(key); } catch { return null; } }
 function writeStorage(key,value) { try { localStorage.setItem(key,value); } catch { /* Browsing also works when storage is unavailable. */ } }
+// A server-side poster edit changes only this media's browser cache key.
+// Persist a small bounded revision map across page reloads; never append a
+// global catalogue revision that would redownload thousands of other covers.
+const artworkVersionKey = 'catalogue_artwork_versions_v1:' + baseURL.pathname;
+const artworkVersions = new Map();
+try {
+  const saved=JSON.parse(readStorage(artworkVersionKey));
+  if(Array.isArray(saved))for(const entry of saved) {
+    if(Array.isArray(entry)&&typeof entry[0]==='string'&&
+       Number.isSafeInteger(entry[1])&&entry[1]>0)artworkVersions.set(entry[0],entry[1]);
+  }
+} catch { /* A corrupt preference must not block images. */ }
+function persistArtworkVersions() {
+  const latest=[...artworkVersions.entries()].sort((a,b)=>b[1]-a[1]).slice(0,512);
+  artworkVersions.clear();
+  for(const [id,revision] of latest)artworkVersions.set(id,revision);
+  writeStorage(artworkVersionKey,JSON.stringify(latest));
+}
+const url = (path) => {
+  const relative=path.replace(/^\/+/, '');
+  const target=new URL(relative,baseURL);
+  const match=/^api\/v1\/media\/([^/?]+)\/artwork\/(?:poster|fanart)(?:$|\?)/.exec(relative);
+  if(match) {
+    const revision=artworkVersions.get(decodeURIComponent(match[1]));
+    if(revision)target.searchParams.set('artrev',String(revision));
+  }
+  return target.href;
+};
 let preferences;
 try { preferences=JSON.parse(readStorage(preferenceKey)) || {}; } catch { preferences={}; }
 if(typeof preferences!=='object'||Array.isArray(preferences)) preferences={};
@@ -2100,11 +2127,17 @@ async function pollArtworkChanges() {
       if(!Array.isArray(result.changes)||!Number.isSafeInteger(result.cursor)||
          result.cursor<cursor)break;
       const count=result.changes.length;
+      for(const entry of result.changes) {
+        const id=entry.media_id,revision=entry.revision;
+        if(typeof id==='string'&&Number.isSafeInteger(revision)&&revision>0 &&
+           revision>(artworkVersions.get(id)||0))artworkVersions.set(id,revision);
+      }
       cursor=result.cursor;
       received+=count;
       if(count<200)break;
     }
     if(received) {
+      persistArtworkVersions();
       const position={x:window.scrollX,y:window.scrollY};
       await loadMedia();
       await refreshHomeListThumbnails();
