@@ -1316,9 +1316,16 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
             raise HTTPException(409, "TMDB identity mismatch")
         if body.episodes is not None:
             try:
-                return await asyncio.to_thread(
+                imported = await asyncio.to_thread(
                     store.import_streaming_episodes, media_id, body.tmdb_id, body.episodes
                 )
+                if imported["added"]:
+                    # Apply the journal after the reference episodes exist:
+                    # the iPhone may have edited watch flags before import.
+                    await asyncio.to_thread(
+                        lambda: _reconcile_watch_progress(store, _merge(store, []))
+                    )
+                return imported
             except ValueError as error:
                 raise HTTPException(422, str(error)) from error
         token = settings.tmdb_api_token.strip()
@@ -1349,9 +1356,14 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         results = await asyncio.gather(*(get_season(n) for n in numbers))
         episodes = [entry for season in results for entry in season][:1500]
         try:
-            return await asyncio.to_thread(
+            imported = await asyncio.to_thread(
                 store.import_streaming_episodes, media_id, body.tmdb_id, episodes
             )
+            if imported["added"]:
+                await asyncio.to_thread(
+                    lambda: _reconcile_watch_progress(store, _merge(store, []))
+                )
+            return imported
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
 
