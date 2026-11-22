@@ -618,6 +618,82 @@ def test_streaming_heart_state_materializes_media_for_web_video_catalogue(tmp_pa
     assert store.detail(film["id"])["streaming_services"] == ["netflix", "prime_video"]
 
 
+def test_unheart_deletes_only_the_streaming_internal_edition(tmp_path):
+    """A tombstoned heart removes the real edition, not just the sync row."""
+    from home_media_catalog.streaming import _reconcile_streaming_catalogue, _streaming_edition_uuid
+
+    store = Store(tmp_path / "unheart.sqlite")
+    store.initialize()
+    stamp = datetime(2026, 11, 22, tzinfo=UTC)
+    saved = StreamingStateRow(
+        key="item:movie:75501",
+        modified_at=stamp.isoformat(),
+        payload={"tmdb_id": "75501", "kind": "movie",
+                 "title": "Heart-saved film", "services": "netflix",
+                 "status": "saved"},
+    )
+    assert _reconcile_streaming_catalogue(store, _merge(store, [saved])) == 1
+    media = store.media(kind="movie")
+    assert media["total"] == 1
+    assert media["items"][0]["streaming_reference"] is True
+
+    # The same work can contain a physical edition. Removing the heart must
+    # leave that separate edition and its media record intact.
+    physical_id = "7501aaaa-1234-4234-9234-220022002200"
+    store.save_internal_media(InternalMediaInput(
+        id=physical_id, kind="movie", title="Heart-saved film",
+        tmdb_id="75501", format="Blu-ray",
+    ).model_dump())
+    assert store.media(kind="movie")["total"] == 1
+
+    removed = StreamingStateRow(
+        key=saved.key,
+        modified_at=(stamp + timedelta(seconds=1)).isoformat(),
+        payload={}, deleted=True,
+    )
+    merged = _merge(store, [removed])
+    assert _reconcile_streaming_catalogue(store, merged) == 1
+    assert _reconcile_streaming_catalogue(store, _merge(store, [])) == 0
+    remaining = store.media(kind="movie")
+    assert remaining["total"] == 1
+    assert remaining["items"][0]["streaming_reference"] is False
+    with store.connect() as conn:
+        edition_ids = {row["external_key"] for row in conn.execute(
+            "SELECT external_key FROM records WHERE source_id='internal'"
+        )}
+    assert physical_id in edition_ids
+    assert _streaming_edition_uuid(saved.key) not in edition_ids
+    assert next(row for row in merged if row["key"] == saved.key)["deleted"]
+
+
+def test_unheart_preserves_independent_personal_state(tmp_path):
+    from home_media_catalog.streaming import _reconcile_streaming_catalogue
+
+    store = Store(tmp_path / "unheart-personal.sqlite")
+    store.initialize()
+    stamp = datetime(2026, 11, 22, tzinfo=UTC)
+    saved = StreamingStateRow(
+        key="item:tv:75502", modified_at=stamp.isoformat(),
+        payload={"tmdb_id": "75502", "kind": "tv", "title": "A saved show",
+                 "services": "netflix", "status": "saved"},
+    )
+    personal = StreamingStateRow(
+        key="personal:tv:75502", modified_at=stamp.isoformat(),
+        payload={"watched": "true", "rating": "9.0"},
+    )
+    assert _reconcile_streaming_catalogue(store, _merge(store, [saved, personal])) == 1
+    removed = StreamingStateRow(
+        key=saved.key, modified_at=(stamp + timedelta(seconds=1)).isoformat(),
+        payload={}, deleted=True,
+    )
+    final = _merge(store, [removed])
+    assert _reconcile_streaming_catalogue(store, final) == 1
+    assert store.media(kind="tvshow")["total"] == 0
+    state = next(row for row in _merge(store, []) if row["key"] == personal.key)
+    assert state["payload"] == {"watched": "true", "rating": "9.0"}
+    assert state["deleted"] is False
+
+
 def test_tombstoned_heart_does_not_recreate_deleted_streaming_edition(tmp_path):
     from home_media_catalog.streaming import _reconcile_streaming_catalogue
     store = Store(tmp_path / "streaming-deleted.sqlite")
