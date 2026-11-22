@@ -99,14 +99,19 @@ def test_recommendations_exclude_watched_and_verify_region_subscription(tmp_path
         assert region == "FR"
         return ["netflix"] if tmdb_id == 30 else []
 
-    async def fake_rerank(prompt, candidates, model, key, provider="openai"):
+    async def fake_explain(prompt, favorites, dislikes, candidates,
+                           model, key, *, provider):
         assert "Personal viewing profile" in prompt
         assert {entry["id"] for entry in candidates} == {"tv:30"}
-        return [{"id": "tv:30", "reason": "Related to your highly rated dramas."}]
+        assert favorites and favorites[0]["user_rating"] == 9
+        return (
+            [{"id": "tv:30", "reason": "Related to your highly rated dramas."}],
+            "You enjoyed character-driven dramas, based on your 9/10 rating.",
+        )
 
     monkeypatch.setattr(ai_streaming, "_tmdb", fake_tmdb)
     monkeypatch.setattr(ai_streaming, "_availability", fake_availability)
-    monkeypatch.setattr(ai_streaming, "rerank_candidates", fake_rerank)
+    monkeypatch.setattr(ai_streaming, "explain_streaming_recommendations", fake_explain)
     request = ai_streaming.StreamingAIInput(
         prompt="Recommend Korean shows I haven't watched",
         kind="tv", services=["netflix"], region="FR",
@@ -123,6 +128,7 @@ def test_recommendations_exclude_watched_and_verify_region_subscription(tmp_path
     assert result["items"][0]["service_keys"] == ["netflix"]
     assert result["relevance_reasons"]["tv:30"].startswith("Related")
     assert result["profile_count"] == 2
+    assert "character-driven dramas" in result["taste_summary"]
 
 
 def test_no_profile_does_not_generate_random_recommendations(tmp_path):
@@ -137,3 +143,44 @@ def test_no_profile_does_not_generate_random_recommendations(tmp_path):
     ))
     assert result["items"] == []
     assert result["profile_count"] == 0
+
+
+def test_streaming_explainer_preserves_model_order_and_grounded_ids(monkeypatch):
+    calls = []
+
+    async def fake_generate(instructions, user_input, schema, model, key,
+                            *, provider, max_output_tokens, schema_name):
+        import json
+        context = json.loads(user_input)
+        calls.append(context)
+        assert "ratings" in instructions
+        assert context["liked"][0]["title"] == "Alchemy of Souls"
+        return {
+            "taste_summary": "Your 10/10 for Alchemy of Souls points to fantasy romance.",
+            "matches": [
+                {"id": "tv:3", "reason": "A character-driven fantasy with a romantic arc."},
+                {"id": "tv:10000", "reason": "Invented"},
+                {"id": "tv:1", "reason": "More tension and a strong central couple."},
+                {"id": "tv:3", "reason": "Duplicate"},
+            ],
+        }
+
+    monkeypatch.setattr(ai_streaming, "generate_json", fake_generate)
+    matches, summary = asyncio.run(ai_streaming.explain_streaming_recommendations(
+        "Recommend K-dramas in my tastes",
+        [{"title": "Alchemy of Souls", "user_rating": 10,
+          "genres": ["Fantasy"], "synopsis": "Magic and romance"}],
+        [],
+        [{"id": "tv:1", "title": "One", "synopsis": "A tense romance"},
+         {"id": "tv:3", "title": "Three", "synopsis": "A fantasy romance"}],
+        "gpt-4o-mini", "test", provider="openai",
+    ))
+    assert [item["id"] for item in matches] == ["tv:3", "tv:1"]
+    assert "Alchemy of Souls" in summary
+    assert len(calls) == 1
+
+
+def test_kdrama_hint_detects_spaced_and_hyphenated_forms():
+    for phrase in ("K drama", "k-drama", "kdrama", "K-dramas",
+                   "dramas coréens", "Korean romantic shows"):
+        assert ai_streaming._language_hint(phrase) == "ko"
