@@ -827,7 +827,10 @@ async def _official_netflix(token: str, region: str, kind: str) -> list[dict[str
 
 
 async def _search(token: str, selection: str, phrase: str, kind: str,
-                  region: str) -> dict[str, Any]:
+                  region: str, genre: int | None = None,
+                  origin_country: str | None = None,
+                  original_language: str | None = None,
+                  keyword_id: int | None = None) -> dict[str, Any]:
     """Search film/series titles, then validate regional SVOD availability.
 
     TMDB /search does not accept provider filters. Validation through each
@@ -851,10 +854,44 @@ async def _search(token: str, selection: str, phrase: str, kind: str,
     async def check(media_kind: str, row: dict[str, Any]) -> dict[str, Any] | None:
         async with limit:
             try:
+                # TMDB search cannot filter by providers or genre. Apply the
+                # category constraints before the more expensive SVOD lookup.
+                if genre is not None and genre not in row.get("genre_ids", []):
+                    return None
+                if original_language is not None and (
+                    row.get("original_language") != original_language
+                ):
+                    return None
+                if origin_country is not None:
+                    countries = row.get("origin_country") or []
+                    if not countries and media_kind == "movie":
+                        details = await _tmdb(
+                            token, f"/movie/{int(row['id'])}",
+                            {"language": "fr-FR"},
+                        )
+                        countries = [
+                            country.get("iso_3166_1")
+                            for country in details.get("production_countries", [])
+                            if isinstance(country, dict)
+                        ]
+                    if origin_country not in countries:
+                        return None
+                if keyword_id is not None:
+                    keywords = await _tmdb(
+                        token, f"/{media_kind}/{int(row['id'])}/keywords", {}
+                    )
+                    values = keywords.get(
+                        "results" if media_kind == "tv" else "keywords", []
+                    )
+                    if keyword_id not in {
+                        entry.get("id") for entry in values
+                        if isinstance(entry, dict)
+                    }:
+                        return None
                 available = await _availability(
                     token, media_kind, int(row["id"]), selection, region
                 )
-            except (HTTPException, ValueError, KeyError):
+            except (HTTPException, ValueError, KeyError, httpx.HTTPError):
                 return None
         if not available:
             return None
@@ -1119,9 +1156,14 @@ def build_streaming_router(store: Any, settings: Any) -> APIRouter:
         service: str = Query(min_length=1, max_length=150),
         kind: str = Query("both", pattern=r"^(movie|tv|both)$"),
         region: str = Query("FR", pattern=r"^[A-Z]{2}$"),
+        genre: int | None = Query(None, ge=1),
+        origin_country: str | None = Query(None, pattern=r"^[A-Z]{2}$"),
+        original_language: str | None = Query(None, pattern=r"^[a-z]{2}$"),
+        keyword_id: int | None = Query(None, ge=1),
     ):
         return await _search(settings.tmdb_api_token.strip(),
-                             service, q.strip(), kind, region)
+                             service, q.strip(), kind, region, genre,
+                             origin_country, original_language, keyword_id)
 
     @router.get("/availability/{kind}/{tmdb_id}",
                 dependencies=[Depends(authenticated)])
