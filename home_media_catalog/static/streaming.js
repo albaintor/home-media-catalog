@@ -113,6 +113,7 @@ const state = {
   query:'',loaded:false,loading:false,session:null,
   cache:new Map(),titles:new Map(),shelves:new Map(),
   observer:null,version:0,subview:null,selected:null,searchTimer:null,
+  subviewSearchTimer:null,
   logos:{},detailCache:new Map(),metrics:new Map(),person:null,
   personVersion:0,personReturnKey:null,personAvailabilityCache:new Map(),
   lists:[],collections:[],detailMessage:'',personal:new Map()
@@ -377,14 +378,15 @@ function shelf(id,heading,content,notes='',more=true,kind='',genreKey='',sort=''
 }
 // The saved sections follow iOS: search, service, kind and personal filters
 // are applied before deciding whether a shelf exists.
-function matchesSavedSearch(title){
-  const q=state.query.trim().normalize('NFD')
+function matchesTitleText(title,phrase){
+  const q=String(phrase||'').trim().normalize('NFD')
     .replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
   if(!q)return true;
   return [title.title,title.original_title].some(value=>
     String(value||'').normalize('NFD')
       .replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().includes(q));
 }
+function matchesSavedSearch(title){return matchesTitleText(title,state.query);}
 function matchesSavedVisibility(title){
   return state.visible.length>0 &&
     servicesFor(title).some(service=>state.visible.includes(service)) &&
@@ -740,9 +742,50 @@ function renderBrowser(){
   $('streaming-summary').textContent=saved+' '+tr('titres enregistrés')+
     ' · '+state.visible.length+' '+tr('services');
 }
+// Search within a specific streaming category, not just the already-loaded
+// pagination window. This uses the same region and TMDB qualifiers as iOS.
+let subviewSearchGeneration=0;
+async function performSubviewSearch(){
+  const subview=state.subview,def=state.shelves.get(subview?.id);
+  if(!subview||!def)return;
+  const phrase=subview.searchQuery.trim(),generation=++subviewSearchGeneration;
+  subview.searchItems=null;
+  subview.searchError='';
+  subview.searchLoading=phrase.length>=2;
+  if(phrase.length<2){renderSubviewGrid();return;}
+  if(def.saved){
+    subview.searchItems=def.items.filter(title=>matchesTitleText(title,phrase));
+    subview.searchLoading=false;
+    renderSubviewGrid();
+    return;
+  }
+  renderSubviewGrid();
+  try{
+    const params=new URLSearchParams({
+      q:phrase,service:state.visible.join(','),kind:def.kind,region:validRegion()
+    });
+    if(def.genre!=null)params.set('genre',String(def.genre));
+    if(def.originCountry)params.set('origin_country',def.originCountry);
+    if(def.originalLanguage)params.set('original_language',def.originalLanguage);
+    const cacheID='category-search:'+cacheKey(def,1)+':'+phrase.toLocaleLowerCase();
+    const result=await publicCachedRequest(cacheID,15*60*1000,
+      ()=>limited(()=>api('streaming/search?'+params)));
+    if(generation!==subviewSearchGeneration||state.subview!==subview)return;
+    subview.searchItems=(result.items||[]).filter(item=>item.kind===def.kind);
+  }catch(error){
+    if(generation!==subviewSearchGeneration||state.subview!==subview)return;
+    subview.searchError=error.message;
+    subview.searchItems=[];
+  }finally{
+    if(generation===subviewSearchGeneration&&state.subview===subview){
+      subview.searchLoading=false;renderSubviewGrid();
+    }
+  }
+}
 let streamingSubviewObserver=null;
-function sortedSubviewItems(def){
-  const titles=def.items.filter(matchesStreamingFilters);
+function sortedSubviewItems(def,source=def.items,explicit=false){
+  const titles=source.filter(title=>def.saved?matchesSavedVisibility(title):
+    explicit||matchesStreamingFilters(title));
   const sort=def.localSort||'default',asc=def.localOrder==='asc';
   if(sort==='default'||(sort==='date_added'&&def.saved))
     return sort==='date_added'&&def.saved&&asc?[...titles].reverse():titles;
@@ -777,9 +820,16 @@ function renderSubviewGrid(){
   const sort=def.localSort||'default';
   $('streaming-subview-sort').value=sort;
   $('streaming-subview-order').value=def.localOrder||'desc';
-  $('streaming-subview-grid').innerHTML=sortedSubviewItems(def).map(card).join('')||
-    '<p class="streaming-shelf-message">No titles match the active filters.</p>';
-  $('streaming-subview-more').hidden=!!def.saved||def.page>=def.total;
+  const search=state.subview,phrase=search?.searchQuery?.trim()||'';
+  $('streaming-subview-search').value=search?.searchQuery||'';
+  const items=phrase.length>=2?sortedSubviewItems(def,search.searchItems||[],true):
+    phrase?[]:sortedSubviewItems(def);
+  const message=phrase.length===1?'Enter at least two characters.':
+    search?.searchError|| (search?.searchLoading?'Searching…':
+      'No titles match the active filters.');
+  $('streaming-subview-grid').innerHTML=items.map(card).join('')||
+    '<p class="streaming-shelf-message">'+esc(message)+'</p>';
+  $('streaming-subview-more').hidden=!!phrase||!!def.saved||def.page>=def.total;
   $('streaming-subview-more').disabled=!!def.loadingNext;
 }
 function maybeResumeSubviewPagination(){
@@ -808,7 +858,8 @@ function showSubview(id){
   const def=state.shelves.get(id);
   if(!def)return;
   const same=state.subview?.id===id;
-  state.subview={id};
+  state.subview=same?state.subview:
+    {id,searchQuery:'',searchItems:null,searchLoading:false,searchError:''};
   if(!same){def.localSort='default';def.localOrder='desc';}
   $('streaming-browser').hidden=true;
   $('streaming-subview').hidden=false;
@@ -818,6 +869,8 @@ function showSubview(id){
   requestAnimationFrame(maybeResumeSubviewPagination);
 }
 function closeSubview(){
+  clearTimeout(state.subviewSearchTimer);
+  ++subviewSearchGeneration;
   state.subview=null;
   if(streamingSubviewObserver)streamingSubviewObserver.disconnect();
   $('streaming-subview').hidden=true;
@@ -1366,6 +1419,16 @@ export function startStreaming(){
       $('streaming-title-dialog').close();
       window.dispatchEvent(new CustomEvent('streaming-open-media',{detail:{mediaID:work.dataset.streamingWork}}));
     }
+  });
+  $('streaming-subview-search').addEventListener('input',event=>{
+    if(!state.subview)return;
+    state.subview.searchQuery=event.target.value;
+    state.subview.searchItems=null;
+    state.subview.searchError='';
+    clearTimeout(state.subviewSearchTimer);
+    ++subviewSearchGeneration;
+    renderSubviewGrid();
+    state.subviewSearchTimer=setTimeout(()=>void performSubviewSearch(),350);
   });
   $('streaming-back').addEventListener('click',closeSubview);
   $('streaming-subview-more').addEventListener('click',()=>void loadNext());
