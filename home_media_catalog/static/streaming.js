@@ -12,7 +12,7 @@ const names = {
   apple_tv_plus:'Apple TV+',hbo_max:'HBO Max',paramount_plus:'Paramount+',
   crunchyroll:'Crunchyroll',rakuten_viki:'Rakuten Viki',mubi:'MUBI'
 };
-// Shared category pictograms: no external icon assets or image requests.
+// Same illustrated vector assets and single-icon presentation as iOS.
 const streamingSymbolPaths = {
   movie:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4m-4 6h4m10-6h4m-4 6h4"/>',
   tv:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 2 4 3 4-3M8 22h8"/>',
@@ -22,27 +22,40 @@ const streamingSymbolPaths = {
   popular:'<path d="M12 22c4.5 0 7-3.2 7-7.5 0-3.1-2-5.6-4-7-1 4-2 4-3 4-1-4.3-2.2-6.5-4-8C7 7 5 10 5 14.5 5 18.7 7.5 22 12 22z"/>',
   recent:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
 };
+// Whitelist artwork names to prevent a saved preference from reaching CSS URLs.
+const genreArt = new Set([
+  'action','adventure','animation','comedy','documentary','drama','family',
+  'fantasy','history','horror','kids','romance','science_fiction','war','western'
+]);
 function streamingSymbol(name,extraClass=''){
   const body=streamingSymbolPaths[name];
   return body?'<svg class="'+extraClass+'" viewBox="0 0 24 24" aria-hidden="true">'+body+'</svg>':'';
 }
+function genreArtwork(key){
+  const name=key==='war_movies'||key==='war_politics'?'war':key;
+  if(!genreArt.has(name))return '';
+  return '<span class="streaming-genre-art" style="--genre-art:url(./streaming-genres/'+
+    name.replaceAll('_','-')+'.svg)"></span>';
+}
 function categoryIcons(kind,genreKey='',sort=''){
   if(!['movie','tv'].includes(kind))return '';
-  const accent=streamingSymbolPaths[genreKey]?genreKey:
-    (sort==='top'?'popular':sort==='recent'?'recent':'');
+  const art=genreArtwork(genreKey);
+  const icon=art||streamingSymbol(
+    genreKey&&streamingSymbolPaths[genreKey]?genreKey:
+      sort==='top'?'popular':sort==='recent'?'recent':kind
+  );
   return '<span class="streaming-category-icons streaming-kind-'+kind+
-    '" aria-hidden="true">'+streamingSymbol(kind)+
-    (accent?streamingSymbol(accent,'streaming-genre-symbol'):'')+'</span>';
+    '" aria-hidden="true">'+icon+'</span>';
 }
 function genreIcons(option){
   const [key,,movieGenre,tvGenre]=option;
-  // A genre shared by films and series has two type icons, unless it has
-  // its own recognizable symbol.
-  if(streamingSymbolPaths[key])
-    return '<span class="streaming-category-icons" aria-hidden="true">'+
-      streamingSymbol(key)+'</span>';
-  return (movieGenre!=null?categoryIcons('movie'):'')+
-    (tvGenre!=null?categoryIcons('tv'):'');
+  const mixed=movieGenre!=null&&tvGenre!=null;
+  const cls=mixed?'streaming-kind-mixed':
+    movieGenre!=null?'streaming-kind-movie':'streaming-kind-tv';
+  const icon=genreArtwork(key)||streamingSymbol(streamingSymbolPaths[key]?key:
+    movieGenre!=null?'movie':'tv');
+  return '<span class="streaming-category-icons '+cls+'" aria-hidden="true">'+
+    icon+'</span>';
 }
 function displayPreference(key){
   try{return localStorage.getItem('hmc-streaming-display-'+key)==='true';}
@@ -70,7 +83,30 @@ const genreOptions = [
   ['mystery','Mystery',9648,9648],
   ['thriller','Thriller',53,null],
   ['horror','Horror',27,null],
-  ['romance','Romance',10749,null]
+  ['romance','Romance',10749,null],
+  ['reality','Reality TV',null,10764],
+  ['history','Historical movies',36,null],
+  ['music','Music movies',10402,null],
+  ['war_politics','War & politics',10752,10768],
+  ['kids','Kids',null,10762],
+  ['k_drama','K-dramas',null,18,{originCountry:'KR',originalLanguage:'ko'}],
+  ['korean_movies','Korean movies',null,null,
+    {originCountry:'KR',originalLanguage:'ko',allowNoGenre:true,kind:'movie'}],
+  ['anime','Japanese anime',16,16,{originCountry:'JP',originalLanguage:'ja'}],
+  ['british_crime','British crime series',null,80,
+    {originCountry:'GB',originalLanguage:'en'}],
+  ['french_movies','French movies',null,null,
+    {originCountry:'FR',originalLanguage:'fr',allowNoGenre:true,kind:'movie'}],
+  ['japanese_movies','Japanese movies',null,null,
+    {originCountry:'JP',originalLanguage:'ja',allowNoGenre:true,kind:'movie'}],
+  ['western','Westerns',37,37],
+  ['tv_movie','TV movies',10770,null],
+  ['soap','Soap operas',null,10766],
+  ['talk_shows','Talk shows',null,10767],
+  ['news','News & current affairs',null,10763],
+  ['war_movies','War movies',10752,null],
+  ['action_tv','Action & adventure series',null,10759],
+  ['scifi_tv','Science fiction & fantasy series',null,10765]
 ];
 const state = {
   rows:[], visible:[],subscriptions:[], kind:'both', region:'FR',
@@ -339,16 +375,33 @@ function shelf(id,heading,content,notes='',more=true,kind='',genreKey='',sort=''
     (more?'<button type="button" class="streaming-see-more" data-streaming-more="'+
       esc(id)+'">'+esc('See more titles')+'</button>':'')+'</section>';
 }
+// The saved sections follow iOS: search, service, kind and personal filters
+// are applied before deciding whether a shelf exists.
+function matchesSavedSearch(title){
+  const q=state.query.trim().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
+  if(!q)return true;
+  return [title.title,title.original_title].some(value=>
+    String(value||'').normalize('NFD')
+      .replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().includes(q));
+}
+function matchesSavedVisibility(title){
+  return state.visible.length>0 &&
+    servicesFor(title).some(service=>state.visible.includes(service)) &&
+    matchesSavedSearch(title) && matchesStreamingFilters(title);
+}
 function renderSaved(){
   const groups=[['movie','My Movies'],['tv','My Series']];
   $('streaming-saved').innerHTML=groups.map(([kind,heading])=>{
+    if(state.kind!=='both'&&state.kind!==kind)return '';
     const titles=personalRows(kind).map(normalizeTitle);
-    const visible=titles.filter(matchesStreamingFilters);
+    const visible=titles.filter(matchesSavedVisibility);
     state.shelves.set('saved-'+kind,{
       id:'saved-'+kind,heading,items:titles,kind,saved:true,page:1,total:1
     });
     if(!visible.length)return '';
-    return shelf('saved-'+kind,heading,visible.map(card).join(''),'',true,kind);
+    return shelf('saved-'+kind,heading,visible.slice(0,12).map(card).join(''),
+      '',!state.query.trim(),kind);
   }).join('');
 }
 function subscribedServices(){
@@ -378,9 +431,10 @@ function computeShelves(){
     for(const kind of kinds) result.push({kind,sort:'recent',genre:null,
       heading:kind==='tv'?'Recently available · series':'Recently available · movies'});
   for(const g of genres)for(const kind of kinds){
-    const genre=kind==='tv'?g[3]:g[2];
-    if(genre==null)continue;
+    const genre=kind==='tv'?g[3]:g[2],extra=g[4]||{};
+    if(genre==null&&!(extra.allowNoGenre&&extra.kind===kind))continue;
     result.push({kind,sort:'popularity',genre,genreKey:g[0],
+      originCountry:extra.originCountry,originalLanguage:extra.originalLanguage,
       heading:g[1]+' · '+(kind==='tv'?'series':'movies')});
   }
   return result;
@@ -506,8 +560,8 @@ async function publicCachedRequest(key,ttl,loader){
 }
 
 function cacheKey(def,page=1) {
-  return [def.kind,def.sort,def.genre||'',state.visible.join(','),
-    validRegion(),page].join(':');
+  return [def.kind,def.sort,def.genre||'',def.originCountry||'',
+    def.originalLanguage||'',state.visible.join(','),validRegion(),page].join(':');
 }
 async function retrieve(def,page=1){
   const key='discover:'+cacheKey(def,page);
@@ -522,16 +576,20 @@ async function retrieve(def,page=1){
     params.set('page',String(page));
     params.set('sort',def.sort==='top'?'popularity':def.sort);
     if(def.genre!=null)params.set('genre',String(def.genre));
+    if(def.originCountry)params.set('origin_country',def.originCountry);
+    if(def.originalLanguage)params.set('original_language',def.originalLanguage);
   }
   return publicCachedRequest(key,15*60*1000,
     ()=>limited(()=>api(endpoint+'?'+params)));
 }
 function renderDiscoveryShelf(element,def,providedNote){
   const visible=(def.items||[]).filter(matchesStreamingFilters).slice(0,12);
+  // Do not keep empty categories visible after the first page is loaded.
+  element.hidden=!visible.length;
+  if(!visible.length)return;
   const note=providedNote??(def.sort==='top'?
     (def.ranking==='official_weekly'?'Official':'TMDB'):'');
-  const content=visible.length?visible.map(card).join(''):
-    '<p class="streaming-shelf-message">No titles match the active filters.</p>';
+  const content=visible.map(card).join('');
   element.innerHTML=shelf(def.id,def.heading,content,note,
     def.page<def.total||visible.length>0,def.kind,def.genreKey,def.sort);
 }
@@ -552,16 +610,18 @@ function refreshFilteredViews(){
     document.querySelectorAll('#streaming-discover [data-discovery-key]')
       .forEach(element=>{
         const def=state.shelves.get(element.dataset.discoveryKey);
-        if(def?.loaded&&def.items?.length)renderDiscoveryShelf(element,def);
+        if(def?.loaded)renderDiscoveryShelf(element,def);
       });
   }else{
     document.querySelectorAll('#streaming-discover [data-streaming-shelf]')
       .forEach(element=>{
         const def=state.shelves.get(element.dataset.streamingShelf);
         if(!def)return;
-        const visible=def.items.filter(matchesStreamingFilters);
-        element.innerHTML=shelf(def.id,def.heading,visible.map(card).join(''),
-          '',true,def.kind);
+        // Explicit title searches must not be constrained by discovery filters.
+        const visible=def.items;
+        element.hidden=!visible.length;
+        if(visible.length)element.innerHTML=shelf(def.id,def.heading,
+          visible.map(card).join(''),'',false,def.kind);
       });
   }
   if(state.subview)renderSubviewGrid();
@@ -632,7 +692,10 @@ let searchGeneration=0;
 async function performSearch(){
   const q=state.query.trim(),gen=++searchGeneration;
   if(q.length<2){
-    setupDiscover();
+    state.version++;
+    if(state.observer)state.observer.disconnect();
+    $('streaming-discover').innerHTML=q.length?
+      '<p class="streaming-shelf-message">Enter at least two characters.</p>':'';
     return;
   }
   state.version++;
@@ -644,23 +707,22 @@ async function performSearch(){
   }
   try{
     const params=new URLSearchParams({
-      q:q,service:state.visible.join(','),kind:state.kind,region:validRegion()
+      q:q,service:state.visible.join(','),kind:'both',region:validRegion()
     });
     const result=await publicCachedRequest(
-      'search:'+validRegion()+':'+state.visible.join(',')+':'+state.kind+':'+q.toLowerCase(),
+      'search:'+validRegion()+':'+state.visible.join(',')+':both:'+q.toLowerCase(),
       15*60*1000,()=>limited(()=>api('streaming/search?'+params))
     );
     if(gen!==searchGeneration)return;
     $('streaming-discover').innerHTML='';
-    for(const kind of (state.kind==='both'?['tv','movie']:[state.kind])){
-      const allItems=(result.items||[]).filter(x=>x.kind===kind);
-      const items=allItems.filter(matchesStreamingFilters);
-      if(!allItems.length)continue;
+    for(const kind of ['tv','movie']){
+      const items=(result.items||[]).filter(x=>x.kind===kind);
+      if(!items.length)continue;
       const id='search-'+kind;
       const heading=kind==='tv'?'Series · search results':'Movies · search results';
-      state.shelves.set(id,{id,kind,heading,items:allItems,saved:true,page:1,total:1});
+      state.shelves.set(id,{id,kind,heading,items,saved:true,page:1,total:1});
       $('streaming-discover').insertAdjacentHTML('beforeend',
-        shelf(id,heading,items.map(card).join(''),'',true,kind));
+        shelf(id,heading,items.map(card).join(''),'',false,kind));
     }
     if(!$('streaming-discover').childElementCount)
       $('streaming-discover').innerHTML='<p class="streaming-shelf-message">No titles found.</p>';
@@ -672,8 +734,8 @@ function renderBrowser(){
   filterChips();
   syncFilterPreferences();
   renderSaved();
-  if(state.query.trim().length>=2)void performSearch();
-  else setupDiscover();
+  if(state.query.trim())void performSearch();
+  else {++searchGeneration;setupDiscover();}
   const saved=personalRows().length;
   $('streaming-summary').textContent=saved+' '+tr('titres enregistrés')+
     ' · '+state.visible.length+' '+tr('services');
