@@ -19,7 +19,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from .ai_providers import generate_json
-from .streaming import _availability, _merge, _provider_ids, _provider_keys, _tmdb, _item
+from .streaming import _availability, _item, _merge, _provider_ids, _provider_keys, _tmdb
 from .watch_progress import effective_series_status
 
 # Public TMDB metadata only; personal viewing histories are not cached.
@@ -52,6 +52,7 @@ _STREAMING_RECOMMENDATION_SCHEMA = {
 async def explain_streaming_recommendations(
     user_request: str, favorites: list[dict], dislikes: list[dict],
     candidates: list[dict], model: str, api_key: str, *, provider: str,
+    mixed: list[dict] | None = None,
 ) -> tuple[list[dict], str]:
     """Provide a contextual taste analysis and grounded, ordered recommendations.
 
@@ -71,8 +72,10 @@ async def explain_streaming_recommendations(
         "to Tarzan merely because both involve relationships). "
         "Unrated watched titles are not evidence of enjoyment. "
         "Do not invent what the user has seen, plot points, ratings or availability. "
+        "Treat 5–6.9/10 ratings as mixed/qualified reactions, not dislikes; "
+        "do not present unlabelled watched titles as positive evidence. "
         "Write taste_summary as 2 to 4 substantial sentences explaining the "
-        "positive and negative evidence, naming a few highly-rated titles where "
+        "positive, mixed and negative evidence, naming a few highly-rated titles where 
         "supported; acknowledge when the profile is broad or uncertain. "
         "Select approximately 10 to 15 different strong candidates if available, "
         "with a sensible balance of closer matches and justified discoveries. "
@@ -93,6 +96,7 @@ async def explain_streaming_recommendations(
             "user_request": user_request,
             "liked": favorites,
             "disliked": dislikes,
+            "mixed": mixed or [],
             "candidates": candidates[:44],
         }, ensure_ascii=False),
         _STREAMING_RECOMMENDATION_SCHEMA, model, api_key, provider=provider,
@@ -211,13 +215,54 @@ def _build_profile(catalogue_rows: list[dict], journal: list[dict]) -> dict[str,
     negative = [w for w in works.values()
                 if w["rating"] is not None and w["rating"] <= 5]
     negative.sort(key=lambda w: w["rating"])
+    # A 6/10 is neither a strong recommendation nor a categorical dislike.
+    mixed = [w for w in works.values()
+             if w["rating"] is not None and 5 < w["rating"] < 7]
+    mixed.sort(key=lambda w: w["rating"])
     unrated = [w for w in works.values() if w["seen"] and w["rating"] is None]
     return {
         "works": works, "seen": {key for key, w in works.items() if w["seen"]},
-        "positive": positive, "negative": negative,
+        "positive": positive, "negative": negative, "mixed": mixed,
         "seeds": (positive[:6] or unrated[:5]),
         "rated_count": sum(w["rating"] is not None for w in works.values()),
     }
+
+
+
+def _profile_context_budget(profile: dict[str, Any]) -> int:
+    """Automatically grow taste evidence for larger catalogues, with a hard cap.
+
+    Detail lookups are expensive; only representative rated works enter the LLM
+    context, and nothing needs to be configured by the end user.
+    """
+    observations = sum(len(profile.get(key, []))
+                       for key in ("positive", "negative", "mixed"))
+    return min(30, max(10, 8 + math.ceil(math.sqrt(observations) * 2.4)))
+
+
+def _profile_evidence_selection(
+    profile: dict[str, Any], kinds: tuple[str, ...],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Reserve evidence slots for the requested medium before general favorites.
+
+    Language relevance can only be verified from TMDB details, fetched later.
+    Include a bounded cross-medium sample to avoid a tunnel-vision profile.
+    """
+    budget = _profile_context_budget(profile)
+    positives = profile.get("positive", [])
+    primary = [w for w in positives if w["id"].split(":")[0] in kinds]
+    secondary = [w for w in positives if w["id"].split(":")[0] not in kinds]
+    preferred = primary[:max(8, int(budget * 0.8))]
+    preferred_ids = {w["id"] for w in preferred}
+    preferred.extend(w for w in secondary[:6] if w["id"] not in preferred_ids)
+    preferred_ids = {w["id"] for w in preferred}
+    preferred.extend(w for w in primary if w["id"] not in preferred_ids)
+    positive_budget = budget if not profile.get("negative") else max(8, budget - 5)
+    liked = preferred[:positive_budget] or profile.get("seeds", [])[:6]
+    # Reserve minority/neutral examples even if a large positive profile exists.
+    dislikes = profile.get("negative", [])[:min(5, max(2, budget // 6))]
+    mixed = profile.get("mixed", [])[:min(4, max(1, budget // 8))]
+    return liked, dislikes, mixed
 
 
 def _catalogue_profile(store: Any) -> dict[str, Any]:
@@ -300,10 +345,10 @@ async def recommend_streaming(
         _TMDB_CACHE[cache_key] = time.monotonic() + 900, result
         return result
 
-    # Examine a broader set of favourites, not only the first six global
-    # ratings (which may all be movies when the user asked for K-dramas).
-    all_favorites = profile["positive"][:18] or profile["seeds"][:8]
-    dislikes = profile["negative"][:6]
+    # Adaptive evidence: prioritize the requested media type and include
+    # rated counterexamples; the number of titles scales with profile density.
+    all_favorites, dislikes, mixed = _profile_evidence_selection(profile, kinds)
+
     async def seed_details(work: dict) -> tuple[dict, dict]:
         category, number = work["id"].split(":")
         try:
@@ -313,33 +358,44 @@ async def recommend_streaming(
         return work, detail
 
     all_pairs = await asyncio.gather(*(
-        seed_details(work) for work in all_favorites + dislikes
+        seed_details(work) for work in all_favorites + dislikes + mixed
     ))
     full_prompt = (
-        ("Previous search: " + request.previous_prompt + "\n")
+        ("Previous search: " + request.previous_prompt + "\\n")
         if request.previous_prompt else ""
     ) + request.prompt
     language = _language_hint(full_prompt)
-    # Prefer rated works in the requested medium and language when possible.
-    # Keep a few wider favourites for cross-genre discoveries.
     fav_pairs = all_pairs[:len(all_favorites)]
-    matching_pairs = [
+    # For K-dramas prefer positively rated Korean-language shows, then
+    # other series and finally complementary movies.
+    language_matches = [
         pair for pair in fav_pairs
         if pair[0]["id"].split(":")[0] in kinds
         and (not language or pair[1].get("original_language") == language)
     ]
-    chosen = matching_pairs[:10]
-    chosen_ids = {pair[0]["id"] for pair in chosen}
-    chosen.extend(
+    same_kind = [
         pair for pair in fav_pairs
-        if pair[0]["id"] not in chosen_ids
-    )
-    seeds = [work for work, _ in chosen[:12]]
-    seed_pairs = chosen[:12] + all_pairs[len(all_favorites):]
+        if pair[0]["id"].split(":")[0] in kinds
+    ]
+    seen_ids: set[str] = set()
+    chosen: list[tuple[dict, dict]] = []
+    for pair in [*language_matches, *same_kind, *fav_pairs]:
+        if pair[0]["id"] not in seen_ids:
+            seen_ids.add(pair[0]["id"])
+            chosen.append(pair)
+    positive_pairs = chosen[:_profile_context_budget(profile)]
+    negative_pairs = all_pairs[
+        len(all_favorites):len(all_favorites) + len(dislikes)
+    ]
+    mixed_pairs = all_pairs[len(all_favorites) + len(dislikes):]
+    seeds = [work for work, _ in positive_pairs[:12]]
+    seed_pairs = positive_pairs + negative_pairs + mixed_pairs
     affinity: dict[int, float] = defaultdict(float)
     for work, detail in seed_pairs:
         score = work["rating"]
-        weight = 0.35 if score is None else (score - 6.0) / 3.0
+        # Rated works can inform taste; neutral and unrated history must
+        # not be promoted to evidence of liking.
+        weight = 0 if score is None else (score - 6.0) / 3.0
         for genre in detail.get("genres", []):
             genre_id = genre.get("id") if isinstance(genre, dict) else None
             if isinstance(genre_id, int):
@@ -476,7 +532,7 @@ async def recommend_streaming(
                 "synopsis": (detail.get("overview") or "")[:450],
                 "language": detail.get("original_language"),
             }
-            for w, detail in seed_pairs[:len(seeds)]
+            for w, detail in positive_pairs
         ]
         disliked = [
             {
@@ -484,7 +540,15 @@ async def recommend_streaming(
                 "user_rating": w["rating"],
                 "synopsis": (detail.get("overview") or "")[:300],
             }
-            for w, detail in seed_pairs[len(seeds):]
+            for w, detail in negative_pairs
+        ]
+        mixed_evidence = [
+            {
+                "title": detail.get("name") or detail.get("title") or w["title"] or w["id"],
+                "user_rating": w["rating"],
+                "synopsis": (detail.get("overview") or "")[:300],
+            }
+            for w, detail in mixed_pairs
         ]
         explanations, taste_summary = await explain_streaming_recommendations(
             full_prompt + "\nPersonal viewing profile (ratings out of 10). "
@@ -500,7 +564,7 @@ async def recommend_streaming(
                 }
                 for identity, item in available
             ],
-            model, api_key, provider=provider,
+            model, api_key, provider=provider, mixed=mixed_evidence,
         )
         reasons = {entry["id"]: entry["reason"] for entry in explanations}
         # Keep model ordering: its comparison of tastes is more meaningful
