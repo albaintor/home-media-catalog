@@ -188,15 +188,22 @@
   #streaming-subscription-options,#streaming-genre-options{grid-template-columns:minmax(0,1fr)}
 }
 
-/* Film shelves are blue, series shelves red; genres add a small second symbol. */
+/* iOS colour convention: violet for movies, turquoise for series.
+   Category artwork is a single masked monochrome vector, not a duplicate icon. */
 .streaming-shelf-header h3{display:flex;align-items:center;gap:8px}
-.streaming-category-icons{display:inline-flex;gap:4px;align-items:center;flex:none;vertical-align:middle;color:var(--muted)}
-.streaming-category-icons svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.streaming-category-icons .streaming-genre-symbol{width:13px;height:13px;opacity:.85}
-.streaming-category-icons.streaming-kind-movie{color:#428df4}
-.streaming-category-icons.streaming-kind-tv{color:#e8545d}
-#streaming-genre-options .streaming-category-icons{gap:2px;margin-right:2px}
-#streaming-genre-options .streaming-category-icons svg{width:14px;height:14px}
+.streaming-category-icons{display:inline-flex;align-items:center;justify-content:center;flex:none;vertical-align:middle;width:29px;height:29px;color:var(--muted)}
+.streaming-category-icons svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.streaming-category-icons.streaming-kind-movie{color:#b49aff}
+.streaming-category-icons.streaming-kind-tv{color:#4bd7cd}
+.streaming-category-icons .streaming-genre-art{display:block;width:29px;height:29px;flex:none;background:currentColor;-webkit-mask:var(--genre-art) center / contain no-repeat;mask:var(--genre-art) center / contain no-repeat}
+.streaming-category-icons.streaming-kind-mixed .streaming-genre-art{background:linear-gradient(90deg,#b49aff,#4bd7cd)}
+#streaming-genre-options .streaming-category-icons{width:30px;height:30px;margin-right:3px}
+#streaming-genre-options .streaming-category-icons svg{width:20px;height:20px}
+@media(prefers-color-scheme:light){
+  .streaming-category-icons.streaming-kind-movie{color:#7540d8}
+  .streaming-category-icons.streaming-kind-tv{color:#0d9488}
+  .streaming-category-icons.streaming-kind-mixed .streaming-genre-art{background:linear-gradient(90deg,#7540d8,#0d9488)}
+}
 
 .streaming-tile .streaming-score-stack{position:absolute;top:8px;right:6px;z-index:1;display:flex;flex-direction:column;gap:3px;align-items:flex-end;pointer-events:none}
 .streaming-tile .streaming-score-stack .streaming-rating{position:static;display:inline-flex;gap:4px;align-items:center}
