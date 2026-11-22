@@ -222,7 +222,7 @@ def test_multi_provider_selection_is_validated_and_deduplicated():
         _provider_ids("netflix,unknown")
 
 
-def test_only_flatrate_providers_qualify_in_france():
+def test_streaming_offers_include_subscriptions_but_not_rentals_in_france():
     offers = {
         "results": {
             "FR": {
@@ -254,6 +254,79 @@ def test_new_svod_providers_filter_region_and_exclude_rentals():
     ]
     assert _availability_keys(offers, selected, "JP") == ["mubi"]
     assert _availability_keys(offers, selected, "US") == []
+
+
+def test_viki_free_and_ad_supported_offers_are_visible_but_rentals_are_not():
+    offers = {
+        "results": {
+            "FR": {
+                "ads": [{"provider_id": 344}],
+                "free": [{"provider_id": 283}],
+                "rent": [{"provider_id": 11}],
+                "buy": [{"provider_id": 337}],
+            },
+            "BE": {"rent": [{"provider_id": 344}]},
+        },
+    }
+    selected = "rakuten_viki,crunchyroll,mubi,disney_plus"
+    assert _availability_keys(offers, selected, "FR") == [
+        "rakuten_viki", "crunchyroll"
+    ]
+    assert _availability_keys(offers, selected, "BE") == []
+
+
+def test_viki_ad_supported_title_can_be_found_through_streaming_search(monkeypatch):
+    async def fake_tmdb(_token, path, params):
+        if path == "/search/tv":
+            assert params["language"] == "fr-FR"
+            return {"results": [
+                {"id": 70455, "name": "The King in Love",
+                 "first_air_date": "2017-07-17",
+                 "genre_ids": [18], "original_language": "ko"},
+            ]}
+        if path == "/tv/70455/watch/providers":
+            return {"results": {"FR": {
+                "ads": [{"provider_id": 344}],
+                "rent": [{"provider_id": 8}],
+            }}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(streaming, "_tmdb", fake_tmdb)
+    result = asyncio.run(streaming._search(
+        "token", "rakuten_viki,netflix", "the king in love", "tv", "FR"
+    ))
+    assert [row["id"] for row in result["items"]] == [70455]
+    assert result["items"][0]["service_keys"] == ["rakuten_viki"]
+
+
+def test_search_retries_english_and_deduplicates_checked_titles(monkeypatch):
+    checked = []
+    queried_languages = []
+
+    async def fake_tmdb(_token, path, params):
+        if path == "/search/tv":
+            queried_languages.append(params["language"])
+            if params["language"] == "fr-FR":
+                return {"results": [{"id": 70455, "name": "Roi amoureux"}]}
+            return {"results": [
+                {"id": 70455, "name": "The King in Love"},
+                {"id": 70456, "name": "An English alternate title"},
+            ]}
+        if path.endswith("/watch/providers"):
+            checked.append(path)
+            if path == "/tv/70455/watch/providers":
+                return {"results": {"FR": {"rent": [{"provider_id": 344}]}}}
+            if path == "/tv/70456/watch/providers":
+                return {"results": {"FR": {"free": [{"provider_id": 344}]}}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(streaming, "_tmdb", fake_tmdb)
+    result = asyncio.run(streaming._search(
+        "token", "rakuten_viki", "the king in love", "tv", "FR"
+    ))
+    assert queried_languages == ["fr-FR", "en-US"]
+    assert checked.count("/tv/70455/watch/providers") == 1
+    assert [row["id"] for row in result["items"]] == [70456]
 
 
 def test_search_is_consolidated_and_excludes_rentals(monkeypatch):
@@ -358,7 +431,7 @@ def test_discover_intersects_subscriptions_and_genre(monkeypatch):
     assert result["items"] == []
     assert seen["watch_region"] == "FR"
     assert seen["with_watch_providers"] == "8|337"
-    assert seen["with_watch_monetization_types"] == "flatrate"
+    assert seen["with_watch_monetization_types"] == "flatrate|free|ads"
     assert seen["with_genres"] == 18
 
 
@@ -406,7 +479,7 @@ def test_kdrama_and_korean_movie_categories_keep_subscription_and_region(monkeyp
         assert params["with_origin_country"] == "KR"
         assert params["with_original_language"] == "ko"
         assert params["watch_region"] == "FR"
-        assert params["with_watch_monetization_types"] == "flatrate"
+        assert params["with_watch_monetization_types"] == "flatrate|free|ads"
     assert captured[0][0] == "/discover/tv"
     assert captured[0][1]["with_genres"] == 18
     assert captured[0][1]["with_watch_providers"] == "8|337"
@@ -686,7 +759,7 @@ def test_streaming_keyword_search_and_keyword_discover(monkeypatch):
     assert discovery["total_pages"] == 3
     assert observed[-1][0] == "/discover/tv"
     assert observed[-1][1]["with_keywords"] == 12345
-    assert observed[-1][1]["with_watch_monetization_types"] == "flatrate"
+    assert observed[-1][1]["with_watch_monetization_types"] == "flatrate|free|ads"
 
 def test_streaming_heart_state_materializes_media_for_web_video_catalogue(tmp_path):
     """Local-first iOS state must also show up in server /media before journal upload."""
