@@ -100,8 +100,9 @@ def test_recommendations_exclude_watched_and_verify_region_subscription(tmp_path
         return ["netflix"] if tmdb_id == 30 else []
 
     async def fake_explain(prompt, favorites, dislikes, candidates,
-                           model, key, *, provider):
+                           model, key, *, provider, mixed=None):
         assert "Personal viewing profile" in prompt
+        assert mixed == []
         assert {entry["id"] for entry in candidates} == {"tv:30"}
         assert favorites and favorites[0]["user_rating"] == 9
         return (
@@ -184,3 +185,49 @@ def test_kdrama_hint_detects_spaced_and_hyphenated_forms():
     for phrase in ("K drama", "k-drama", "kdrama", "K-dramas",
                    "dramas coréens", "Korean romantic shows"):
         assert ai_streaming._language_hint(phrase) == "ko"
+
+
+def test_adaptive_context_prioritizes_series_and_caps_detail_lookups():
+    def work(kind, number, rating):
+        return {"id": f"{kind}:{number}", "title": f"Work {number}",
+                "rating": rating, "genres": [], "seen": True}
+
+    profile = {
+        "positive": [work("movie", number, 10) for number in range(1, 40)]
+                    + [work("tv", number, 9.5) for number in range(40, 60)],
+        "negative": [work("tv", number, 2) for number in range(60, 68)],
+        "mixed": [work("tv", number, 6) for number in range(70, 77)],
+    }
+    liked, disliked, neutral = ai_streaming._profile_evidence_selection(
+        profile, ("tv",)
+    )
+    assert len(liked) <= ai_streaming._profile_context_budget(profile) <= 30
+    assert len(disliked) <= 5
+    assert len(neutral) <= 4
+    assert all(item["id"].startswith("tv:") for item in liked[:12])
+    assert any(item["id"].startswith("movie:") for item in liked)
+    assert liked[0]["id"] == "tv:40"
+
+
+def test_context_budget_scales_without_manual_settings():
+    def profile(n):
+        return {"positive": [{"id": f"tv:{i}"} for i in range(n)],
+                "negative": [], "mixed": []}
+
+    assert ai_streaming._profile_context_budget(profile(2)) >= 10
+    assert ai_streaming._profile_context_budget(profile(80)) > (
+        ai_streaming._profile_context_budget(profile(2))
+    )
+    assert ai_streaming._profile_context_budget(profile(1000)) == 30
+
+
+def test_moderate_ratings_are_context_not_dislikes():
+    profile = ai_streaming._build_profile([
+        {"kind": "tvshow", "tmdb_id": "1", "title": "Mixed",
+         "genres": "[]", "user_rating": 6, "watch_status": "watched"},
+        {"kind": "tvshow", "tmdb_id": "2", "title": "Loved",
+         "genres": "[]", "user_rating": 10, "watch_status": "watched"},
+    ], [])
+    assert [row["id"] for row in profile["mixed"]] == ["tv:1"]
+    assert [row["id"] for row in profile["positive"]] == ["tv:2"]
+    assert profile["negative"] == []
