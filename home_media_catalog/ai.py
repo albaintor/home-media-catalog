@@ -134,6 +134,7 @@ class AIConfiguration:
                 "search_mode": "hybrid_vector" if provider == "openai" else "local_ai",
                 "embedding_model": value.get("embedding_model") or "text-embedding-3-small",
                 "monthly_budget_usd": value.get("monthly_budget_usd", 5.0),
+                "revision": int(value.get("revision") or 0),
             }
 
     def credentials(self) -> tuple[str, str] | None:
@@ -156,6 +157,7 @@ class AIConfiguration:
                 "provider": provider,
                 "model": data.get("model") or LANGUAGE_DEFAULTS[provider],
                 "api_key": self._keys(data).get(provider) or None,
+                "revision": int(data.get("revision") or 0),
             }
 
     def provision_device_credential(self, provider: str, model: str, key: str) -> bool:
@@ -178,6 +180,7 @@ class AIConfiguration:
                 data["provider"] = provider
             data.pop("api_key", None)
             data["api_keys"] = keys
+            data["revision"] = int(data.get("revision") or 0) + 1
             self.path.parent.mkdir(parents=True, exist_ok=True)
             fd, name = tempfile.mkstemp(prefix=".ai-config-", dir=self.path.parent)
             try:
@@ -191,6 +194,50 @@ class AIConfiguration:
                 if os.path.exists(name):
                     os.unlink(name)
             return True
+
+    def replace_device_credential(
+        self, provider: str, model: str, key: str, expected_revision: int,
+    ) -> dict:
+        """Atomic, optimistic-concurrency update from an authenticated iPhone.
+
+        This updates the SAME active provider/model/key used by server-side AI
+        search. A stale iPhone never silently overwrites a newer web edit.
+        """
+        if provider not in PROVIDERS or not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,100}", model):
+            raise ValueError("Invalid provider or model.")
+        if key and (not 8 <= len(key) <= 4096 or any(ord(ch) < 33 or ord(ch) > 126 for ch in key)):
+            raise ValueError("Invalid AI key.")
+        with self.lock:
+            data = self._read()
+            current_revision = int(data.get("revision") or 0)
+            if expected_revision != current_revision:
+                raise RuntimeError("AI configuration was modified on the server.")
+            keys = self._keys(data)
+            if key:
+                keys[provider] = key
+            else:
+                keys.pop(provider, None)
+            data.update({
+                "provider": provider, "model": model,
+                "api_keys": keys, "revision": current_revision + 1,
+            })
+            data.pop("api_key", None)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(prefix=".ai-config-", dir=self.path.parent)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(data, handle)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.chmod(name, 0o600)
+                os.replace(name, self.path)
+            finally:
+                if os.path.exists(name):
+                    os.unlink(name)
+            return {
+                "provider": provider, "model": model,
+                "api_key": key or None, "revision": current_revision + 1,
+            }
 
     def update(self, request: AISettingsInput) -> dict:
         if request.provider not in PROVIDERS:
@@ -221,6 +268,7 @@ class AIConfiguration:
                     "provider": request.provider,
                     "model": model,
                     "api_keys": keys,
+                    "revision": int(value.get("revision") or 0) + 1,
                     # Keep previously built OpenAI vectors reusable after provider switches.
                     "embedding_model": request.embedding_model or value.get("embedding_model") or "text-embedding-3-small",
                     "monthly_budget_usd": (
