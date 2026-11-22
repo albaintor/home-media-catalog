@@ -384,7 +384,8 @@ def test_streaming_series_poster_and_backdrop_survive_catalogue_rebuild(tmp_path
 
 
 def test_streaming_episodic_tracking_requires_contract_nine():
-    assert MAX_MOBILE_CONTRACT == 9
+    # Future additive contracts must retain the episode tracking guarantee.
+    assert MAX_MOBILE_CONTRACT >= 9
 
 
 def test_streaming_reference_episodes_have_watch_tracking_without_files(tmp_path):
