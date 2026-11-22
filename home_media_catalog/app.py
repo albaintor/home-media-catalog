@@ -86,9 +86,9 @@ from .models import (
     CatalogueStatus,
     ConnectionResult,
     CustomTitleInput,
+    DeviceCollectionSnapshot,
     EditionHDRInput,
     EditionTechnicalFormatsInput,
-    DeviceCollectionSnapshot,
     EpisodeWatchInput,
     EpisodeWatchResult,
     ErrorResponse,
@@ -153,9 +153,12 @@ from .players import probe as probe_player
 from .settings import Settings
 from .store import Store
 from .streaming import (
-    _merge, _reconcile_streaming_catalogue, _reconcile_watch_progress,
-    _bootstrap_catalogue_watch_progress, _mirror_catalogue_personal,
+    _bootstrap_catalogue_watch_progress,
+    _merge,
     _mirror_catalogue_episode_edit,
+    _mirror_catalogue_personal,
+    _reconcile_streaming_catalogue,
+    _reconcile_watch_progress,
     build_streaming_router,
 )
 from .sync import BusyError, SyncManager
