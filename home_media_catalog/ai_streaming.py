@@ -324,6 +324,8 @@ async def recommend_streaming(
 
     ordered = sorted(candidates.items(), key=lambda entry: -entry[1][0])[:32]
 
+    availability_failures: set[str] = set()
+
     async def verify(identity: str, item: dict) -> tuple[str, dict, list[str]]:
         category, number = identity.split(":")
         key = credential_scope + ":" + identity + ":" + selection + ":" + request.region
@@ -336,13 +338,18 @@ async def recommend_streaming(
                     token, category, int(number), selection, request.region
                 )
         except HTTPException:
-            services = []
+            # A failed provider request is not proof of unavailability, and
+            # must never poison the public offer cache for fifteen minutes.
+            availability_failures.add(identity)
+            return identity, item, []
         if len(_AVAILABILITY_CACHE) > 600:
             _AVAILABILITY_CACHE.pop(next(iter(_AVAILABILITY_CACHE)))
         _AVAILABILITY_CACHE[key] = time.monotonic() + 900, services
         return identity, item, services
 
     verified = await asyncio.gather(*(verify(identity, data[1]) for identity, data in ordered))
+    if verified and len(availability_failures) == len(verified):
+        raise HTTPException(502, "TMDB watch-provider availability could not be verified.")
     available = [(identity, {**item, "service_keys": keys})
                  for identity, item, keys in verified if keys][:24]
 
