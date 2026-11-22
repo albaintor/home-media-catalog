@@ -153,7 +153,8 @@ from .settings import Settings
 from .store import Store
 from .streaming import (
     _merge, _reconcile_streaming_catalogue, _reconcile_watch_progress,
-    _mirror_catalogue_personal, _mirror_catalogue_episode_edit,
+    _bootstrap_catalogue_watch_progress, _mirror_catalogue_personal,
+    _mirror_catalogue_episode_edit,
     build_streaming_router,
 )
 from .sync import BusyError, SyncManager
@@ -210,6 +211,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await asyncio.to_thread(
             lambda: _reconcile_streaming_catalogue(store, _merge(store, []))
         )
+        # Migrate legacy per-media and per-episode watch state once, before
+        # projecting any newer synced episode inventories.
+        await asyncio.to_thread(_bootstrap_catalogue_watch_progress, store)
         await asyncio.to_thread(
             lambda: _reconcile_watch_progress(store, _merge(store, []))
         )
