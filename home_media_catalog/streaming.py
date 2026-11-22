@@ -249,6 +249,16 @@ def _mirror_catalogue_personal(
     now_stamp = datetime.now(UTC)
     if existing:
         now_stamp = max(now_stamp, _stamp(existing["modified_at"]) + timedelta(microseconds=1))
+        # iOS saves its complete episode snapshot *before* sending the
+        # matching canonical PATCH. Do not replace that snapshot with a fresh
+        # server-side bool revision (which could erase the migration boundary).
+        same_watch = watched is None or payload.get("watched") == (
+            "true" if watched else "false")
+        same_rating = not rating_changed or (
+            payload.get("rating") == (str(rating) if rating is not None else None)
+            and (rating is not None or payload.get("rating_cleared") == "true"))
+        if same_watch and same_rating:
+            return
     should_mark = watched if watched is not None else (True if rating_changed and rating is not None else None)
     if should_mark is not None:
         payload["watched"] = "true" if should_mark else "false"
@@ -299,28 +309,32 @@ def _mirror_catalogue_episode_edit(
     rows = _merge(store, [])
     existing = next((row for row in rows if row["key"] == key and not row["deleted"]), None)
     payload = dict(existing["payload"]) if existing else {}
-    try:
-        overrides = json.loads(payload.get("episode_overrides") or "{}")
-    except (TypeError, ValueError):
-        overrides = {}
-    if not isinstance(overrides, dict):
-        overrides = {}
+    # Materialize the updated imported episode states into one compact,
+    # revisioned snapshot. Avoid thousands of per-episode overrides and preserve
+    # watched entries not imported into the canonical catalogue.
+    snapshot = decode_episodes(payload.get("watched_episode_snapshot"))
     with store.connect() as db:
         episodes = db.execute(
-            "SELECT season,episode FROM works WHERE parent_id=? AND kind='episode'",
-            (media_id,)
+            "SELECT season,episode,watch_status FROM works "
+            "WHERE parent_id=? AND kind='episode'", (media_id,)
         ).fetchall()
     for episode_row in episodes:
         number = episode_row["season"]
         episode_number = episode_row["episode"]
         if number is None or episode_number is None or number == 0:
             continue
-        if season is not None and number != season:
-            continue
-        if up_to_episode is not None and episode_number > up_to_episode:
-            continue
-        overrides[f"{number}:{episode_number}"] = watched
-    payload["episode_overrides"] = json.dumps(overrides, separators=(",", ":"))
+        coordinate = (number, episode_number)
+        matches = (season is None or number == season) and (
+            up_to_episode is None or episode_number <= up_to_episode)
+        if matches:
+            if watched:
+                snapshot.add(coordinate)
+            else:
+                snapshot.discard(coordinate)
+        elif episode_row["watch_status"] == "watched":
+            snapshot.add(coordinate)
+    payload["watched_episode_snapshot"] = encode_episodes(snapshot)
+    payload.pop("episode_overrides", None)
     payload.setdefault("watched", "false")
     payload["watch_schema"] = "2"
     now_stamp = datetime.now(UTC)
