@@ -151,7 +151,11 @@ from .players import play
 from .players import probe as probe_player
 from .settings import Settings
 from .store import Store
-from .streaming import _merge, _reconcile_streaming_catalogue, build_streaming_router
+from .streaming import (
+    _merge, _reconcile_streaming_catalogue, _reconcile_watch_progress,
+    _mirror_catalogue_personal, _mirror_catalogue_episode_edit,
+    build_streaming_router,
+)
 from .sync import BusyError, SyncManager
 from .writeback import propagate_personal
 
@@ -205,6 +209,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Recover streaming hearts that arrived before local-first media uploads.
         await asyncio.to_thread(
             lambda: _reconcile_streaming_catalogue(store, _merge(store, []))
+        )
+        await asyncio.to_thread(
+            lambda: _reconcile_watch_progress(store, _merge(store, []))
         )
         await asyncio.to_thread(auth.load_devices)
         await sync.bootstrap_empty_catalogue()
@@ -2159,6 +2166,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 background_tasks.add_task(
                     finish_episode_watch_writebacks, result["ids"], data.watched
                 )
+            await asyncio.to_thread(
+                _mirror_catalogue_episode_edit, store, media_id,
+                watched=data.watched, season=data.season,
+                up_to_episode=data.up_to_episode,
+            )
             return {key: value for key, value in result.items() if key != "ids"}
 
     @app.get(
@@ -2328,6 +2340,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             if changes:
                 await asyncio.to_thread(store.update_personal, media_id, changes)
+                if "watched" in changes or "user_rating" in changes:
+                    await asyncio.to_thread(
+                        _mirror_catalogue_personal, store, media_id,
+                        watched=changes.get("watched"),
+                        rating_changed="user_rating" in changes,
+                        rating=changes.get("user_rating"),
+                    )
                 if "user_rating" in changes:
                     # Personal ratings are embedded; watch-state-only edits are not.
                     pass  # No vector index in single-model mode.
