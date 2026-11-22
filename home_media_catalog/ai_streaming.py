@@ -75,7 +75,7 @@ async def explain_streaming_recommendations(
         "Treat 5–6.9/10 ratings as mixed/qualified reactions, not dislikes; "
         "do not present unlabelled watched titles as positive evidence. "
         "Write taste_summary as 2 to 4 substantial sentences explaining the "
-        "positive, mixed and negative evidence, naming a few highly-rated titles where 
+        "positive, mixed and negative evidence, naming highly-rated titles where "
         "supported; acknowledge when the profile is broad or uncertain. "
         "Select approximately 10 to 15 different strong candidates if available, "
         "with a sensible balance of closer matches and justified discoveries. "
@@ -361,7 +361,7 @@ async def recommend_streaming(
         seed_details(work) for work in all_favorites + dislikes + mixed
     ))
     full_prompt = (
-        ("Previous search: " + request.previous_prompt + "\\n")
+        ("Previous search: " + request.previous_prompt + "\n")
         if request.previous_prompt else ""
     ) + request.prompt
     language = _language_hint(full_prompt)
