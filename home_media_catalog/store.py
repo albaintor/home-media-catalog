@@ -1656,7 +1656,7 @@ class Store:
             if row is None:
                 raise KeyError(external_key)
             payload = json.loads(row["payload"])
-            if payload.get("metadata", {}).get("streaming_reference") is True:
+            if (payload.get("metadata") or {}).get("streaming_reference") is True:
                 work_id = row["work_id"]
                 conn.execute(
                     "UPDATE lists SET revision=revision+1 WHERE id IN "
