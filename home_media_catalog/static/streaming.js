@@ -402,13 +402,115 @@ function pump() {
     });
   }
 }
+// Persistent, incremental cache for public TMDB listings, searches and details.
+// IndexedDB is optional (Safari private browsing may disable it); a small
+// in-memory L1 remains available either way. No personal/authorization rows
+// or catalogue state are stored here.
+const STREAMING_WEB_CACHE_LIMIT=50*1024*1024;
+const STREAMING_WEB_CACHE_TARGET=46*1024*1024;
+const streamingInFlight=new Map();
+let streamingCacheDatabase=null;
+function openStreamingCache(){
+  if(streamingCacheDatabase)return streamingCacheDatabase;
+  if(typeof indexedDB==='undefined')return Promise.resolve(null);
+  streamingCacheDatabase=new Promise(resolve=>{
+    let request;
+    try{request=indexedDB.open('hmc-streaming-public-cache',1);}
+    catch{resolve(null);return;}
+    request.onupgradeneeded=()=>{
+      const store=request.result.createObjectStore('entries',{keyPath:'key'});
+      store.createIndex('lastUsed','lastUsed');
+    };
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>resolve(null);
+    request.onblocked=()=>resolve(null);
+  });
+  return streamingCacheDatabase;
+}
+function cacheMemory(key,entry){
+  if(state.cache.has(key))state.cache.delete(key);
+  state.cache.set(key,entry);
+  while(state.cache.size>70)state.cache.delete(state.cache.keys().next().value);
+}
+async function readPublicCache(key){
+  const memory=state.cache.get(key);
+  if(memory){cacheMemory(key,memory);return memory;}
+  const db=await openStreamingCache();
+  if(!db)return null;
+  try{
+    const entry=await new Promise((resolve,reject)=>{
+      const request=db.transaction('entries','readonly').objectStore('entries').get(key);
+      request.onsuccess=()=>resolve(request.result||null);
+      request.onerror=()=>reject(request.error);
+    });
+    if(!entry)return null;
+    cacheMemory(key,entry);
+    // Do not block the render to update LRU metadata.
+    try{
+      const transaction=db.transaction('entries','readwrite');
+      transaction.objectStore('entries').put({...entry,lastUsed:Date.now()});
+    }catch{}
+    return entry;
+  }catch{return null;}
+}
+async function writePublicCache(key,value){
+  const savedAt=Date.now();
+  let size=0;
+  try{size=new TextEncoder().encode(JSON.stringify(value)).length;}catch{return;}
+  if(size>3*1024*1024)return;
+  const record={key,value,savedAt,lastUsed:savedAt,size};
+  cacheMemory(key,record);
+  const db=await openStreamingCache();
+  if(!db)return;
+  try{
+    await new Promise((resolve,reject)=>{
+      const request=db.transaction('entries','readwrite').objectStore('entries').put(record);
+      request.onsuccess=resolve;
+      request.onerror=()=>reject(request.error);
+    });
+    // Trim only after inserting new pages. Old entries are evicted by LRU;
+    // existing metadata pages are never cleared just because a filter changed.
+    const records=await new Promise((resolve,reject)=>{
+      const request=db.transaction('entries','readonly').objectStore('entries').getAll();
+      request.onsuccess=()=>resolve(request.result||[]);
+      request.onerror=()=>reject(request.error);
+    });
+    let total=records.reduce((sum,item)=>sum+(Number(item.size)||0),0);
+    if(total<=STREAMING_WEB_CACHE_LIMIT)return;
+    const victims=records.sort((a,b)=>a.lastUsed-b.lastUsed);
+    const transaction=db.transaction('entries','readwrite');
+    for(const item of victims){
+      if(total<=STREAMING_WEB_CACHE_TARGET)break;
+      transaction.objectStore('entries').delete(item.key);
+      state.cache.delete(item.key);
+      total-=Number(item.size)||0;
+    }
+  }catch{/* Storage quotas or denied IndexedDB must not block Streaming. */}
+}
+async function publicCachedRequest(key,ttl,loader){
+  const cached=await readPublicCache(key);
+  if(cached && Date.now()-cached.savedAt<ttl)return cached.value;
+  if(streamingInFlight.has(key))return streamingInFlight.get(key);
+  const work=(async()=>{
+    try{
+      const result=await loader();
+      await writePublicCache(key,result);
+      return result;
+    }catch(error){
+      if(cached)return cached.value; // Offline: preserve last-known metadata.
+      throw error;
+    }
+  })();
+  streamingInFlight.set(key,work);
+  try{return await work;}finally{streamingInFlight.delete(key);}
+}
+
 function cacheKey(def,page=1) {
   return [def.kind,def.sort,def.genre||'',state.visible.join(','),
     validRegion(),page].join(':');
 }
 async function retrieve(def,page=1){
-  const key=cacheKey(def,page);
-  if(state.cache.has(key))return state.cache.get(key);
+  const key='discover:'+cacheKey(def,page);
   const params=new URLSearchParams({
     service:state.visible.join(','),kind:def.kind,region:validRegion()
   });
@@ -419,11 +521,10 @@ async function retrieve(def,page=1){
     endpoint='streaming/discover';
     params.set('page',String(page));
     params.set('sort',def.sort==='top'?'popularity':def.sort);
-    if(def.genre)params.set('genre',String(def.genre));
+    if(def.genre!=null)params.set('genre',String(def.genre));
   }
-  const value=await limited(()=>api(endpoint+'?'+params));
-  state.cache.set(key,value);
-  return value;
+  return publicCachedRequest(key,15*60*1000,
+    ()=>limited(()=>api(endpoint+'?'+params)));
 }
 function renderDiscoveryShelf(element,def,providedNote){
   const visible=(def.items||[]).filter(matchesStreamingFilters).slice(0,12);
@@ -545,7 +646,10 @@ async function performSearch(){
     const params=new URLSearchParams({
       q:q,service:state.visible.join(','),kind:state.kind,region:validRegion()
     });
-    const result=await api('streaming/search?'+params);
+    const result=await publicCachedRequest(
+      'search:'+validRegion()+':'+state.visible.join(',')+':'+state.kind+':'+q.toLowerCase(),
+      15*60*1000,()=>limited(()=>api('streaming/search?'+params))
+    );
     if(gen!==searchGeneration)return;
     $('streaming-discover').innerHTML='';
     for(const kind of (state.kind==='both'?['tv','movie']:[state.kind])){
@@ -776,10 +880,11 @@ async function details(key) {
   if(!$('streaming-title-dialog').open)$('streaming-title-dialog').showModal();
   if(cached)return;
   try{
-    const full=await api('streaming/titles/'+encodeURIComponent(title.kind)+'/'+
-      encodeURIComponent(title.id)+'/details?'+new URLSearchParams({
-        language:validRegion()==='FR'?'fr-FR':'en-US'
-      }));
+    const language=validRegion()==='FR'?'fr-FR':'en-US';
+    const endpoint='streaming/titles/'+encodeURIComponent(title.kind)+'/'+
+      encodeURIComponent(title.id)+'/details?'+new URLSearchParams({language});
+    const full=await publicCachedRequest('details:'+key+':'+language,
+      6*60*60*1000,()=>limited(()=>api(endpoint)));
     if(!full||full.id!==title.id||full.kind!==title.kind)
       throw new Error('The title metadata does not match this item.');
     state.detailCache.set(key,full);
