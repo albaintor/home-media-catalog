@@ -367,8 +367,13 @@ async def recommend_streaming(
             for w, detail in seed_pairs[len(seeds):]
         ]
         explanations = await rerank_candidates(
-            full_prompt + "\nPersonal viewing profile (ratings out of 10): " +
-            json.dumps({"favorites": favorites, "disliked": disliked}, ensure_ascii=False),
+            full_prompt + "\nPersonal viewing profile (ratings out of 10). " +
+            "Unrated watched titles are NOT evidence of enjoyment: " +
+            json.dumps({
+                "liked": [item for item in favorites if item["user_rating"] is not None],
+                "watched_unrated": [item for item in favorites if item["user_rating"] is None],
+                "disliked": disliked,
+            }, ensure_ascii=False),
             [
                 {
                     "id": identity, "title": item["title"], "kind": item["kind"],
