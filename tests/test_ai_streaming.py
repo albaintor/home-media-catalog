@@ -86,7 +86,7 @@ def test_recommendations_exclude_watched_and_verify_region_subscription(tmp_path
                 {"id": 30, "name": "Recommended", "original_name": "Recommended",
                  "overview": "A personal drama", "genre_ids": [18], "vote_average": 8.5,
                  "vote_count": 300, "first_air_date": "2025-01-01",
-                 "original_language": "ko"},
+                 "original_language": "ko", "popularity": 123.45},
                 {"id": 40, "name": "Not subscribed", "original_name": "Not subscribed",
                  "overview": "Another drama", "genre_ids": [18], "vote_average": 9,
                  "vote_count": 300, "first_air_date": "2025-01-01",
@@ -129,6 +129,8 @@ def test_recommendations_exclude_watched_and_verify_region_subscription(tmp_path
     ))
     assert [item["id"] for item in result["items"]] == [30]
     assert result["items"][0]["service_keys"] == ["netflix"]
+    assert result["items"][0]["rating"] == 8.5
+    assert result["items"][0]["popularity"] == 123.45
     assert result["relevance_reasons"]["tv:30"].startswith("Related")
     assert result["profile_count"] == 2
     assert "character-driven dramas" in result["taste_summary"]
