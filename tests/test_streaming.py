@@ -154,6 +154,7 @@ def test_same_timestamp_reconciliation_is_independent_of_input_order(tmp_path):
 def test_providers_are_allowlisted():
     assert _provider_ids("netflix") == "8"
     assert "531" in _provider_ids("paramount_plus")
+    assert _provider_ids("crunchyroll,rakuten_viki,mubi") == "283|344|11"
     with pytest.raises(HTTPException) as exc:
         _provider_ids("invalid-provider")
     assert exc.value.status_code == 422
@@ -217,6 +218,27 @@ def test_only_flatrate_providers_qualify_in_france():
     }
     assert _availability_keys(offers, "netflix,disney_plus", "FR") == ["netflix"]
     assert _availability_keys(offers, "netflix,disney_plus", "BE") == []
+
+
+def test_new_svod_providers_filter_region_and_exclude_rentals():
+    offers = {
+        "results": {
+            "FR": {
+                "flatrate": [{"provider_id": 283}, {"provider_id": 344}],
+                "rent": [{"provider_id": 11}],
+                "buy": [{"provider_id": 11}],
+            },
+            "JP": {
+                "flatrate": [{"provider_id": 11}],
+            },
+        }
+    }
+    selected = "crunchyroll,rakuten_viki,mubi"
+    assert _availability_keys(offers, selected, "FR") == [
+        "crunchyroll", "rakuten_viki"
+    ]
+    assert _availability_keys(offers, selected, "JP") == ["mubi"]
+    assert _availability_keys(offers, selected, "US") == []
 
 
 def test_search_is_consolidated_and_excludes_rentals(monkeypatch):
