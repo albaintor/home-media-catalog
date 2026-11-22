@@ -18,13 +18,98 @@ from typing import Any, Literal
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from .ai_rerank import rerank_candidates
+from .ai_providers import generate_json
 from .streaming import _availability, _merge, _provider_ids, _provider_keys, _tmdb, _item
 from .watch_progress import effective_series_status
 
 # Public TMDB metadata only; personal viewing histories are not cached.
 _TMDB_CACHE: dict[str, tuple[float, dict]] = {}
 _AVAILABILITY_CACHE: dict[str, tuple[float, list[str]]] = {}
+
+
+_STREAMING_RECOMMENDATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "taste_summary": {"type": "string"},
+        "matches": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["id", "reason"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["taste_summary", "matches"],
+    "additionalProperties": False,
+}
+
+
+async def explain_streaming_recommendations(
+    user_request: str, favorites: list[dict], dislikes: list[dict],
+    candidates: list[dict], model: str, api_key: str, *, provider: str,
+) -> tuple[list[dict], str]:
+    """Provide a contextual taste analysis and grounded, ordered recommendations.
+
+    This is deliberately not the strict catalogue semantic-search verifier:
+    recommendation is about useful similarities and contrasts, not identity.
+    """
+    if not candidates:
+        return [], ""
+    instructions = (
+        "You are a thoughtful film and TV recommendation editor. "
+        "Write in the language of the user's request. Personalize using only "
+        "the provided user ratings, requested preferences and candidate metadata. "
+        "Identify specific tastes: narrative pace, romantic or suspenseful stakes, "
+        "character dynamics, genre blends and atmosphere ONLY when the supplied "
+        "synopses and ratings support those inferences. Never use an unrelated "
+        "liked film as a superficial comparison (e.g., comparing medical dramas "
+        "to Tarzan merely because both involve relationships). "
+        "Unrated watched titles are not evidence of enjoyment. "
+        "Do not invent what the user has seen, plot points, ratings or availability. "
+        "Write taste_summary as 2 to 4 substantial sentences explaining the "
+        "positive and negative evidence, naming a few highly-rated titles where "
+        "supported; acknowledge when the profile is broad or uncertain. "
+        "Select approximately 10 to 15 different strong candidates if available, "
+        "with a sensible balance of closer matches and justified discoveries. "
+        "Avoid discarding a plausible recommendation solely because it differs "
+        "in one genre from a favorite. Rank the strongest first. "
+        "For EACH match, write 2 or 3 informative sentences (35–75 words) about "
+        "its plot/tone and how it relates to named positive/negative examples "
+        "or inferred preferences. Explain important differences or uncertainty. "
+        "Do not just repeat generic words such as adventure, tenderness, drama. "
+        "If candidate evidence is insufficient, omit it. "
+        "Only use the supplied candidate IDs and do not invent titles. "
+        "The server has already checked the subscription offers; do not assert "
+        "a specific provider unless included in the candidate."
+    )
+    parsed = await generate_json(
+        instructions,
+        json.dumps({
+            "user_request": user_request,
+            "liked": favorites,
+            "disliked": dislikes,
+            "candidates": candidates[:44],
+        }, ensure_ascii=False),
+        _STREAMING_RECOMMENDATION_SCHEMA, model, api_key, provider=provider,
+        max_output_tokens=7500, schema_name="streaming_recommendations",
+    )
+    allowed = {item["id"] for item in candidates[:44]}
+    matched = []
+    seen = set()
+    for entry in parsed.get("matches", []):
+        identity = entry.get("id")
+        reason = str(entry.get("reason") or "").strip()[:650]
+        if identity in allowed and identity not in seen and reason:
+            matched.append({"id": identity, "reason": reason})
+            seen.add(identity)
+        if len(matched) >= 15:
+            break
+    return matched, str(parsed.get("taste_summary") or "").strip()[:1500]
 
 
 class StreamingAIInput(BaseModel):
@@ -149,7 +234,7 @@ def _catalogue_profile(store: Any) -> dict[str, Any]:
 def _language_hint(text: str) -> str | None:
     query = text.casefold()
     for pattern, code in (
-        (r"\b(coréen\w*|korean\w*|k.drama\w*)\b", "ko"),
+        (r"\b(coréen\w*|coreen\w*|korean\w*|k[\s-]?dramas?)\b", "ko"),
         (r"\b(japonais\w*|japanese\w*)\b", "ja"),
         (r"\b(espagnol\w*|spanish\w*)\b", "es"),
         (r"\b(français\w*|french\w*)\b", "fr"),
@@ -188,6 +273,7 @@ async def recommend_streaming(
             "items": [], "total": 0, "relevance_reasons": {},
             "profile_count": 0, "note": "Mark or rate some titles as watched to personalize recommendations.",
             "assistant_message": "No viewing history is available yet.",
+            "taste_summary": "",
         }
 
     kind = request.kind
@@ -214,8 +300,10 @@ async def recommend_streaming(
         _TMDB_CACHE[cache_key] = time.monotonic() + 900, result
         return result
 
-    seeds = profile["seeds"][:6]
-    dislikes = profile["negative"][:3]
+    # Examine a broader set of favourites, not only the first six global
+    # ratings (which may all be movies when the user asked for K-dramas).
+    all_favorites = profile["positive"][:18] or profile["seeds"][:8]
+    dislikes = profile["negative"][:6]
     async def seed_details(work: dict) -> tuple[dict, dict]:
         category, number = work["id"].split(":")
         try:
@@ -224,7 +312,30 @@ async def recommend_streaming(
             detail = {}
         return work, detail
 
-    seed_pairs = await asyncio.gather(*(seed_details(work) for work in seeds + dislikes))
+    all_pairs = await asyncio.gather(*(
+        seed_details(work) for work in all_favorites + dislikes
+    ))
+    full_prompt = (
+        ("Previous search: " + request.previous_prompt + "\n")
+        if request.previous_prompt else ""
+    ) + request.prompt
+    language = _language_hint(full_prompt)
+    # Prefer rated works in the requested medium and language when possible.
+    # Keep a few wider favourites for cross-genre discoveries.
+    fav_pairs = all_pairs[:len(all_favorites)]
+    matching_pairs = [
+        pair for pair in fav_pairs
+        if pair[0]["id"].split(":")[0] in kinds
+        and (not language or pair[1].get("original_language") == language)
+    ]
+    chosen = matching_pairs[:10]
+    chosen_ids = {pair[0]["id"] for pair in chosen}
+    chosen.extend(
+        pair for pair in fav_pairs
+        if pair[0]["id"] not in chosen_ids
+    )
+    seeds = [work for work, _ in chosen[:12]]
+    seed_pairs = chosen[:12] + all_pairs[len(all_favorites):]
     affinity: dict[int, float] = defaultdict(float)
     for work, detail in seed_pairs:
         score = work["rating"]
@@ -234,11 +345,6 @@ async def recommend_streaming(
             if isinstance(genre_id, int):
                 affinity[genre_id] += weight
 
-    full_prompt = (
-        ("Previous search: " + request.previous_prompt + "\n")
-        if request.previous_prompt else ""
-    ) + request.prompt
-    language = _language_hint(full_prompt)
     # A single discover response is already filtered to paid subscriptions in
     # the selected country; seed-based recommendations must be verified later.
     good_genres = [genre for genre, value in
@@ -294,9 +400,14 @@ async def recommend_streaming(
         except HTTPException:
             return category, []
 
-    jobs = [discover(cat, genre, 1) for cat in kinds for genre in good_genres[:3]]
-    jobs.extend(discover(cat, None, page) for cat in kinds for page in (1, 2))
-    jobs.extend(similar_seed(seed) for seed in seeds[:4])
+    # Sample more than the first two TMDB pages: narrow language/provider
+    # selections and watched-history exclusions can leave almost nothing.
+    jobs = [
+        discover(cat, genre, page)
+        for cat in kinds for genre in good_genres[:3] for page in (1, 2)
+    ]
+    jobs.extend(discover(cat, None, page) for cat in kinds for page in (1, 2, 3, 4))
+    jobs.extend(similar_seed(seed) for seed in seeds[:8])
     found = await asyncio.gather(*jobs)
 
     blocked = set(profile["seen"])
@@ -322,7 +433,7 @@ async def recommend_streaming(
             if identity not in candidates or score > candidates[identity][0]:
                 candidates[identity] = score, {**_item(row, category), "genre_ids": row.get("genre_ids") or []}
 
-    ordered = sorted(candidates.items(), key=lambda entry: -entry[1][0])[:32]
+    ordered = sorted(candidates.items(), key=lambda entry: -entry[1][0])[:72]
 
     availability_failures: set[str] = set()
 
@@ -351,9 +462,10 @@ async def recommend_streaming(
     if verified and len(availability_failures) == len(verified):
         raise HTTPException(502, "TMDB watch-provider availability could not be verified.")
     available = [(identity, {**item, "service_keys": keys})
-                 for identity, item, keys in verified if keys][:24]
+                 for identity, item, keys in verified if keys][:44]
 
     reasons: dict[str, str] = {}
+    taste_summary = ""
     if available:
         favorites = [
             {
@@ -361,7 +473,8 @@ async def recommend_streaming(
                 "user_rating": w["rating"],
                 "genres": [g.get("name") for g in detail.get("genres", [])
                            if isinstance(g, dict) and g.get("name")] or w["genres"],
-                "synopsis": (detail.get("overview") or "")[:350],
+                "synopsis": (detail.get("overview") or "")[:450],
+                "language": detail.get("original_language"),
             }
             for w, detail in seed_pairs[:len(seeds)]
         ]
@@ -369,39 +482,41 @@ async def recommend_streaming(
             {
                 "title": detail.get("name") or detail.get("title") or w["title"] or w["id"],
                 "user_rating": w["rating"],
-                "synopsis": (detail.get("overview") or "")[:250],
+                "synopsis": (detail.get("overview") or "")[:300],
             }
             for w, detail in seed_pairs[len(seeds):]
         ]
-        explanations = await rerank_candidates(
-            full_prompt + "\nPersonal viewing profile (ratings out of 10). " +
-            "Unrated watched titles are NOT evidence of enjoyment: " +
-            json.dumps({
-                "liked": [item for item in favorites if item["user_rating"] is not None],
-                "watched_unrated": [item for item in favorites if item["user_rating"] is None],
-                "disliked": disliked,
-            }, ensure_ascii=False),
+        explanations, taste_summary = await explain_streaming_recommendations(
+            full_prompt + "\nPersonal viewing profile (ratings out of 10). "
+            "Unrated watched titles are NOT evidence of enjoyment.",
+            [item for item in favorites if item["user_rating"] is not None],
+            disliked,
             [
                 {
                     "id": identity, "title": item["title"], "kind": item["kind"],
-                    "year": item["year"],
+                    "year": item["year"], "services": item["service_keys"],
                     "genres": [genre_labels.get(g, str(g)) for g in item["genre_ids"]],
-                    "synopsis": item["overview"][:750], "rating": item["rating"],
+                    "synopsis": item["overview"][:850], "rating": item["rating"],
                 }
                 for identity, item in available
             ],
             model, api_key, provider=provider,
         )
         reasons = {entry["id"]: entry["reason"] for entry in explanations}
-        available = [(identity, item) for identity, item in available if identity in reasons]
+        # Keep model ordering: its comparison of tastes is more meaningful
+        # than the genre/popularity prior used only for candidate retrieval.
+        ranked = {identity: item for identity, item in available}
+        available = [(entry["id"], ranked[entry["id"]])
+                     for entry in explanations if entry["id"] in ranked]
 
-    items = [item for _, item in available[:20]]
+    items = [item for _, item in available[:15]]
     return {
         "items": items, "total": len(items), "relevance_reasons": reasons,
         "profile_count": profile["rated_count"],
+        "taste_summary": taste_summary,
         "note": None if profile["rated_count"] else "Recommendations use watched history; ratings improve accuracy.",
         "assistant_message": (
-            f"{len(items)} personalized titles on the selected subscriptions in {request.region}."
+            f"{len(items)} suggestions available in {request.region} on the selected subscriptions."
             if items else "No sufficiently relevant unwatched titles were confirmed."
         ),
     }
