@@ -151,13 +151,14 @@
   grid-template-areas:"watch discovery" "public personal" "display display" "subscriptions genres";
   gap:16px;align-items:stretch
 }
-.streaming-customize-grid>label:first-child{
+.streaming-customize-grid>.streaming-personal-filter-controls{
   grid-area:watch;display:flex;flex-direction:column;
   justify-content:start;gap:9px;
   padding:12px 15px;border-radius:10px;border:1px solid var(--border);
   background:var(--surface);color:var(--text);font-weight:600;min-width:0
 }
-.streaming-customize-grid>label:first-child select{margin-top:auto;min-height:42px}
+.streaming-personal-filter-controls label{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+.streaming-personal-filter-controls select{margin-top:auto;min-height:42px}
 .streaming-customize-grid>[data-rating-range="streaming-rating"]{grid-area:public}
 .streaming-customize-grid>[data-rating-range="streaming-user-rating"]{grid-area:personal}
 .streaming-customize-grid>.streaming-subscription-filter{grid-area:subscriptions}
