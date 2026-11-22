@@ -371,6 +371,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # day; the artwork-change cursor busts only the affected browser
             # URL immediately when an administrator replaces a poster.
             response.headers["Cache-Control"] = "private, max-age=86400, must-revalidate"
+            # Never reuse an authenticated image across bearer/cookie sessions
+            # merely because the media URL happens to match.
+            response.headers["Vary"] = "Authorization, Cookie"
         else:
             response.headers["Cache-Control"] = "private, no-store"
         return response
