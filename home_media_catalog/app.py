@@ -1303,6 +1303,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "retry_interval_minutes": 30,
         }
 
+    @app.get(API + "/ai/device-credentials", include_in_schema=False)
+    def read_ai_device_credential(
+        request: Request, response: Response, principal: Principal = Depends(authenticated),
+    ):
+        # Reuse the strict TLS + administrator bearer + pin-compatible relay
+        # policy already established for exchanging the TMDB device key.
+        require_secure_tmdb_device(request, principal)
+        private_credential_response(response)
+        return ai_config.device_credential()
+
+    @app.put(API + "/ai/device-credentials", include_in_schema=False)
+    async def provision_ai_device_credential(
+        request: Request, response: Response, principal: Principal = Depends(authenticated),
+    ):
+        require_secure_tmdb_device(request, principal)
+        private_credential_response(response)
+        try:
+            raw = await request.json()
+        except (ValueError, UnicodeError):
+            raise HTTPException(422, "Invalid AI credential request.") from None
+        if not isinstance(raw, dict) or not all(
+            isinstance(raw.get(field), str) for field in ("provider", "model", "api_key")
+        ):
+            raise HTTPException(422, "Invalid AI credential request.")
+        try:
+            imported = ai_config.provision_device_credential(
+                raw["provider"], raw["model"], raw["api_key"],
+            )
+        except ValueError:
+            raise HTTPException(422, "Invalid AI credential request.") from None
+        return {"configured": True, "imported": imported}
+
     @app.get(API + "/ai/status", tags=["AI"], dependencies=[Depends(authenticated)])
     def ai_status():
         return {**ai_config.status(), "index": ai_index_status()}
