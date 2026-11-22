@@ -240,6 +240,44 @@ A missing or broken provider is surfaced to the user: the server never silently
 pretends that a semantic result was computed. FTS5 and the standard catalogue
 remain available without an AI API key.
 
+
+## Personalized AI recommendations for streaming
+
+The iOS Streaming tab has a sparkles action that opens a dedicated Streaming
+AI search screen. This uses the existing AI provider, selected model, server
+budget, rate limit and credentials. Compatible servers advertise the
+ai_streaming_recommendations capability in GET /api/v1/discovery.
+
+Authenticated endpoint: POST /api/v1/ai/streaming/search.
+For example, the body may be:
+{"prompt":"Recommend Korean shows I have not watched","kind":"tv","services":["netflix","rakuten_viki"],"region":"FR","excluded_ids":[]}.
+An optional previous_prompt provides follow-up search context.
+
+The server combines catalogue watched statuses and ratings with the independent
+personal:movie:{tmdb_id} and personal:tv:{tmdb_id} streaming journal entries.
+Personal overrides take precedence. Rated, fully watched, and partially watched
+works are excluded from unwatched recommendations. iOS also excludes pending
+local-first edits before showing the results.
+
+A small set of liked and disliked examples drives TMDB genre affinity, matching
+with TMDB subscription-scoped Discover and recommendations for favorite titles.
+Every candidate ultimately shown has been checked against the selected country's
+flatrate watch-provider offers. The configured language model verifies that
+shortlisted candidate synopses genuinely match the prompt and preference history.
+Public TMDB responses and provider membership are cached briefly. The service
+does not index the entire external streaming catalogue with embeddings.
+
+Results use TMDB movie/TV identities (not catalogue UUIDs) and include
+service_keys, relevance_reasons, profile_count and an explanatory message.
+Opening a result uses the existing iOS streaming detail and player links.
+
+Limitations and privacy: no watched state recorded in HMC is not proof a title
+was never viewed in a third-party app. Streaming availability can change and
+does not guarantee playback. This first version uses one shared catalogue
+preference profile, not multiple independent family profiles. A provider-based
+search sends selected historical ratings, titles and metadata to the active
+AI provider; credentials remain server-side.
+
 ## iOS entry point
 
 Ordinary title and metadata search uses Apple's native SwiftUI `searchable`
