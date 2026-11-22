@@ -1154,7 +1154,7 @@ export function startStreaming(){
     streamingRatingRanges[scope]=bindRatingRange(prefix,({min,max})=>{
       if(min!==scoreLimit(minKey,0))persistPreference(minKey,String(min));
       if(max!==scoreLimit(maxKey,10))persistPreference(maxKey,String(max));
-      renderBrowser();
+      refreshFilteredViews();
     });
   }
   connectRange('streaming-rating','rating_min','rating_max','public');
@@ -1173,6 +1173,7 @@ export function startStreaming(){
     const target=event.target;
     const keyById={
       'streaming-watch-filter':'watch_filter',
+      'streaming-personal-rating-filter':'personal_rating_filter',
       'streaming-show-tops':'show_tops','streaming-show-recent':'show_recent'
     };
     const key=keyById[target.id];
@@ -1186,6 +1187,12 @@ export function startStreaming(){
       state.visible=state.visible.filter(key=>next.includes(key));
       for(const key of next)if(!state.visible.includes(key))state.visible.push(key);
       persistPreference('visible_services',state.visible.join(','));
+    }else if(target.id==='streaming-show-popularity'||
+             target.id==='streaming-show-personal-rating'){
+      setDisplayPreference(target.id==='streaming-show-popularity'?
+        'popularity':'personal_rating',target.checked);
+      refreshVisibleCards();
+      return;
     }else if(target.dataset.streamingGenre){
       const genre=target.dataset.streamingGenre;
       const chosen=new Set(preference('genres','action,drama,comedy').split(',').filter(Boolean));
@@ -1194,6 +1201,10 @@ export function startStreaming(){
     } else if(key){
       if(target.type==='checkbox')persistPreference(key,String(target.checked));
       else persistPreference(key,target.value);
+      if(key==='watch_filter'||key==='personal_rating_filter'){
+        refreshFilteredViews();
+        return;
+      }
     }else return;
     renderBrowser();
   });
@@ -1268,6 +1279,18 @@ export function startStreaming(){
   });
   $('streaming-back').addEventListener('click',closeSubview);
   $('streaming-subview-more').addEventListener('click',()=>void loadNext());
+  $('streaming-subview-sort').addEventListener('change',event=>{
+    const def=state.shelves.get(state.subview?.id);
+    if(!def)return;
+    def.localSort=event.target.value;
+    renderSubviewGrid();
+  });
+  $('streaming-subview-order').addEventListener('change',event=>{
+    const def=state.shelves.get(state.subview?.id);
+    if(!def)return;
+    def.localOrder=event.target.value;
+    renderSubviewGrid();
+  });
   $('streaming-detail-close').addEventListener('click',()=>{
     $('streaming-title-dialog').close();state.selected=null;
   });
