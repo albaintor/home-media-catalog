@@ -55,6 +55,54 @@ def test_internal_edition_merges_with_external_without_mutating_it(store):
     assert store.media(source_type="internal")["total"] == 0
 
 
+def test_streaming_reference_deletion_purges_memberships_but_keeps_kodi(store):
+    """Deleting a Streaming internal edition also removes list/collection use."""
+    external = store.save_source({"name": "Kodi", "type": "kodi"})["id"]
+    store.apply_snapshot(external, [
+        Record("movie:9", "movie", "Internal Example", year=2024,
+               identifiers={"tmdb": "554433"})
+    ])
+    payload = entry(id=str(uuid4()), format="", barcode=None,
+                    streaming_services=["prime_video"])
+    created = store.save_internal_media(payload)
+    work_id = created["id"]
+    internal = next(e for e in store.detail(work_id)["editions"]
+                    if e["source_type"] == "internal")
+    assert internal["metadata"]["streaming_reference"] is True
+    with store.connect() as conn:
+        conn.execute(
+            "INSERT INTO lists(id,name,description,revision,created_at) "
+            "VALUES('l1','Streaming list','',0,'2026-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO list_items(list_id,work_id,position) VALUES('l1',?,0)",
+            (work_id,)
+        )
+        conn.execute(
+            "INSERT INTO collections(id,name,normalized_name,merge_key,revision,is_manual) "
+            "VALUES('c1','Streaming collection','streaming collection',"
+            "'streaming collection',1,1)"
+        )
+        conn.execute(
+            "INSERT INTO collection_items(collection_id,work_id) VALUES('c1',?)",
+            (work_id,)
+        )
+    store.delete_internal_media(payload["id"])
+    remaining = store.detail(work_id)
+    assert remaining is not None
+    assert [edition["source_type"] for edition in remaining["editions"]] == ["kodi"]
+    with store.connect() as conn:
+        assert not conn.execute(
+            "SELECT 1 FROM list_items WHERE work_id=?", (work_id,)
+        ).fetchone()
+        assert not conn.execute(
+            "SELECT 1 FROM collection_items WHERE work_id=? AND collection_id='c1'",
+            (work_id,)
+        ).fetchone()
+        assert conn.execute("SELECT revision FROM lists WHERE id='l1'").fetchone()[0] == 1
+        assert conn.execute("SELECT revision FROM collections WHERE id='c1'").fetchone()[0] >= 2
+
+
 def test_internal_multiple_physical_editions_share_one_work(store):
     first = store.save_internal_media(entry(id=str(uuid4()), format="DVD"))
     second = store.save_internal_media(entry(id=str(uuid4()), format="Blu-ray 3D", barcode=None))
