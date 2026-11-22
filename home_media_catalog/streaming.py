@@ -42,6 +42,11 @@ PROVIDERS = {
 # Maximum retained in-process snapshots. Never share them across HMC installs.
 _CACHE: dict[str, tuple[float, Any]] = {}
 
+# TMDB monetization categories that allow viewing without an individual rental
+# or purchase. Keep search availability and discover filtering in sync.
+WATCH_MONETIZATION_TYPES = ("flatrate", "free", "ads")
+WATCH_MONETIZATION_FILTER = "|".join(WATCH_MONETIZATION_TYPES)
+
 
 class StreamingStateRow(BaseModel):
     key: str = Field(pattern=r"^[a-zA-Z0-9:_.-]{1,128}$")
@@ -678,9 +683,14 @@ def _provider_ids(selection: str) -> str:
 
 
 def _availability_keys(results: dict[str, Any], selection: str, region: str) -> list[str]:
-    """Only paid-subscription (flatrate) offers qualify; exclude rentals/buy offers."""
+    """Include subscriptions and free/ad-supported streams, never rent or buy."""
     scoped = results.get("results", {}).get(region, {})
-    available = {row.get("provider_id") for row in scoped.get("flatrate", [])}
+    available = {
+        offer.get("provider_id")
+        for monetization in WATCH_MONETIZATION_TYPES
+        for offer in (scoped.get(monetization) or [])
+        if isinstance(offer, dict)
+    }
     return [key for key in _provider_keys(selection)
             if any(ident in available for ident in PROVIDERS[key][1])]
 
@@ -725,7 +735,7 @@ async def _discover(token: str, service: str, kind: str, genre: int | None,
     direction = "desc" if sort == "recent" else order
     params: dict[str, Any] = {
         "watch_region": region, "with_watch_providers": _provider_ids(service),
-        "with_watch_monetization_types": "flatrate",
+        "with_watch_monetization_types": WATCH_MONETIZATION_FILTER,
         "language": "fr-FR" if region == "FR" else "en-US",
         "sort_by": f"{field}.{direction}",
         "page": page,
@@ -831,31 +841,20 @@ async def _search(token: str, selection: str, phrase: str, kind: str,
                   origin_country: str | None = None,
                   original_language: str | None = None,
                   keyword_id: int | None = None) -> dict[str, Any]:
-    """Search film/series titles, then validate regional SVOD availability.
+    """Search title metadata and verify regional streaming (including free/ads).
 
-    TMDB /search does not accept provider filters. Validation through each
-    title's /watch/providers avoids showing rentals or unavailable titles.
-    Bound the candidate pool and the concurrent lookups for mobile typing.
+    TMDB /search cannot filter by provider. Check each candidate's offers; if
+    French-language search misses all verified titles, retry English metadata.
+    Deduplicate TMDB identities so the fallback does not repeat availability
+    calls, and never accept rental/purchase-only results.
     """
     _provider_keys(selection)
     media_kinds = ("movie", "tv") if kind == "both" else (kind,)
-    requests = await asyncio.gather(*(
-        _tmdb(token, "/search/" + media_kind, {
-            "query": phrase, "page": 1, "language": "fr-FR",
-            "include_adult": "false",
-        }) for media_kind in media_kinds
-    ))
-    candidates: list[tuple[str, dict[str, Any]]] = []
-    for media_kind, response in zip(media_kinds, requests, strict=True):
-        candidates.extend((media_kind, row) for row in
-                          response.get("results", [])[:15] if row.get("id"))
     limit = asyncio.Semaphore(6)
 
     async def check(media_kind: str, row: dict[str, Any]) -> dict[str, Any] | None:
         async with limit:
             try:
-                # TMDB search cannot filter by providers or genre. Apply the
-                # category constraints before the more expensive SVOD lookup.
                 if genre is not None and genre not in row.get("genre_ids", []):
                     return None
                 if original_language is not None and (
@@ -899,9 +898,36 @@ async def _search(token: str, selection: str, phrase: str, kind: str,
         record["service_keys"] = available
         return record
 
-    checked = await asyncio.gather(*(check(k, row) for k, row in candidates))
-    matches = [record for record in checked if record is not None]
-    # Preserve TMDB search relevance order; vote averages are not query scores.
+    async def search_language(
+        language: str, seen: set[tuple[str, int]],
+    ) -> list[dict[str, Any]]:
+        responses = await asyncio.gather(*(
+            _tmdb(token, "/search/" + media_kind, {
+                "query": phrase, "page": 1, "language": language,
+                "include_adult": "false",
+            }) for media_kind in media_kinds
+        ))
+        candidates: list[tuple[str, dict[str, Any]]] = []
+        for media_kind, response in zip(media_kinds, responses, strict=True):
+            for row in response.get("results", [])[:20]:
+                tmdb_id = row.get("id")
+                if not isinstance(tmdb_id, int) or tmdb_id <= 0:
+                    continue
+                identity = (media_kind, tmdb_id)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                candidates.append((media_kind, row))
+        checked = await asyncio.gather(*(check(k, row) for k, row in candidates))
+        return [record for record in checked if record is not None]
+
+    seen: set[tuple[str, int]] = set()
+    matches = await search_language("fr-FR", seen)
+    if not matches:
+        # In particular, English and international/alternate drama titles can
+        # differ from the localised French TMDB display name.
+        matches = await search_language("en-US", seen)
+
     return {"items": matches, "source": "tmdb", "ranking_type": "search",
             "page": 1, "total_pages": 1, "region": region}
 
