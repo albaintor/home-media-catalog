@@ -462,6 +462,15 @@ def _streaming_trailers(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return trailers[:8]
 
 
+def _tmdb_popularity(row: dict[str, Any]) -> float | None:
+    """Preserve TMDB's original popularity index (not a 0–10 rating)."""
+    value = row.get("popularity")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number >= 0 else None
+
+
 def _title_metadata(raw: dict[str, Any], kind: str) -> dict[str, Any]:
     """Project TMDB film/TV details to a bounded, shared web/native contract.
 
@@ -533,6 +542,7 @@ def _title_metadata(raw: dict[str, Any], kind: str) -> dict[str, Any]:
         "poster_path": raw.get("poster_path"),
         "backdrop_path": raw.get("backdrop_path"),
         "rating": raw.get("vote_average") or 0,
+        "popularity": _tmdb_popularity(raw),
         "genres": genres,
         "cast": cast,
         "crew": crew[:16],
@@ -760,6 +770,7 @@ def _item(row: dict[str, Any], kind: str) -> dict[str, Any]:
         "poster_path": row.get("poster_path"),
         "backdrop_path": row.get("backdrop_path"),
         "rating": row.get("vote_average") or 0,
+        "popularity": _tmdb_popularity(row),
         "genre_ids": row.get("genre_ids") or [],
     }
 
