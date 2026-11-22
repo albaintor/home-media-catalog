@@ -100,8 +100,10 @@ def test_recommendations_exclude_watched_and_verify_region_subscription(tmp_path
         return ["netflix"] if tmdb_id == 30 else []
 
     async def fake_explain(prompt, favorites, dislikes, candidates,
-                           model, key, *, provider, mixed=None):
+                           model, key, *, provider, mixed=None,
+                           response_language="fr"):
         assert "Personal viewing profile" in prompt
+        assert response_language == "fr"
         assert mixed == []
         assert {entry["id"] for entry in candidates} == {"tv:30"}
         assert favorites and favorites[0]["user_rating"] == 9
@@ -155,6 +157,8 @@ def test_streaming_explainer_preserves_model_order_and_grounded_ids(monkeypatch)
         context = json.loads(user_input)
         calls.append(context)
         assert "ratings" in instructions
+        assert "MANDATORY OUTPUT LANGUAGE: French (fr)" in instructions
+        assert context["response_language"] == "fr"
         assert context["liked"][0]["title"] == "Alchemy of Souls"
         return {
             "taste_summary": "Your 10/10 for Alchemy of Souls points to fantasy romance.",
@@ -231,3 +235,92 @@ def test_moderate_ratings_are_context_not_dislikes():
     assert [row["id"] for row in profile["mixed"]] == ["tv:1"]
     assert [row["id"] for row in profile["positive"]] == ["tv:2"]
     assert profile["negative"] == []
+
+
+def test_locale_follows_app_language_not_tmdb_region():
+    english = ai_streaming.StreamingAIInput(
+        prompt="K-dramas in my taste", region="FR", services=["netflix"],
+        response_language="en",
+    )
+    french = ai_streaming.StreamingAIInput(
+        prompt="K-dramas in my taste", region="US", services=["netflix"],
+        response_language="fr",
+    )
+    legacy = ai_streaming.StreamingAIInput(
+        prompt="K-dramas in my taste", region="FR", services=["netflix"],
+    )
+    assert ai_streaming._response_language(english) == "en"
+    assert ai_streaming._response_language(french) == "fr"
+    assert ai_streaming._response_language(legacy) == "fr"
+
+
+def test_english_explanation_is_repaired_without_changing_results(monkeypatch):
+    import json
+
+    calls = []
+
+    async def fake_generate(instructions, user_input, schema, model, key,
+                            *, provider, max_output_tokens, schema_name):
+        calls.append(schema_name)
+        if schema_name == "streaming_recommendations":
+            assert "MANDATORY OUTPUT LANGUAGE: French (fr)" in instructions
+            return {
+                "taste_summary": (
+                    "This series profile shows your taste for a strong love story "
+                    "with emotional characters and a detailed dramatic journey."
+                ),
+                "matches": [{"id": "tv:2", "reason": (
+                    "This show has a strong central romance with moving characters "
+                    "and a story about family and second chances."
+                )}],
+            }
+        assert schema_name == "streaming_recommendation_translation"
+        incoming = json.loads(user_input)
+        assert incoming["matches"][0]["id"] == "tv:2"
+        return {
+            "taste_summary": (
+                "Votre profil révèle une préférence pour les histoires "
+                "d'amour fortes et les personnages émouvants."
+            ),
+            "matches": [{"id": "tv:2", "reason": (
+                "Cette série propose une romance intense et une histoire "
+                "familiale riche en émotions."
+            )}],
+        }
+
+    monkeypatch.setattr(ai_streaming, "generate_json", fake_generate)
+    matches, summary = asyncio.run(ai_streaming.explain_streaming_recommendations(
+        "Propose des K-dramas",
+        [{"title": "Alchemy of Souls", "user_rating": 10, "synopsis": "Romance"}],
+        [],
+        [{"id": "tv:2", "title": "Drama", "synopsis": "Family romance"}],
+        "gpt-4o-mini", "key", provider="openai", response_language="fr",
+    ))
+    assert calls == ["streaming_recommendations", "streaming_recommendation_translation"]
+    assert [item["id"] for item in matches] == ["tv:2"]
+    assert matches[0]["reason"].startswith("Cette série")
+    assert summary.startswith("Votre profil")
+
+
+def test_english_app_language_does_not_trigger_french_translation(monkeypatch):
+    calls = []
+
+    async def fake_generate(instructions, user_input, schema, model, key,
+                            *, provider, max_output_tokens, schema_name):
+        calls.append(schema_name)
+        assert "MANDATORY OUTPUT LANGUAGE: English (en)" in instructions
+        return {
+            "taste_summary": "You enjoy stories with a strong romantic relationship.",
+            "matches": [{"id": "tv:4", "reason":
+                "This show focuses on love and relationships."}],
+        }
+
+    monkeypatch.setattr(ai_streaming, "generate_json", fake_generate)
+    matches, summary = asyncio.run(ai_streaming.explain_streaming_recommendations(
+        "Je cherche des K-dramas",
+        [], [], [{"id": "tv:4", "title": "Drama"}], "gpt-4o-mini",
+        "key", provider="openai", response_language="en",
+    ))
+    assert len(matches) == 1
+    assert summary.startswith("You enjoy")
+    assert calls == ["streaming_recommendations"]
