@@ -29,7 +29,7 @@
 .streaming-service-chips button{flex:none;min-height:40px;padding:6px 12px;border-radius:24px;display:inline-flex;align-items:center;gap:8px;font-size:12px}
 .streaming-service-chips button[aria-pressed=true]{border-color:var(--accent);background:#bcdb8019;color:var(--accent)}
 .streaming-service-chips .streaming-service-dot{height:10px;width:10px;border-radius:50%;background:#8bb6ec}
-.streaming-service-chips .netflix{background:#e50914}.streaming-service-chips .disney_plus{background:#4875db}.streaming-service-chips .prime_video{background:#00a8e1}.streaming-service-chips .apple_tv_plus{background:#c7c7c7}.streaming-service-chips .hbo_max{background:#915dda}.streaming-service-chips .paramount_plus{background:#2a5fdb}
+.streaming-service-chips .netflix{background:#e50914}.streaming-service-chips .disney_plus{background:#4875db}.streaming-service-chips .prime_video{background:#00a8e1}.streaming-service-chips .apple_tv_plus{background:#c7c7c7}.streaming-service-chips .hbo_max{background:#915dda}.streaming-service-chips .paramount_plus{background:#2a5fdb}.streaming-service-chips .crunchyroll{background:#f47521}.streaming-service-chips .rakuten_viki{background:#00bbd6}.streaming-service-chips .mubi{background:#444}
 .streaming-shelf{margin:0 0 26px}
 .streaming-shelf-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 1px;margin:0 0 12px}
 .streaming-shelf-header h3{font-size:17px;margin:0;font-weight:700}
@@ -71,7 +71,7 @@
 .streaming-logo{width:25px;height:25px;display:inline-grid;place-items:center;flex:none;border-radius:6px;overflow:hidden;background:#222e3f;vertical-align:middle}
 .streaming-logo img{display:block;width:100%;height:100%;object-fit:contain}
 .streaming-logo-fallback{width:100%;height:100%;display:grid;place-items:center;font-size:10px;color:white;font-weight:800;background:#44536c}
-.streaming-logo-fallback.netflix{background:#d50914}.streaming-logo-fallback.disney_plus{background:#0d2a72}.streaming-logo-fallback.prime_video{background:#007cae}.streaming-logo-fallback.apple_tv_plus{background:#222}.streaming-logo-fallback.hbo_max{background:#6334a3}.streaming-logo-fallback.paramount_plus{background:#204a9e}
+.streaming-logo-fallback.netflix{background:#d50914}.streaming-logo-fallback.disney_plus{background:#0d2a72}.streaming-logo-fallback.prime_video{background:#007cae}.streaming-logo-fallback.apple_tv_plus{background:#222}.streaming-logo-fallback.hbo_max{background:#6334a3}.streaming-logo-fallback.paramount_plus{background:#204a9e}.streaming-logo-fallback.crunchyroll{background:#f47521}.streaming-logo-fallback.rakuten_viki{background:#00bbd6}.streaming-logo-fallback.mubi{background:#252525}
 .streaming-tile .streaming-tile-services{display:flex;align-items:center;gap:3px;padding:3px;background:#101820dc;border-radius:7px}
 .streaming-tile .streaming-tile-services .streaming-logo{width:19px;height:19px;background:transparent;padding:0;border:0}
 .streaming-tile .streaming-tile-services .streaming-logo-fallback{font-size:8px}
@@ -148,7 +148,7 @@
 .streaming-customize-grid{
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
-  grid-template-areas:"watch discovery" "public personal" "subscriptions genres";
+  grid-template-areas:"watch discovery" "public personal" "display display" "subscriptions genres";
   gap:16px;align-items:stretch
 }
 .streaming-customize-grid>label:first-child{
@@ -162,6 +162,7 @@
 .streaming-customize-grid>[data-rating-range="streaming-user-rating"]{grid-area:personal}
 .streaming-customize-grid>.streaming-subscription-filter{grid-area:subscriptions}
 .streaming-customize-grid>.streaming-content-filter{grid-area:discovery}
+.streaming-customize-grid>.streaming-display-filter{grid-area:display;flex-direction:row;flex-wrap:wrap;gap:16px}
 .streaming-customize-grid>.streaming-genre-filter{grid-area:genres}
 .streaming-customize-grid>fieldset{min-width:0;margin:0}
 .streaming-customize .rating-range-control{display:block;min-inline-size:0}
@@ -179,9 +180,30 @@
 #streaming-subscription-options label{min-width:0;font-size:12px}
 #streaming-genre-options{grid-template-columns:repeat(2,minmax(0,1fr));max-height:unset}
 @media(max-width:690px){
-  .streaming-customize-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"watch" "discovery" "public" "personal" "subscriptions" "genres"}
+  .streaming-customize-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"watch" "discovery" "public" "personal" "display" "subscriptions" "genres"}
   #streaming-subscription-options,#streaming-genre-options{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:380px){
   #streaming-subscription-options,#streaming-genre-options{grid-template-columns:minmax(0,1fr)}
 }
+
+/* Film shelves are blue, series shelves red; genres add a small second symbol. */
+.streaming-shelf-header h3{display:flex;align-items:center;gap:8px}
+.streaming-category-icons{display:inline-flex;gap:4px;align-items:center;flex:none;vertical-align:middle;color:var(--muted)}
+.streaming-category-icons svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.streaming-category-icons .streaming-genre-symbol{width:13px;height:13px;opacity:.85}
+.streaming-category-icons.streaming-kind-movie{color:#428df4}
+.streaming-category-icons.streaming-kind-tv{color:#e8545d}
+#streaming-genre-options .streaming-category-icons{gap:2px;margin-right:2px}
+#streaming-genre-options .streaming-category-icons svg{width:14px;height:14px}
+
+.streaming-tile .streaming-score-stack{position:absolute;top:8px;right:6px;z-index:1;display:flex;flex-direction:column;gap:3px;align-items:flex-end;pointer-events:none}
+.streaming-tile .streaming-score-stack .streaming-rating{position:static;display:inline-flex;gap:4px;align-items:center}
+.streaming-tile .streaming-score-stack .streaming-user-score{color:#74d7e9}
+.streaming-tile .streaming-score-stack .streaming-popularity{color:#fac77c}
+.streaming-popularity-label{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}
+.streaming-popularity-label .streaming-popularity-value{font-weight:700;color:var(--text)}
+.streaming-subview-controls{display:flex;flex-wrap:wrap;gap:12px;margin:4px 0 16px}
+.streaming-subview-controls label{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--muted)}
+.streaming-subview-controls select{min-height:37px;min-width:135px;padding:5px 9px}
+#streaming-subview-trigger{height:2px;pointer-events:none}
