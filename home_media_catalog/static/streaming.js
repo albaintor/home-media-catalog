@@ -12,6 +12,50 @@ const names = {
   apple_tv_plus:'Apple TV+',hbo_max:'HBO Max',paramount_plus:'Paramount+',
   crunchyroll:'Crunchyroll',rakuten_viki:'Rakuten Viki',mubi:'MUBI'
 };
+// Shared category pictograms: no external icon assets or image requests.
+const streamingSymbolPaths = {
+  movie:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4m-4 6h4m10-6h4m-4 6h4"/>',
+  tv:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 2 4 3 4-3M8 22h8"/>',
+  action:'<path d="m13 2-9 12h7l-1 8 10-13h-7z"/>',
+  adventure:'<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2.2 5-4.8 2 2.2-5z"/>',
+  science_fiction:'<path d="m12 2 2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z"/>',
+  popular:'<path d="M12 22c4.5 0 7-3.2 7-7.5 0-3.1-2-5.6-4-7-1 4-2 4-3 4-1-4.3-2.2-6.5-4-8C7 7 5 10 5 14.5 5 18.7 7.5 22 12 22z"/>',
+  recent:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
+};
+function streamingSymbol(name,extraClass=''){
+  const body=streamingSymbolPaths[name];
+  return body?'<svg class="'+extraClass+'" viewBox="0 0 24 24" aria-hidden="true">'+body+'</svg>':'';
+}
+function categoryIcons(kind,genreKey='',sort=''){
+  if(!['movie','tv'].includes(kind))return '';
+  const accent=streamingSymbolPaths[genreKey]?genreKey:
+    (sort==='top'?'popular':sort==='recent'?'recent':'');
+  return '<span class="streaming-category-icons streaming-kind-'+kind+
+    '" aria-hidden="true">'+streamingSymbol(kind)+
+    (accent?streamingSymbol(accent,'streaming-genre-symbol'):'')+'</span>';
+}
+function genreIcons(option){
+  const [key,,movieGenre,tvGenre]=option;
+  // A genre shared by films and series has two type icons, unless it has
+  // its own recognizable symbol.
+  if(streamingSymbolPaths[key])
+    return '<span class="streaming-category-icons" aria-hidden="true">'+
+      streamingSymbol(key)+'</span>';
+  return (movieGenre!=null?categoryIcons('movie'):'')+
+    (tvGenre!=null?categoryIcons('tv'):'');
+}
+function displayPreference(key){
+  try{return localStorage.getItem('hmc-streaming-display-'+key)==='true';}
+  catch{return false;}
+}
+function setDisplayPreference(key,value){
+  try{localStorage.setItem('hmc-streaming-display-'+key,String(value));}catch{}
+}
+function popularityIndex(title){
+  const score=Number(title?.popularity);
+  return title?.popularity!=null&&Number.isFinite(score)&&score>=0?score:null;
+}
+
 const genreOptions = [
   ['action','Action & adventure',28,10759],
   ['comedy','Comedy',35,35],
@@ -93,14 +137,18 @@ function syncFilterPreferences(){
   streamingRatingRanges.personal?.set(scoreLimit('user_rating_min',0),scoreLimit('user_rating_max',10));
   $('streaming-show-tops').checked=preference('show_tops','true')==='true';
   $('streaming-show-recent').checked=preference('show_recent','true')==='true';
+  $('streaming-show-popularity').checked=displayPreference('popularity');
+  $('streaming-show-personal-rating').checked=displayPreference('personal_rating');
   const subscribed=new Set(subscribedServices());
   $('streaming-subscription-options').innerHTML=Object.keys(names).map(key=>
     '<label><input type="checkbox" data-streaming-subscription="'+esc(key)+'" '+
     (subscribed.has(key)?'checked':'')+'> '+esc(names[key])+'</label>').join('');
   const genres=new Set(preference('genres','action,drama,comedy').split(','));
-  $('streaming-genre-options').innerHTML=genreOptions.map(([key,label])=>
-    '<label><input type="checkbox" data-streaming-genre="'+esc(key)+'" '+
-    (genres.has(key)?'checked':'')+'> '+esc(label)+'</label>').join('');
+  $('streaming-genre-options').innerHTML=genreOptions.map(option=>{
+    const [key,label]=option;
+    return '<label><input type="checkbox" data-streaming-genre="'+esc(key)+'" '+
+      (genres.has(key)?'checked':'')+'> '+genreIcons(option)+esc(label)+'</label>';
+  }).join('');
 }
 function personalRows(kind) {
   return state.rows.filter(row=>!row.deleted &&
@@ -121,6 +169,7 @@ function normalizeTitle(row){
     original_title:p.original_title||p.title,year:Number(p.year)||null,
     poster_path:p.poster_path||null,backdrop_path:p.backdrop_path||null,
     overview:p.overview||'',rating:Number(p.rating)||0,
+    popularity:p.popularity==null||p.popularity===''?null:Number(p.popularity),
     service_keys:(p.services||'').split(',').filter(x=>names[x]),
     work_id:p.work_id||null};
 }
@@ -234,7 +283,20 @@ function card(title){
   const poster=posterURL(title.poster_path),isSaved=!!savedRow(title);
   const badges=servicesFor(title).slice(0,4).map(s=>providerLogo(s)).join('');
   const year=title.year||'',rating=Number(title.rating)||0;
-  return '<article class="streaming-tile"><div class="streaming-tile-art">'+
+  const personal=Number(state.metrics.get(key)?.user_rating);
+  const hasPersonal=state.metrics.get(key)?.user_rating!=null&&
+    Number.isFinite(personal)&&personal>0;
+  const popularity=popularityIndex(title);
+  const scores=[
+    rating>0?'<span class="streaming-rating" title="Note TMDB">★ '+rating.toFixed(1)+'</span>':'',
+    displayPreference('personal_rating')&&hasPersonal?
+      '<span class="streaming-rating streaming-user-score" title="Ma note">☆ '+personal.toFixed(1)+'</span>':'',
+    displayPreference('popularity')&&popularity!=null?
+      '<span class="streaming-rating streaming-popularity" title="Indice de popularité TMDB">↗ '+
+      esc(Math.round(popularity))+'</span>':''
+  ].filter(Boolean).join('');
+  return '<article class="streaming-tile" data-streaming-title="'+esc(key)+
+    '"><div class="streaming-tile-art">'+
     '<button class="streaming-tile-poster" type="button" data-streaming-card="'+esc(key)+'" aria-label="'+esc(title.title)+'">'+
     (poster?'<img loading="lazy" decoding="async" src="'+esc(poster)+'" alt="">':
       '<span>'+esc((title.title||'?').slice(0,2).toUpperCase())+'</span>')+'</button>'+
@@ -242,14 +304,15 @@ function card(title){
     '" aria-label="'+esc(isSaved?'In my catalog':'Add to catalog')+
     '" title="'+esc(isSaved?'In my catalog':'Add to catalog')+
     '" data-streaming-heart="'+esc(key)+'">'+(isSaved?'♥':'♡')+'</button>'+
-    (rating>0?'<span class="streaming-rating">★ '+rating.toFixed(1)+'</span>':'')+
+    (scores?'<span class="streaming-score-stack">'+scores+'</span>':'')+
     (badges?'<span class="streaming-tile-services">'+badges+'</span>':'')+'</div>'+
     '<div class="streaming-tile-title" title="'+esc(title.title)+'">'+esc(title.title)+'</div>'+
     '<div class="streaming-tile-year">'+esc(year)+'</div></article>';
 }
-function shelf(id,heading,content,notes='',more=true) {
+function shelf(id,heading,content,notes='',more=true,kind='',genreKey='',sort='') {
   return '<section class="streaming-shelf" data-streaming-shelf="'+esc(id)+'">'+
-    '<div class="streaming-shelf-header"><h3>'+esc(heading)+'</h3>'+
+    '<div class="streaming-shelf-header"><h3>'+categoryIcons(kind,genreKey,sort)+
+      esc(heading)+'</h3>'+
     (notes?'<span class="streaming-shelf-note">'+esc(notes)+'</span>':'')+'</div>'+
     '<div class="streaming-shelf-track">'+content+'</div>'+
     (more?'<button type="button" class="streaming-see-more" data-streaming-more="'+
@@ -262,7 +325,7 @@ function renderSaved(){
     const visible=titles.filter(matchesStreamingFilters);
     if(!visible.length)return '';
     state.shelves.set('saved-'+kind,{heading,items:visible,kind,saved:true});
-    return shelf('saved-'+kind,heading,visible.map(card).join(''));
+    return shelf('saved-'+kind,heading,visible.map(card).join(''),'',true,kind);
   }).join('');
 }
 function subscribedServices(){
@@ -623,6 +686,7 @@ function renderTitleDetails(title,full=null,loading=false,error='') {
       esc(work)+'">Open catalog entry</button>':'')+
     '</div>'+renderListCollectionActions()+
     '<div class="streaming-detail-services">'+links+'</div>'+
+    (displayPreference('popularity')&&popularityIndex(data)??false?'':'')+
     (state.detailMessage?'<p class="streaming-detail-feedback" role="status">'+
       esc(state.detailMessage)+'</p>':'')+'</div></div>'+
     (genres?'<div class="streaming-detail-genres">'+genres+'</div>':'')+
