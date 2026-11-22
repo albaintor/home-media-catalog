@@ -1330,6 +1330,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             isinstance(raw.get(field), str) for field in ("provider", "model", "api_key")
         ):
             raise HTTPException(422, "Invalid AI credential request.")
+        if raw.get("mode") == "replace":
+            revision = raw.get("expected_revision")
+            if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+                raise HTTPException(422, "Missing AI configuration revision.")
+            try:
+                updated = ai_config.replace_device_credential(
+                    raw["provider"], raw["model"], raw["api_key"], revision,
+                )
+            except ValueError:
+                raise HTTPException(422, "Invalid AI credential request.") from None
+            except RuntimeError:
+                raise HTTPException(409, "AI configuration changed; refresh before saving.") from None
+            return updated
+        if raw.get("mode") not in (None, "fill"):
+            raise HTTPException(422, "Invalid AI synchronization mode.")
         try:
             imported = ai_config.provision_device_credential(
                 raw["provider"], raw["model"], raw["api_key"],
