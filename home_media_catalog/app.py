@@ -158,6 +158,7 @@ from .streaming import (
     _mirror_catalogue_episode_edit,
     _mirror_catalogue_personal,
     _reconcile_streaming_catalogue,
+    _reconcile_catalogue_personal,
     _reconcile_watch_progress,
     build_streaming_router,
 )
@@ -218,6 +219,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Migrate legacy per-media and per-episode watch state once, before
         # projecting any newer synced episode inventories.
         await asyncio.to_thread(_bootstrap_catalogue_watch_progress, store)
+        # Replay locally committed iPhone ratings and film watch flags after
+        # server restart or catalogue reimport, then derive TV episode states.
+        await asyncio.to_thread(
+            lambda: _reconcile_catalogue_personal(store, _merge(store, []))
+        )
         await asyncio.to_thread(
             lambda: _reconcile_watch_progress(store, _merge(store, []))
         )
