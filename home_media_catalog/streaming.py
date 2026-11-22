@@ -375,6 +375,22 @@ def _mirror_catalogue_episode_edit(
     # revisioned snapshot. Avoid thousands of per-episode overrides and preserve
     # watched entries not imported into the canonical catalogue.
     snapshot = decode_episodes(payload.get("watched_episode_snapshot"))
+    try:
+        existing_overrides = json.loads(payload.get("episode_overrides") or "{}")
+    except (TypeError, ValueError):
+        existing_overrides = {}
+    if isinstance(existing_overrides, dict):
+        for key, watched_flag in existing_overrides.items():
+            if not isinstance(watched_flag, bool) or not isinstance(key, str):
+                continue
+            parts = key.split(":")
+            if len(parts) != 2 or not all(part.isdecimal() for part in parts):
+                continue
+            coordinates = (int(parts[0]), int(parts[1]))
+            if watched_flag:
+                snapshot.add(coordinates)
+            else:
+                snapshot.discard(coordinates)
     with store.connect() as db:
         episodes = db.execute(
             "SELECT season,episode,watch_status FROM works "
