@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .auth import authenticated, writable
-from .watch_progress import decode_episodes, encode_episodes, effective_series_status
+from .watch_progress import decode_episodes, effective_series_status, encode_episodes
 
 TMDB = "https://api.themoviedb.org/3"
 NETFLIX_COUNTRIES = "https://www.netflix.com/tudum/top10/data/all-weeks-countries.tsv"
