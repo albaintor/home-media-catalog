@@ -207,13 +207,14 @@ def _bootstrap_catalogue_watch_progress(store: Any) -> int:
                 ).fetchall()
                 coordinates = {(e["season"], e["episode"]) for e in watched
                                if e["episode"] is not None}
-                if coordinates:
-                    payload["watched_episode_snapshot"] = encode_episodes(coordinates)
-                elif state == "watched":
-                    # The legacy series status has no historical episode list.
-                    # Resolve aired episodes as of this boundary once metadata
-                    # becomes available, never auto-mark later releases.
+                if state == "watched":
+                    # A legacy series-level "watched" means all episodes
+                    # available when it was set, including those never
+                    # imported into the physical catalogue. Freeze them from
+                    # TMDB air dates at the migration boundary.
                     payload["watched_at"] = now_stamp
+                elif coordinates:
+                    payload["watched_episode_snapshot"] = encode_episodes(coordinates)
                 else:
                     payload["watched_episode_snapshot"] = ""
             pending.append(StreamingStateRow(
