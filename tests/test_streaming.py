@@ -160,6 +160,20 @@ def test_providers_are_allowlisted():
     assert exc.value.status_code == 422
 
 
+def test_tmdb_popularity_is_distinct_from_public_rating():
+    movie = _item({
+        "id": 123, "title": "Film", "release_date": "2026-11-22",
+        "popularity": 147.825, "vote_average": 6.4,
+    }, "movie")
+    assert movie["popularity"] == 147.825
+    assert movie["rating"] == 6.4
+    assert _item({"id": 124, "title": "Unknown"}, "movie")["popularity"] is None
+    assert _item({"id": 125, "title": "Invalid", "popularity": float("nan")},
+                 "movie")["popularity"] is None
+    assert _item({"id": 126, "title": "Invalid", "popularity": -2},
+                 "movie")["popularity"] is None
+
+
 def test_tmdb_media_mapping():
     value = _item({
         "id": 123,
@@ -196,6 +210,7 @@ def test_streaming_tmdb_details_expose_only_valid_youtube_trailers():
         "EXAMPLE1234", "ANOTHER1234",
     ]
     assert trailers[0]["official"] is True
+    assert _title_metadata(raw, "movie")["popularity"] is None
     assert _title_metadata(raw, "movie")["trailers"] == trailers
     assert _title_metadata({"id": 42, "title": "No video"}, "movie")["trailers"] == []
 
