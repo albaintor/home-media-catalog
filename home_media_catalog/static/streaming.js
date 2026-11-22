@@ -678,37 +678,92 @@ function renderBrowser(){
   $('streaming-summary').textContent=saved+' '+tr('titres enregistrés')+
     ' · '+state.visible.length+' '+tr('services');
 }
+let streamingSubviewObserver=null;
+function sortedSubviewItems(def){
+  const titles=def.items.filter(matchesStreamingFilters);
+  const sort=def.localSort||'default',asc=def.localOrder==='asc';
+  if(sort==='default'||(sort==='date_added'&&def.saved))
+    return sort==='date_added'&&def.saved&&asc?[...titles].reverse():titles;
+  function numberFor(title){
+    switch(sort){
+      case 'popularity':return popularityIndex(title);
+      case 'rating':return Number(title.rating)>0?Number(title.rating):null;
+      case 'user_rating':return personalRatingFor(title);
+      case 'year':return title.year==null?null:Number(title.year);
+      default:return null;
+    }
+  }
+  return [...titles].sort((a,b)=>{
+    if(sort==='title'){
+      const compare=String(a.title||'').localeCompare(String(b.title||''),undefined,{
+        numeric:true,sensitivity:'base'
+      });
+      return compare?(asc?compare:-compare):keyFor(a).localeCompare(keyFor(b));
+    }
+    const lhs=numberFor(a),rhs=numberFor(b);
+    if(lhs==null&&rhs!=null)return 1;
+    if(rhs==null&&lhs!=null)return -1;
+    if(lhs!=null&&rhs!=null&&lhs!==rhs)return asc?lhs-rhs:rhs-lhs;
+    return keyFor(a).localeCompare(keyFor(b));
+  });
+}
+function renderSubviewGrid(){
+  const def=state.shelves.get(state.subview?.id);
+  if(!def)return;
+  $('streaming-subview-title').innerHTML=categoryIcons(
+    def.kind,def.genreKey,def.sort)+esc(def.heading);
+  const sort=def.localSort||'default';
+  $('streaming-subview-sort').value=sort;
+  $('streaming-subview-order').value=def.localOrder||'desc';
+  $('streaming-subview-grid').innerHTML=sortedSubviewItems(def).map(card).join('')||
+    '<p class="streaming-shelf-message">No titles match the active filters.</p>';
+  $('streaming-subview-more').hidden=!!def.saved||def.page>=def.total;
+  $('streaming-subview-more').disabled=!!def.loadingNext;
+}
+function connectStreamingSubviewObserver(){
+  if(streamingSubviewObserver)streamingSubviewObserver.disconnect();
+  if(!('IntersectionObserver' in window))return;
+  streamingSubviewObserver=new IntersectionObserver(entries=>{
+    if(entries.some(entry=>entry.isIntersecting)&&state.subview)
+      void loadNext();
+  },{rootMargin:'180px'});
+  streamingSubviewObserver.observe($('streaming-subview-trigger'));
+}
 function showSubview(id){
   const def=state.shelves.get(id);
   if(!def)return;
+  const same=state.subview?.id===id;
   state.subview={id};
+  if(!same){def.localSort='default';def.localOrder='desc';}
   $('streaming-browser').hidden=true;
   $('streaming-subview').hidden=false;
-  $('streaming-subview-title').textContent=def.heading;
-  $('streaming-subview-grid').innerHTML=def.items.map(card).join('');
-  $('streaming-subview-more').hidden=!!def.saved||def.page>=def.total;
-  $('streaming-subview').scrollIntoView({block:'start'});
+  renderSubviewGrid();
+  connectStreamingSubviewObserver();
+  if(!same)$('streaming-subview').scrollIntoView({block:'start'});
 }
 function closeSubview(){
   state.subview=null;
+  if(streamingSubviewObserver)streamingSubviewObserver.disconnect();
   $('streaming-subview').hidden=true;
   $('streaming-browser').hidden=false;
 }
 async function loadNext(){
-  const def=state.shelves.get(state.subview?.id);
-  if(!def||def.saved||def.page>=def.total)return;
-  const button=$('streaming-subview-more');
-  button.disabled=true;
+  const id=state.subview?.id;
+  const def=state.shelves.get(id);
+  if(!def||def.saved||def.loadingNext||def.page>=def.total)return;
+  def.loadingNext=true;
+  $('streaming-subview-more').disabled=true;
   try{
     const response=await retrieve(def,def.page+1);
     const present=new Set(def.items.map(keyFor));
-    const next=(response.items||[]).filter(x=>!present.has(keyFor(x)));
-    def.items.push(...next);
+    def.items.push(...(response.items||[]).filter(x=>!present.has(keyFor(x))));
     def.page++;
     def.total=response.total_pages||def.total;
-    $('streaming-subview-grid').insertAdjacentHTML('beforeend',next.map(card).join(''));
-    button.hidden=def.page>=def.total;
-  }catch(e){failure(e.message);}finally{button.disabled=false;}
+    if(state.subview?.id===id)renderSubviewGrid();
+  }catch(e){failure(e.message);}finally{
+    def.loadingNext=false;
+    if(state.subview?.id===id)renderSubviewGrid();
+  }
 }
 function renderListCollectionActions(){
   if(state.session?.role!=='admin')return '';
