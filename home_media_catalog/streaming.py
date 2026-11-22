@@ -35,6 +35,9 @@ PROVIDERS = {
     "apple_tv_plus": ("Apple TV+", (350,)),
     "hbo_max": ("HBO Max", (1899, 384)),
     "paramount_plus": ("Paramount+", (531,)),
+    "crunchyroll": ("Crunchyroll", (283,)),
+    "rakuten_viki": ("Rakuten Viki", (344,)),
+    "mubi": ("MUBI", (11,)),
 }
 # Maximum retained in-process snapshots. Never share them across HMC installs.
 _CACHE: dict[str, tuple[float, Any]] = {}
@@ -69,6 +72,9 @@ _LINK_HOSTS = {
     "apple_tv_plus": ("tv.apple.com",),
     "hbo_max": ("max.com", "hbomax.com"),
     "paramount_plus": ("paramountplus.com",),
+    "crunchyroll": ("crunchyroll.com",),
+    "rakuten_viki": ("viki.com",),
+    "mubi": ("mubi.com",),
 }
 
 
