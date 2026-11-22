@@ -324,11 +324,20 @@ async def recommend_streaming(
 
     async def verify(identity: str, item: dict) -> tuple[str, dict, list[str]]:
         category, number = identity.split(":")
+        key = credential_scope + ":" + identity + ":" + selection + ":" + request.region
+        cached = _AVAILABILITY_CACHE.get(key)
+        if cached and cached[0] > time.monotonic():
+            return identity, item, cached[1]
         try:
             async with semaphore:
-                services = await _availability(token, category, int(number), selection, request.region)
+                services = await _availability(
+                    token, category, int(number), selection, request.region
+                )
         except HTTPException:
             services = []
+        if len(_AVAILABILITY_CACHE) > 600:
+            _AVAILABILITY_CACHE.pop(next(iter(_AVAILABILITY_CACHE)))
+        _AVAILABILITY_CACHE[key] = time.monotonic() + 900, services
         return identity, item, services
 
     verified = await asyncio.gather(*(verify(identity, data[1]) for identity, data in ordered))
@@ -338,21 +347,31 @@ async def recommend_streaming(
     reasons: dict[str, str] = {}
     if available:
         favorites = [
-            {"title": w["title"] or w["id"], "user_rating": w["rating"],
-             "genres": w["genres"]}
-            for w in seeds[:6]
+            {
+                "title": detail.get("name") or detail.get("title") or w["title"] or w["id"],
+                "user_rating": w["rating"],
+                "genres": [g.get("name") for g in detail.get("genres", [])
+                           if isinstance(g, dict) and g.get("name")] or w["genres"],
+                "synopsis": (detail.get("overview") or "")[:350],
+            }
+            for w, detail in seed_pairs[:len(seeds)]
         ]
         disliked = [
-            {"title": w["title"] or w["id"], "user_rating": w["rating"]}
-            for w in dislikes[:3]
+            {
+                "title": detail.get("name") or detail.get("title") or w["title"] or w["id"],
+                "user_rating": w["rating"],
+                "synopsis": (detail.get("overview") or "")[:250],
+            }
+            for w, detail in seed_pairs[len(seeds):]
         ]
         explanations = await rerank_candidates(
-            request.prompt + "\nPersonal viewing profile (ratings out of 10): " +
+            full_prompt + "\nPersonal viewing profile (ratings out of 10): " +
             json.dumps({"favorites": favorites, "disliked": disliked}, ensure_ascii=False),
             [
                 {
                     "id": identity, "title": item["title"], "kind": item["kind"],
-                    "year": item["year"], "genres": item["genre_ids"],
+                    "year": item["year"],
+                    "genres": [genre_labels.get(g, str(g)) for g in item["genre_ids"]],
                     "synopsis": item["overview"][:750], "rating": item["rating"],
                 }
                 for identity, item in available
