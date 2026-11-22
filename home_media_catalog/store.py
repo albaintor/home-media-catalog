@@ -19,6 +19,7 @@ from .media_formats import AUDIO_FORMAT_LABELS, canonical_format, canonical_sour
 from .people import category as credit_category
 from .people import person_view, youtube_url
 from .utils import fold, now
+from .watch_progress import effective_series_status
 
 # Keep at most ten completed/failed writeback events in persistent history.
 # Pending work is separate and must never be discarded by history retention.
@@ -2403,6 +2404,33 @@ class Store:
             if personal["watched"] is not None:
                 values["watch_status"] = "watched" if personal["watched"] else "unwatched"
                 values["resume_seconds"] = 0
+        # Refreshing catalogue records must not restore the stale bool after
+        # a new season has appeared. Inventory is metadata, snapshot is user data.
+        if primary["kind"] == "tvshow" and conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='streaming_state'"
+        ).fetchone():
+            tmdb_ids = {
+                str(identifier) for record, _ in entries
+                for identifier in [record.get("identifiers", {}).get("tmdb")]
+                if isinstance(identifier, (str, int)) and str(identifier).isdecimal()
+            }
+            for tmdb_id in sorted(tmdb_ids):
+                personal_row = conn.execute(
+                    "SELECT payload FROM streaming_state WHERE key=? AND deleted=0",
+                    ("personal:tv:" + tmdb_id,)
+                ).fetchone()
+                inventory_row = conn.execute(
+                    "SELECT payload FROM streaming_state WHERE key=? AND deleted=0",
+                    ("inventory:tv:" + tmdb_id,)
+                ).fetchone()
+                if personal_row and inventory_row:
+                    derived = effective_series_status(
+                        json.loads(personal_row["payload"]),
+                        json.loads(inventory_row["payload"]),
+                    )
+                    if derived is not None:
+                        values["watch_status"] = derived
+                        break
         conn.execute(
             "UPDATE works SET " + ",".join(f"{n}=?" for n in values) + " WHERE id=?",
             (*values.values(), work_id),
@@ -2537,7 +2565,7 @@ class Store:
         rows = conn.execute(
             "SELECT parent_id,COUNT(*) AS episode_count,"
             " SUM(CASE WHEN watch_status='watched' THEN 1 ELSE 0 END) AS watched_episode_count"
-            " FROM works WHERE kind='episode' AND parent_id IN ("
+            " FROM works WHERE kind='episode' AND season>0 AND parent_id IN ("
             + placeholders
             + ") GROUP BY parent_id",
             series_ids,
