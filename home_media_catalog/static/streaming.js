@@ -79,7 +79,7 @@ const state = {
   observer:null,version:0,subview:null,selected:null,searchTimer:null,
   logos:{},detailCache:new Map(),metrics:new Map(),person:null,
   personVersion:0,personReturnKey:null,personAvailabilityCache:new Map(),
-  lists:[],collections:[],detailMessage:''
+  lists:[],collections:[],detailMessage:'',personal:new Map()
 };
 function preference(key,fallback) {
   const row=state.rows.find(r=>r.key==='prefs:'+key && !r.deleted);
@@ -90,20 +90,28 @@ function scoreLimit(key,fallback){
   return Number.isFinite(score)?Math.min(10,Math.max(0,score)):fallback;
 }
 function matchesStreamingFilters(title){
-  const metric=state.metrics.get(keyFor(title));
+  const key=keyFor(title),metric=state.metrics.get(key);
+  const personal=state.personal?.get(key);
+  const watched=personal?.watched==='true'?true:
+    personal?.watched==='false'?false:metric?.watch_status==='watched';
   const watch=preference('watch_filter','all');
-  if(watch==='watched'&&metric?.watch_status!=='watched')return false;
-  if(watch==='unwatched'&&metric?.watch_status==='watched')return false;
+  if(watch==='watched'&&!watched)return false;
+  if(watch==='unwatched'&&watched)return false;
   const publicMin=scoreLimit('rating_min',0),publicMax=scoreLimit('rating_max',10);
   const personalMin=scoreLimit('user_rating_min',0),personalMax=scoreLimit('user_rating_max',10);
+  const ownRating=personal?.rating_cleared==='true'?null:
+    personal?.rating!=null?Number(personal.rating):metric?.user_rating;
+  const rated=ownRating!=null&&Number.isFinite(Number(ownRating));
+  const status=preference('personal_rating_filter','all');
+  if(status==='rated'&&!rated)return false;
+  if(status==='unrated'&&rated)return false;
   if(publicMin>0||publicMax<10){
     const value=Number(title.rating)||Number(metric?.rating)||0;
     if(!value||value<publicMin||value>publicMax)return false;
   }
   if(personalMin>0||personalMax<10){
-    const value=Number(metric?.user_rating);
-    if(metric?.user_rating==null||!Number.isFinite(value)||
-       value<personalMin||value>personalMax)return false;
+    const value=Number(ownRating);
+    if(!rated||value<personalMin||value>personalMax)return false;
   }
   return true;
 }
@@ -133,6 +141,7 @@ function persistPreference(key,value){
 const streamingRatingRanges = {};
 function syncFilterPreferences(){
   $('streaming-watch-filter').value=preference('watch_filter','all');
+  $('streaming-personal-rating-filter').value=preference('personal_rating_filter','all');
   streamingRatingRanges.public?.set(scoreLimit('rating_min',0),scoreLimit('rating_max',10));
   streamingRatingRanges.personal?.set(scoreLimit('user_rating_min',0),scoreLimit('user_rating_max',10));
   $('streaming-show-tops').checked=preference('show_tops','true')==='true';
@@ -149,6 +158,19 @@ function syncFilterPreferences(){
     return '<label><input type="checkbox" data-streaming-genre="'+esc(key)+'" '+
       (genres.has(key)?'checked':'')+'> '+genreIcons(option)+esc(label)+'</label>';
   }).join('');
+}
+function indexPersonalRows(){
+  state.personal=new Map(state.rows.filter(row=>
+    !row.deleted && /^personal:(movie|tv):[0-9]+$/.test(row.key))
+    .map(row=>[row.key.slice('personal:'.length),row.payload||{}]));
+}
+function personalRatingFor(title){
+  const own=state.personal.get(keyFor(title));
+  if(own?.rating_cleared==='true')return null;
+  const raw=own?.rating??state.metrics.get(keyFor(title))?.user_rating;
+  if(raw==null||raw==='')return null;
+  const value=Number(raw);
+  return Number.isFinite(value)&&value>=0&&value<=10?value:null;
 }
 function personalRows(kind) {
   return state.rows.filter(row=>!row.deleted &&
@@ -283,9 +305,8 @@ function card(title){
   const poster=posterURL(title.poster_path),isSaved=!!savedRow(title);
   const badges=servicesFor(title).slice(0,4).map(s=>providerLogo(s)).join('');
   const year=title.year||'',rating=Number(title.rating)||0;
-  const personal=Number(state.metrics.get(key)?.user_rating);
-  const hasPersonal=state.metrics.get(key)?.user_rating!=null&&
-    Number.isFinite(personal)&&personal>0;
+  const personal=personalRatingFor(title);
+  const hasPersonal=personal!=null&&personal>0;
   const popularity=popularityIndex(title);
   const scores=[
     rating>0?'<span class="streaming-rating" title="Note TMDB">★ '+rating.toFixed(1)+'</span>':'',
@@ -861,6 +882,7 @@ async function save(title){
       tmdb_id:String(title.id),kind:title.kind,title:title.title,
       original_title:title.original_title||title.title,
       overview:title.overview||'',rating:String(title.rating||0),
+      popularity:title.popularity==null?'':String(title.popularity),
       year:title.year?String(title.year):'',poster_path:title.poster_path||'',
       backdrop_path:title.backdrop_path||'',services:membership.join(','),
       status:'pending'
@@ -871,6 +893,7 @@ async function save(title){
       },body:JSON.stringify({changes:[{key,payload:existing?.payload||payload,modified_at:nextTime,deleted:!!existing}]})
     });
     state.rows=result.rows;
+    indexPersonalRows();
     // Retain the full discovery page if a heart is saved from its subview:
     // re-rendering the home shelves alone would discard loaded pagination.
     const currentSubview=state.subview;
@@ -898,6 +921,7 @@ async function load(){
     state.metrics=new Map((metrics.items||[]).map(m=>[m.kind+':'+m.tmdb_id,m]));
     if(!Array.isArray(response.rows))throw new Error('Invalid streaming state.');
     state.rows=response.rows;
+    indexPersonalRows();
     state.session=session;
     state.subscriptions=subscribedServices();
     state.visible=preference('visible_services',state.subscriptions.join(','))
