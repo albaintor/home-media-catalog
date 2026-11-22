@@ -1,8 +1,8 @@
 """Regression checks for iOS streaming parity on the web (22 November 2026)."""
-from pathlib import Path
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import pytest
 
