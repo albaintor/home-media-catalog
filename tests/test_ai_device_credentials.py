@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 from home_media_catalog.app import create_app
 from home_media_catalog.settings import Settings
 
-
 PATH = "/api/v1/ai/device-credentials"
 ADMIN_AUTH = {"Authorization": f"Bearer {ADMIN}"}
 READ_AUTH = {"Authorization": f"Bearer {READ}"}
