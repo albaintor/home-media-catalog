@@ -162,6 +162,68 @@ def _merge(store: Any, incoming: list[StreamingStateRow]) -> list[dict[str, Any]
 
 
 
+def _bootstrap_catalogue_watch_progress(store: Any) -> int:
+    """One-time retrofit of existing catalogue watched/rating states.
+
+    Preserve every existing Streaming journal row. Imported episode watch
+    states are authoritative; for a watched series without episode records,
+    record the migration time and resolve historical episode air dates later.
+    The original click date cannot be recovered from old boolean fields.
+    """
+    current = {row["key"] for row in _merge(store, []) if not row["deleted"]}
+    pending: list[StreamingStateRow] = []
+    now_stamp = datetime.now(UTC).isoformat(timespec="microseconds")
+    with store.connect() as db:
+        rows = db.execute(
+            "SELECT DISTINCT i.value AS tmdb_id, w.id AS work_id, w.kind,"
+            " w.watch_status, w.user_rating "
+            "FROM identifiers i JOIN works w ON w.id=i.work_id "
+            "WHERE i.namespace='tmdb' AND w.kind IN ('tvshow','movie') "
+            "ORDER BY w.id"
+        ).fetchall()
+        for row in rows:
+            raw_id = str(row["tmdb_id"])
+            if not raw_id.isdecimal() or int(raw_id) < 1:
+                continue
+            kind = "tv" if row["kind"] == "tvshow" else "movie"
+            key = f"personal:{kind}:{raw_id}"
+            if key in current:
+                continue
+            state = row["watch_status"] or "unknown"
+            rating = row["user_rating"]
+            if state not in ("watched", "in_progress", "unwatched") and rating is None:
+                continue
+            payload: dict[str, str] = {"watch_schema": "2"}
+            if state in ("watched", "unwatched", "in_progress"):
+                payload["watched"] = "true" if state == "watched" else "false"
+            if rating is not None:
+                payload["rating"] = str(rating)
+            if kind == "tv":
+                watched = db.execute(
+                    "SELECT season,episode FROM works "
+                    "WHERE parent_id=? AND kind='episode' AND season>0 "
+                    "AND watch_status='watched'",
+                    (row["work_id"],)
+                ).fetchall()
+                coordinates = {(e["season"], e["episode"]) for e in watched
+                               if e["episode"] is not None}
+                if coordinates:
+                    payload["watched_episode_snapshot"] = encode_episodes(coordinates)
+                elif state == "watched":
+                    # The legacy series status has no historical episode list.
+                    # Resolve aired episodes as of this boundary once metadata
+                    # becomes available, never auto-mark later releases.
+                    payload["watched_at"] = now_stamp
+                else:
+                    payload["watched_episode_snapshot"] = ""
+            pending.append(StreamingStateRow(
+                key=key, payload=payload, modified_at=now_stamp))
+            current.add(key)
+    if pending:
+        _merge(store, pending)
+    return len(pending)
+
+
 def _reconcile_watch_progress(store: Any, rows: list[dict[str, Any]]) -> int:
     """Project the shared local-first journal into the canonical catalogue.
 
