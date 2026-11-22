@@ -293,11 +293,16 @@ def _reconcile_streaming_catalogue(store: Any, rows: list[dict[str, Any]]) -> in
     reconciliation ensures web /media sees those titles in the meantime.
     The deterministic edition key is identical to iOS, so the later regular
     catalogue journal upload does not create a second internal edition.
-    Never remove catalogue entries just because a heart row was tombstoned.
+    Tombstones remove only the corresponding heart-created internal edition;
+    ordinary physical, Kodi and CLZ editions must remain untouched.
     """
     wanted = []
+    deleted_keys: list[str] = []
     for row in rows:
-        if row["deleted"] or not re.fullmatch(r"item:(movie|tv):[0-9]{1,24}", row["key"]):
+        if not re.fullmatch(r"item:(movie|tv):[0-9]{1,24}", row["key"]):
+            continue
+        if row["deleted"]:
+            deleted_keys.append(_streaming_edition_uuid(row["key"]))
             continue
         data = row["payload"]
         if data.get("status") not in {"saved", "pending"}:
@@ -344,8 +349,30 @@ def _reconcile_streaming_catalogue(store: Any, rows: list[dict[str, Any]]) -> in
             "poster_path": poster, "backdrop_path": backdrop,
             "format": "", "streaming_services": services,
         })
+    # A removed heart must clear its actual internal catalogue edition, not
+    # merely its timestamped state row. Guard deletion using the provenance
+    # marker so a regular physical edition can never be removed here.
+    deleted = 0
+    if deleted_keys:
+        with store.connect() as db:
+            safe_to_delete = [
+                row["external_key"] for row in db.execute(
+                    "SELECT external_key FROM records "
+                    "WHERE source_id='internal' "
+                    "AND json_extract(payload, '$.metadata.streaming_reference')=1 "
+                    "AND external_key IN (" + ",".join("?" for _ in deleted_keys) + ")",
+                    deleted_keys,
+                )
+            ]
+        for edition_id in safe_to_delete:
+            try:
+                store.delete_internal_media(edition_id)
+                deleted += 1
+            except KeyError:
+                # An iOS catalogue upload might already have removed it.
+                continue
     if not wanted:
-        return 0
+        return deleted
     with store.connect() as db:
         known = {row["external_key"] for row in db.execute(
             "SELECT external_key FROM records WHERE source_id='internal'"
@@ -356,7 +383,7 @@ def _reconcile_streaming_catalogue(store: Any, rows: list[dict[str, Any]]) -> in
             continue
         store.save_internal_media(data)
         created += 1
-    return created
+    return created + deleted
 
 
 def _provider_keys(selection: str) -> list[str]:
