@@ -49,6 +49,7 @@ from .ai import (
 )
 from .ai_hybrid import hybrid_page
 from .ai_single_model import single_model_page
+from .ai_streaming import StreamingAIInput, recommend_streaming
 from .ai_usage import (
     AIBudgetExceeded,
     AIPriceUnavailable,
@@ -470,6 +471,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # routes missing on an older, otherwise contract-compatible NAS.
             "capabilities": [
                 "ai_search",
+                "ai_streaming_recommendations",
                 "bulk_list_add",
                 "ai_refine_results",
                 "kodi_local_stream",
@@ -1559,6 +1561,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             output.pop("index", None)
         return output
+
+
+    @app.post(API + "/ai/streaming/search", tags=["AI"], dependencies=[Depends(authenticated)])
+    async def search_streaming_with_ai(value: StreamingAIInput, request: Request):
+        """Personalized streaming results, without changing the local AI search contract."""
+        credentials = ai_config.credentials()
+        if not credentials:
+            raise HTTPException(503, "Configure the AI provider for streaming recommendations.")
+        if not settings.tmdb_api_token.strip():
+            raise HTTPException(503, "Configure TMDB for streaming recommendations.")
+        provider = ai_config.status()["provider"]
+        client_ip = request.client.host if request.client else "unknown"
+        async with ai_rate_lock:
+            attempts = ai_attempts[client_ip]
+            current = time.monotonic()
+            while attempts and attempts[0] < current - 60:
+                attempts.popleft()
+            if len(attempts) >= 10:
+                raise HTTPException(429, "AI search limit reached. Try again in one minute.")
+            attempts.append(current)
+        if ai_limit.locked():
+            raise HTTPException(429, "Too many AI searches in progress.")
+        async with ai_limit:
+            try:
+                with usage_session(ai_usage, ai_config.status()["monthly_budget_usd"], "search"):
+                    facets = await asyncio.to_thread(store.facets)
+                    prompt = value.prompt
+                    if value.previous_prompt:
+                        prompt = (
+                            "Previous search: " + value.previous_prompt + "\n"
+                            "Refine using: " + value.prompt
+                        )[:1000]
+                    plan = await interpret_prompt(
+                        prompt, *credentials, facets,
+                        **({"provider": provider} if provider != "openai" else {}),
+                    )
+                    return await recommend_streaming(
+                        store, settings.tmdb_api_token.strip(), value, plan,
+                        model=credentials[0], api_key=credentials[1], provider=provider,
+                    )
+            except AIBudgetExceeded as exc:
+                raise HTTPException(429, str(exc)) from None
+            except AIPriceUnavailable as exc:
+                raise HTTPException(422, str(exc)) from None
+            except (httpx.HTTPError, ValueError) as exc:
+                _LOG.warning("Streaming AI search failed: %s", type(exc).__name__)
+                raise HTTPException(502, "AI provider unavailable or invalid model.") from None
 
     @app.get(
         API + "/internal/search",
