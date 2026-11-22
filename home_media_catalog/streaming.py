@@ -286,7 +286,7 @@ def _reconcile_watch_progress(store: Any, rows: list[dict[str, Any]]) -> int:
                 watched = overrides.get(key, coord in baseline)
                 if not isinstance(watched, bool):
                     watched = coord in baseline
-                if (row["watch_status"] == "watched") != watched:
+                if row["watch_status"] != ("watched" if watched else "unwatched"):
                     db.execute(
                         "INSERT INTO personal(work_id,watched) VALUES(?,?) "
                         "ON CONFLICT(work_id) DO UPDATE SET watched=excluded.watched",
