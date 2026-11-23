@@ -55,6 +55,26 @@ def test_internal_edition_merges_with_external_without_mutating_it(store):
     assert store.media(source_type="internal")["total"] == 0
 
 
+def test_streaming_reference_without_subscriptions_is_canonical(store):
+    """A personal rating or watched flag can create a work without a provider."""
+    payload = entry(
+        format="", barcode=None, streaming_services=[], streaming_reference=True,
+    )
+    created = store.save_internal_media(payload)
+    again = store.save_internal_media(payload)
+    assert again == created
+    detail = store.detail(created["id"])
+    streaming = next(
+        edition for edition in detail["editions"]
+        if edition["source_type"] == "internal"
+    )
+    assert streaming["metadata"]["streaming_reference"] is True
+    assert "streaming_services" not in streaming["metadata"]
+    listed = store.media(kind="movie")["items"]
+    assert len(listed) == 1
+    assert listed[0]["streaming_reference"] is True
+
+
 def test_streaming_reference_deletion_purges_memberships_but_keeps_kodi(store):
     """Deleting a Streaming internal edition also removes list/collection use."""
     external = store.save_source({"name": "Kodi", "type": "kodi"})["id"]
