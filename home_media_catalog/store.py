@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE TABLE IF NOT EXISTS works (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
  sort_title TEXT NOT NULL DEFAULT '', original_title TEXT, year INTEGER, plot TEXT,
- runtime_minutes INTEGER, rating REAL, user_rating REAL, date_added TEXT, last_played TEXT,
+ runtime_minutes INTEGER, rating REAL, user_rating REAL, popularity REAL, date_added TEXT, last_played TEXT,
  watch_status TEXT NOT NULL DEFAULT 'unknown', play_count INTEGER, resume_seconds REAL DEFAULT 0,
  total_seconds REAL DEFAULT 0, parent_id TEXT REFERENCES works(id) ON DELETE SET NULL,
  season INTEGER, episode INTEGER, genres TEXT DEFAULT '[]', formats TEXT DEFAULT '[]',
@@ -285,6 +285,13 @@ class Store:
                 )
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            if "popularity" not in {row["name"] for row in conn.execute("PRAGMA table_info(works)")}:
+                conn.execute("ALTER TABLE works ADD COLUMN popularity REAL")
+                conn.execute(
+                    "UPDATE works SET popularity=json_extract(e.payload,'$.tmdb_popularity') "
+                    "FROM enrichment e WHERE e.work_id=works.id "
+                    "AND json_type(e.payload,'$.tmdb_popularity') IN ('real','integer')"
+                )
             # Existing SQLite databases predate locally managed collections.
             if "is_manual" not in {
                 row["name"] for row in conn.execute("PRAGMA table_info(collections)")
@@ -1079,6 +1086,8 @@ class Store:
                     metadata={
                         **self._physical_edition_fields(data.get("edition_details")),
                         "barcode": barcode, "internal": True,
+                        **({"tmdb_popularity": data["popularity"]}
+                           if self._tmdb_popularity(data.get("popularity")) is not None else {}),
                         **({"streaming_services": data["streaming_services"]}
                            if data.get("streaming_services") else {}),
                         **({"streaming_reference": True}
@@ -2216,6 +2225,13 @@ class Store:
         return float(value) if 0 < value <= 10 else None
 
     @staticmethod
+    def _tmdb_popularity(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        score = float(value)
+        return score if math.isfinite(score) and score >= 0 else None
+
+    @staticmethod
     def _rebuild(conn: sqlite3.Connection, work_id: str) -> None:
         rows = conn.execute(
             "SELECT r.id,r.payload,s.type FROM records r JOIN sources s ON s.id=r.source_id WHERE r.work_id=?",
@@ -2374,6 +2390,12 @@ class Store:
                     "episode",
                 )
             },
+            "popularity": next(
+                (value for payload, _ in entries
+                 if (value := Store._tmdb_popularity(
+                     (payload.get("metadata") or {}).get("tmdb_popularity")
+                 )) is not None), None
+            ),
             "last_played": max(
                 (p["last_played"] for p, _ in entries if p.get("last_played")), default=None
             ),
@@ -2391,6 +2413,9 @@ class Store:
         }
         if enrichment:
             enriched = json.loads(enrichment["payload"])
+            current_popularity = Store._tmdb_popularity(enriched.get("tmdb_popularity"))
+            if current_popularity is not None:
+                values["popularity"] = current_popularity
             tmdb_rating = Store._tmdb_rating(enriched.get("tmdb_rating"))
             # An explicitly refreshed TMDB vote supersedes source ratings;
             # otherwise TMDB only fills a missing public rating.
@@ -3367,6 +3392,7 @@ class Store:
             "year": "year",
             "rating": "rating",
             "user_rating": "user_rating",
+            "popularity": "popularity",
             "last_played": "last_played",
             "episode": "episode",
         }
@@ -4017,6 +4043,8 @@ class Store:
                               "edition_format_overrides"):
                     if field in old_payload:
                         payload = {**payload, field: old_payload[field]}
+                if "tmdb_popularity" not in payload and "tmdb_popularity" in old_payload:
+                    payload = {**payload, "tmdb_popularity": old_payload["tmdb_popularity"]}
                 # A lookup without a TMDB vote keeps the last known rating.
                 if "tmdb_rating" not in payload:
                     for field in ("tmdb_rating", "tmdb_rating_refreshed_at"):
@@ -4675,6 +4703,9 @@ class Store:
                     payload["tmdb_id"] = tmdb_id
                 if poster and not payload.get("poster"):
                     payload["poster"] = poster
+                incoming_popularity = self._tmdb_popularity(item.get("tmdb_popularity"))
+                if incoming_popularity is not None:
+                    payload["tmdb_popularity"] = incoming_popularity
                 # Local-first rating refresh: the most recent explicit refresh
                 # wins, whether it ran on the server or on a device.
                 rating = self._tmdb_rating(item.get("tmdb_rating"))
