@@ -494,6 +494,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "streaming_tmdb_discovery",
                 "streaming_chart_fallback",
                 "streaming_state_sync",
+                "streaming_reference_unscoped",
             ],
         }
 
