@@ -157,6 +157,43 @@ function persistCategoryOrder(ids){
   persistPreference('genres',ids.filter(id=>id.startsWith('category:'))
     .map(id=>id.slice('category:'.length)).join(','));
 }
+
+function renderCategoryPreferences(){
+  const options=availableGenres();
+  const byKey=new Map(options.map(option=>[option[0],option]));
+  const selected=new Set(selectedGenreKeys());
+  const ids=orderedCategoryIDs();
+  const titles={
+    popular_tv:'Popular series',popular_movie:'Popular movies',
+    recent_tv:'Recent series',recent_movie:'Recent movies'
+  };
+  const configured=ids.map((id,index)=>{
+    const key=id.slice(id.indexOf(':')+1);
+    const featured=id.startsWith('featured:');
+    const option=byKey.get(key);
+    const title=featured?titles[key]:option?.[1];
+    if(!title)return '';
+    const attribute=featured?'data-streaming-featured':'data-streaming-genre';
+    const checked=featured?featuredEnabled(key):selected.has(key);
+    return '<div class="streaming-category-settings-row"><label><input type="checkbox" '+
+      attribute+'="'+esc(key)+'" '+(checked?'checked':'')+'> '+
+      (featured?streamingSymbol(key.startsWith('popular_')?'popular':'recent'):
+        genreIcons(option))+esc(title)+'</label>'+
+      '<span class="streaming-category-reorder">'+
+      '<button type="button" data-streaming-move="'+esc(id)+'" data-move="-1" '+
+      (index===0?'disabled':'')+' aria-label="Move '+esc(title)+' up">↑</button>'+
+      '<button type="button" data-streaming-move="'+esc(id)+'" data-move="1" '+
+      (index===ids.length-1?'disabled':'')+' aria-label="Move '+esc(title)+' down">↓</button>'+
+      '</span></div>';
+  });
+  const missing=options.filter(row=>!selected.has(row[0])).map(row=>
+    '<label class="streaming-available-genre"><input type="checkbox" '+
+      'data-streaming-genre="'+esc(row[0])+'"> '+
+      genreIcons(row)+esc(row[1])+'</label>');
+  $('streaming-genre-options').innerHTML=configured.join('')+
+    (missing.length?'<div class="streaming-category-unselected"><strong>Autres catégories</strong>'+
+      missing.join('')+'</div>':'');
+}
 function scoreLimit(key,fallback){
   const score=Number(preference(key,String(fallback)));
   return Number.isFinite(score)?Math.min(10,Math.max(0,score)):fallback;
@@ -216,20 +253,13 @@ function syncFilterPreferences(){
   $('streaming-personal-rating-filter').value=preference('personal_rating_filter','all');
   streamingRatingRanges.public?.set(scoreLimit('rating_min',0),scoreLimit('rating_max',10));
   streamingRatingRanges.personal?.set(scoreLimit('user_rating_min',0),scoreLimit('user_rating_max',10));
-  $('streaming-show-tops').checked=preference('show_tops','true')==='true';
-  $('streaming-show-recent').checked=preference('show_recent','true')==='true';
   $('streaming-show-popularity').checked=displayPreference('popularity');
   $('streaming-show-personal-rating').checked=displayPreference('personal_rating');
   const subscribed=new Set(subscribedServices());
   $('streaming-subscription-options').innerHTML=Object.keys(names).map(key=>
     '<label><input type="checkbox" data-streaming-subscription="'+esc(key)+'" '+
     (subscribed.has(key)?'checked':'')+'> '+esc(names[key])+'</label>').join('');
-  const genres=new Set(preference('genres','action,drama,comedy').split(','));
-  $('streaming-genre-options').innerHTML=genreOptions.map(option=>{
-    const [key,label]=option;
-    return '<label><input type="checkbox" data-streaming-genre="'+esc(key)+'" '+
-      (genres.has(key)?'checked':'')+'> '+genreIcons(option)+esc(label)+'</label>';
-  }).join('');
+  renderCategoryPreferences();
 }
 function indexPersonalRows(){
   state.personal=new Map(state.rows.filter(row=>
@@ -1366,7 +1396,6 @@ export function startStreaming(){
     const keyById={
       'streaming-watch-filter':'watch_filter',
       'streaming-personal-rating-filter':'personal_rating_filter',
-      'streaming-show-tops':'show_tops','streaming-show-recent':'show_recent'
     };
     const key=keyById[target.id];
     if(target.dataset.streamingSubscription){
@@ -1385,11 +1414,16 @@ export function startStreaming(){
         'popularity':'personal_rating',target.checked);
       refreshVisibleCards();
       return;
+    }else if(target.dataset.streamingFeatured){
+      persistPreference('special_category_'+target.dataset.streamingFeatured,
+        String(target.checked));
+      renderCategoryPreferences();
     }else if(target.dataset.streamingGenre){
-      const genre=target.dataset.streamingGenre;
-      const chosen=new Set(preference('genres','action,drama,comedy').split(',').filter(Boolean));
-      if(target.checked)chosen.add(genre);else chosen.delete(genre);
-      persistPreference('genres',Array.from(chosen).sort().join(','));
+      const id='category:'+target.dataset.streamingGenre;
+      const ids=orderedCategoryIDs().filter(item=>item!==id);
+      if(target.checked)ids.push(id);
+      persistCategoryOrder(ids);
+      renderCategoryPreferences();
     } else if(key){
       if(target.type==='checkbox')persistPreference(key,String(target.checked));
       else persistPreference(key,target.value);
@@ -1398,6 +1432,18 @@ export function startStreaming(){
         return;
       }
     }else return;
+    renderBrowser();
+  });
+  $('streaming-customize').addEventListener('click',event=>{
+    const button=event.target.closest('[data-streaming-move]');
+    if(!button)return;
+    const ids=orderedCategoryIDs(),index=ids.indexOf(button.dataset.streamingMove);
+    const destination=index+Number(button.dataset.move);
+    if(index<0||destination<0||destination>=ids.length)return;
+    const [entry]=ids.splice(index,1);
+    ids.splice(destination,0,entry);
+    persistCategoryOrder(ids);
+    renderCategoryPreferences();
     renderBrowser();
   });
   $('streaming-search').addEventListener('input',e=>{
