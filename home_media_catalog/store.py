@@ -3004,6 +3004,8 @@ class Store:
         collection: str | None = None,
         collection_id: str | None = None,
         source_type: str | list[str] | None = None,
+        streaming_mode: str = "all",
+        streaming_service: str | list[str] | None = None,
         source_id: str | None = None,
         parent_id: str | None = None,
         season: int | None = None,
@@ -3201,6 +3203,67 @@ class Store:
                         f"WHERE value COLLATE NOCASE IN ({placeholders}))"
                     )
                 params.extend(values)
+        if streaming_mode not in {"all", "selected", "none"}:
+            raise ValueError("Invalid streaming catalogue filter.")
+        if streaming_mode != "all":
+            allowed_services = {
+                "netflix", "disney_plus", "prime_video", "apple_tv_plus",
+                "hbo_max", "paramount_plus", "crunchyroll", "rakuten_viki", "mubi",
+            }
+            selected_services = ([streaming_service]
+                                 if isinstance(streaming_service, str)
+                                 else streaming_service or [])
+            if len(selected_services) > len(allowed_services) or any(
+                service not in allowed_services for service in selected_services
+            ):
+                raise ValueError("Invalid streaming service.")
+            selected_services = list(dict.fromkeys(selected_services))
+            # A canonical internal edition retains service keys even if its
+            # original item: row's work_id has been merged into Kodi/CLZ.
+            # Historical catalogues may still only have the TMDB-indexed
+            # Streaming journal, so consult both representations.
+            if streaming_mode == "selected":
+                if not selected_services:
+                    clauses.append("0=1")
+                else:
+                    places = ",".join("?" for _ in selected_services)
+                    edition_match = (
+                        "EXISTS(SELECT 1 FROM records sr,"
+                        " json_each(sr.payload,'$.metadata.streaming_services') sp "
+                        "WHERE sr.work_id=w.id AND sp.type='text' "
+                        f"AND sp.value IN ({places}))"
+                    )
+                    journal_conditions = " OR ".join(
+                        "instr(','||coalesce(json_extract(st.payload,'$.services'),'')"
+                        "||',',','||?||',')>0"
+                        for _ in selected_services
+                    )
+                    journal_match = (
+                        "EXISTS(SELECT 1 FROM identifiers si "
+                        "JOIN streaming_state st ON st.key='item:'||"
+                        "(CASE WHEN w.kind='tvshow' THEN 'tv' ELSE 'movie' END)"
+                        "||':'||si.value WHERE si.work_id=w.id "
+                        "AND si.namespace='tmdb' AND st.deleted=0 "
+                        f"AND ({journal_conditions}))"
+                    )
+                    clauses.append("(" + edition_match + " OR " + journal_match + ")")
+                    params.extend(selected_services)
+                    params.extend(selected_services)
+            else:
+                edition_match = (
+                    "EXISTS(SELECT 1 FROM records sr,"
+                    " json_each(sr.payload,'$.metadata.streaming_services') sp "
+                    "WHERE sr.work_id=w.id AND sp.type='text' AND sp.value<>'')"
+                )
+                journal_match = (
+                    "EXISTS(SELECT 1 FROM identifiers si "
+                    "JOIN streaming_state st ON st.key='item:'||"
+                    "(CASE WHEN w.kind='tvshow' THEN 'tv' ELSE 'movie' END)"
+                    "||':'||si.value WHERE si.work_id=w.id "
+                    "AND si.namespace='tmdb' AND st.deleted=0 "
+                    "AND coalesce(json_extract(st.payload,'$.services'),'')<>'')"
+                )
+                clauses.append("NOT (" + edition_match + " OR " + journal_match + ")")
         if year_min is not None:
             clauses.append("w.year>=?")
             params.append(year_min)
