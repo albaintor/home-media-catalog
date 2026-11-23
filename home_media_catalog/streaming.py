@@ -710,6 +710,7 @@ def _reconcile_streaming_catalogue(store: Any, rows: list[dict[str, Any]]) -> in
             "year": int(year) if year is not None else None,
             "poster_path": poster, "backdrop_path": backdrop,
             "format": "", "streaming_services": services,
+            "streaming_reference": True,
         })
     # A removed heart must clear its actual internal catalogue edition, not
     # merely its timestamped state row. Guard deletion using the provenance

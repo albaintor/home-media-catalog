@@ -1074,9 +1074,11 @@ class Store:
                     metadata={
                         **self._physical_edition_fields(data.get("edition_details")),
                         "barcode": barcode, "internal": True,
-                        **({"streaming_services": data["streaming_services"],
-                            "streaming_reference": True}
+                        **({"streaming_services": data["streaming_services"]}
                            if data.get("streaming_services") else {}),
+                        **({"streaming_reference": True}
+                           if data.get("streaming_reference") or data.get("streaming_services")
+                           else {}),
                         **({"intentional_copy": True} if data.get("allow_duplicate") else {}),
                         **({
                             "physical_season": physical_season,
