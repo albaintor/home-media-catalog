@@ -12,7 +12,7 @@ force the app to show an update-required screen before reading the catalogue.
 # Public schema/DTO revision, independent of the backwards-compatibility
 # contract negotiated by iOS. Increment on every data-model change; the
 # server's version identifier includes the model revision automatically.
-DATA_MODEL_VERSION = 15
+DATA_MODEL_VERSION = 16
 
 # Contract 2 requires the bounded rich-detail batch endpoint used by iOS.
 # Keep contract 1 available for older installed app versions.
@@ -38,7 +38,11 @@ MIN_MOBILE_CONTRACT = 1
 # Contract 11 adds season-aware episode snapshots, aired-episode inventories,
 # reverse synchronization of canonical personal edits, and legacy retrofitting.
 # Older clients remain supported while they use the pre-11 watch-status behavior.
-MAX_MOBILE_CONTRACT = 11
+# Contract 12 distinguishes canonical Streaming-edition provenance from the
+# optional list of active streaming providers, allowing iPhone-authored notes,
+# watched state and collection/list membership without a heart/provider.
+# Contract 11 and older clients remain supported.
+MAX_MOBILE_CONTRACT = 12
 
 
 def mobile_compatibility() -> dict[str, int]:
