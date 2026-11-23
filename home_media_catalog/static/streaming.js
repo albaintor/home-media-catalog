@@ -1014,12 +1014,14 @@ async function refreshListsCollections(){
 }
 async function ensureWorkID(title){
   const key=keyFor(title);
-  let workID=state.metrics.get(key)?.work_id||savedRow(title)?.payload?.work_id;
+  const tracked=state.rows.find(row=>!row.deleted && row.key==='item:'+key);
+  let workID=state.metrics.get(key)?.work_id||tracked?.payload?.work_id;
   if(workID)return workID;
-  // Saving a Streaming heart materializes the canonical work on the server.
-  if(!savedRow(title)){
-    const saved=await save(title);
-    if(!saved)throw new Error('Could not save the title to the catalogue.');
+  // A list/collection creates an unliked canonical edition, exactly as on
+  // the iPhone. It must never silently activate the explicit heart.
+  if(!tracked){
+    const saved=await save(title,false);
+    if(!saved)throw new Error('Could not track the title in the catalogue.');
   } else {
     await api('streaming/state/sync',{
       method:'POST',headers:{
@@ -1294,29 +1296,32 @@ function closePerson(){
   ++state.personVersion;
   if($('streaming-person-dialog').open)$('streaming-person-dialog').close();
 }
-async function save(title){
+async function save(title,requestedLike=null){
   try{
     if(!state.session)state.session=await api('auth/session');
     if(state.session.role!=='admin')throw new Error('Administrator access required to save streaming titles.');
     const existing=savedRow(title);
+    const liked=requestedLike===null?!existing:!!requestedLike;
     const selected=servicesFor(title).filter(x=>names[x]);
     const membership=selected.length?selected:state.visible;
     const key='item:'+keyFor(title);
     const original=state.rows.find(row=>row.key===key);
     const nextTime=new Date(Math.max(Date.now(),(Date.parse(original?.modified_at)||0)+2)).toISOString();
     const payload={
+      ...(original?.deleted?{}:original?.payload||{}),
       tmdb_id:String(title.id),kind:title.kind,title:title.title,
       original_title:title.original_title||title.title,
       overview:title.overview||'',rating:String(title.rating||0),
       popularity:title.popularity==null?'':String(title.popularity),
       year:title.year?String(title.year):'',poster_path:title.poster_path||'',
       backdrop_path:title.backdrop_path||'',services:membership.join(','),
-      status:'pending'
+      status:original?.payload?.work_id?'saved':'pending',
+      liked:liked?'true':'false'
     };
     const result=await api('streaming/state/sync',{
       method:'POST',headers:{
         'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
-      },body:JSON.stringify({changes:[{key,payload:existing?.payload||payload,modified_at:nextTime,deleted:!!existing}]})
+      },body:JSON.stringify({changes:[{key,payload,modified_at:nextTime,deleted:false}]})
     });
     state.rows=result.rows;
     indexPersonalRows();
