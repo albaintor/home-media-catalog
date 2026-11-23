@@ -208,7 +208,7 @@ async def enrich_tmdb(detail: dict, token: str) -> dict:
         ) from exc
 
 
-async def tmdb_rating_lookup(get, detail: dict) -> tuple[str, float | None] | None:
+async def tmdb_metrics_lookup(get, detail: dict) -> tuple[str, float | None, float | None] | None:
     """Current TMDB vote for one work: a single lightweight details request.
 
     No credits, videos or artwork are requested. Returns None when the work
@@ -236,7 +236,20 @@ async def tmdb_rating_lookup(get, detail: dict) -> tuple[str, float | None] | No
         if exc.response.status_code == 404:
             return None
         raise
-    return tmdb_id, tmdb_rating(data.get("vote_average"))
+    popularity = data.get("popularity")
+    if isinstance(popularity, bool) or not isinstance(popularity, (int, float)):
+        popularity = None
+    elif not math.isfinite(popularity) or popularity < 0:
+        popularity = None
+    return tmdb_id, tmdb_rating(data.get("vote_average")), (
+        float(popularity) if popularity is not None else None
+    )
+
+
+async def tmdb_rating_lookup(get, detail: dict) -> tuple[str, float | None] | None:
+    """Compatibility wrapper preserving the two-field public rating contract."""
+    result = await tmdb_metrics_lookup(get, detail)
+    return (result[0], result[1]) if result else None
 
 
 async def enrich_tmdb_season_guide(detail: dict, season: int, token: str) -> list[dict]:
