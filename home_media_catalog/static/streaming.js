@@ -105,6 +105,9 @@ const genreOptions = [
   ['talk_shows','Talk shows',null,10767],
   ['news','News & current affairs',null,10763],
   ['war_movies','War movies',10752,null],
+  ['sci_fi_movies','Science fiction movies',878,null],
+  ['american_documentary','American documentaries',99,99,
+    {originCountry:'US',originalLanguage:'en'}],
   ['action_tv','Action & adventure series',null,10759],
   ['scifi_tv','Science fiction & fantasy series',null,10765]
 ];
@@ -214,13 +217,14 @@ function personalRows(kind) {
     /^item:(movie|tv):[0-9]+$/.test(row.key) &&
     (!kind || row.payload?.kind===kind) &&
     ['saved','pending'].includes(row.payload?.status) &&
-    row.payload?.title)
+    row.payload?.liked!=='false' && row.payload?.title)
     .sort((a,b)=>String(b.modified_at||'').localeCompare(String(a.modified_at||'')));
 }
 function keyFor(title){return title.kind+':'+title.id;}
 function savedRow(title){
   return state.rows.find(row=>!row.deleted&&row.key==='item:'+keyFor(title) &&
-    ['saved','pending'].includes(row.payload?.status));
+    ['saved','pending'].includes(row.payload?.status) &&
+    row.payload?.liked!=='false');
 }
 function normalizeTitle(row){
   const p=row.payload;
@@ -388,8 +392,8 @@ function matchesTitleText(title,phrase){
 }
 function matchesSavedSearch(title){return matchesTitleText(title,state.query);}
 function matchesSavedVisibility(title){
-  return state.visible.length>0 &&
-    servicesFor(title).some(service=>state.visible.includes(service)) &&
+  const available=servicesFor(title);
+  return (!available.length||available.some(service=>state.visible.includes(service))) &&
     matchesSavedSearch(title) && matchesStreamingFilters(title);
 }
 function renderSaved(){
