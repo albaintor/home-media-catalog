@@ -2906,6 +2906,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             del payload
             async with personal_edit_lock:
                 previous, restored = await asyncio.to_thread(import_backup, store, document)
+                # Rebuild the canonical Streaming editions and personal/episode
+                # projections before the restore endpoint reports success. This
+                # is also idempotent when the backed-up works are already present.
+                restored_streaming = await asyncio.to_thread(_merge, store, [])
+                await asyncio.to_thread(
+                    _reconcile_streaming_catalogue, store, restored_streaming)
+                await asyncio.to_thread(
+                    _reconcile_catalogue_personal, store, restored_streaming)
+                await asyncio.to_thread(
+                    _reconcile_watch_progress, store, restored_streaming)
         except (ValueError, UnicodeError) as exc:
             raise HTTPException(422, str(exc)) from exc
         except RuntimeError as exc:
