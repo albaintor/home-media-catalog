@@ -292,6 +292,7 @@ class Store:
                     "FROM enrichment e WHERE e.work_id=works.id "
                     "AND json_type(e.payload,'$.tmdb_popularity') IN ('real','integer')"
                 )
+            conn.execute("CREATE INDEX IF NOT EXISTS works_popularity ON works(popularity,id)")
             # Existing SQLite databases predate locally managed collections.
             if "is_manual" not in {
                 row["name"] for row in conn.execute("PRAGMA table_info(collections)")
@@ -4769,7 +4770,7 @@ class Store:
     RATING_JOB_KEY = "tmdb_rating_refresh_v1"
 
     def _store_tmdb_rating(self, conn, work_id: str, rating: float,
-                           refreshed: datetime) -> str:
+                           refreshed: datetime, popularity: float | None = None) -> str:
         """Store a refreshed TMDB vote; the most recent refresh always wins.
 
         Returns "accepted" when the public rating changed, otherwise "unchanged".
@@ -4785,6 +4786,9 @@ class Store:
             return "unchanged"
         payload = {**old, "tmdb_rating": rating,
                    "tmdb_rating_refreshed_at": refreshed.isoformat(timespec="seconds")}
+        metric = self._tmdb_popularity(popularity)
+        if metric is not None:
+            payload["tmdb_popularity"] = metric
         if cached:
             conn.execute("UPDATE enrichment SET payload=? WHERE work_id=?",
                          (encode(payload), work_id))
@@ -4793,16 +4797,23 @@ class Store:
             # so it never suppresses the automatic credits/trailers worker.
             conn.execute("INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?)",
                          (work_id, encode(payload), now()))
-        before = conn.execute("SELECT rating FROM works WHERE id=?", (work_id,)).fetchone()
+        before = conn.execute(
+            "SELECT rating,popularity FROM works WHERE id=?", (work_id,)
+        ).fetchone()
         self._rebuild(conn, work_id)
-        after = conn.execute("SELECT rating FROM works WHERE id=?", (work_id,)).fetchone()
-        if (before and before["rating"]) == (after and after["rating"]):
+        after = conn.execute(
+            "SELECT rating,popularity FROM works WHERE id=?", (work_id,)
+        ).fetchone()
+        if before and after and all(
+            before[field] == after[field] for field in ("rating", "popularity")
+        ):
             return "unchanged"
         conn.execute("INSERT INTO rating_changes(work_id,updated_at) VALUES(?,?)",
                      (work_id, now()))
         return "accepted"
 
-    def save_tmdb_rating(self, work_id: str, rating: float) -> str:
+    def save_tmdb_rating(self, work_id: str, rating: float,
+                         popularity: float | None = None) -> str:
         """Server-side bulk refresh result for one canonical work."""
         value = self._tmdb_rating(rating)
         if value is None:
@@ -4811,7 +4822,7 @@ class Store:
             conn.execute("BEGIN IMMEDIATE")
             if not conn.execute("SELECT 1 FROM works WHERE id=?", (work_id,)).fetchone():
                 return "rejected"
-            return self._store_tmdb_rating(conn, work_id, value, datetime.now(UTC))
+            return self._store_tmdb_rating(conn, work_id, value, datetime.now(UTC), popularity)
 
     def merge_device_tmdb_ratings(self, items: list[dict[str, Any]]) -> dict[str, list[str]]:
         """Accept ratings refreshed on a device (local-first) by canonical work.
@@ -4850,14 +4861,14 @@ class Store:
         """Bounded public-rating changes, including those made by other devices."""
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT c.id,c.work_id,w.rating FROM rating_changes c "
+                "SELECT c.id,c.work_id,w.rating,w.popularity FROM rating_changes c "
                 "JOIN works w ON w.id=c.work_id WHERE c.id>? ORDER BY c.id LIMIT ?",
                 (max(0, after), min(500, max(1, limit))),
             ).fetchall()
             cursor = conn.execute("SELECT COALESCE(MAX(id),0) FROM rating_changes").fetchone()[0]
         latest: dict[str, Any] = {}
         for row in rows:
-            latest[row["work_id"]] = row["rating"]
+            latest[row["work_id"]] = {"rating": row["rating"], "popularity": row["popularity"]}
         if rows:
             next_cursor = rows[-1]["id"]
         elif after > cursor:
@@ -4867,7 +4878,7 @@ class Store:
         return {
             "cursor": next_cursor,
             "has_more": bool(rows) and rows[-1]["id"] < cursor,
-            "changes": [{"media_id": key, "rating": value} for key, value in latest.items()],
+            "changes": [{"media_id": key, **value} for key, value in latest.items()],
         }
 
     def tmdb_rating_candidates(self) -> list[str]:
