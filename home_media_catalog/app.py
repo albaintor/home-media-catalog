@@ -71,6 +71,7 @@ from .enrichment import (
     resolve_tmdb_poster,
     tmdb_connection,
     tmdb_rating_lookup,
+    tmdb_metrics_lookup,
 )
 from .internal_catalog import (
     find_tmdb,
@@ -935,10 +936,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     found = None
                                     if detail:
                                         async with enrichment_lock:
-                                            found = await tmdb_rating_lookup(get, detail)
+                                            found = await tmdb_metrics_lookup(get, detail)
                                     if found and found[1] is not None:
                                         outcome = await asyncio.to_thread(
-                                            store.save_tmdb_rating, media_id, found[1])
+                                            store.save_tmdb_rating, media_id, found[1], found[2])
                                         counts["updated" if outcome == "accepted" else "unchanged"] += 1
                                     else:
                                         counts["failed"] += 1
