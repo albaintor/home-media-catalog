@@ -63,6 +63,11 @@ def test_default_grid_hides_only_unliked_streaming_only_works(store):
         "movie:111106", "movie", "Streaming 111106",
         identifiers={"tmdb": "111106"},
     )])
+    mixed_titles = [m for m in store.media()["items"]
+                    if m["title"] == "Streaming 111106"]
+    assert len(mixed_titles) == 1
+    mixed = mixed_titles[0]["id"]
+    assert {"kodi", "internal"} <= set(mixed_titles[0]["source_types"])
     # Default/raw API still returns all six works for local-first replication.
     assert store.media()["total"] == 6
     visible = store.media(include_streaming_personal=False)
