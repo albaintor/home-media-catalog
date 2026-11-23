@@ -125,6 +125,38 @@ function preference(key,fallback) {
   const row=state.rows.find(r=>r.key==='prefs:'+key && !r.deleted);
   return typeof row?.payload?.value==='string'?row.payload.value:fallback;
 }
+
+const defaultGenres='action,drama,comedy,k_drama,anime,mystery,thriller';
+const featuredIDs=['popular_tv','popular_movie','recent_tv','recent_movie'];
+function availableGenres(){
+  const dynamic=state.rows.filter(row=>!row.deleted &&
+    /^category:keyword:[0-9]+$/.test(row.key) && !!row.payload?.name)
+    .map(row=>{
+      const id=Number(row.key.slice('category:keyword:'.length));
+      return ['keyword_'+id,row.payload.name,null,null,{allowNoGenre:true,keywordID:id}];
+    });
+  return [...genreOptions,...dynamic.sort((a,b)=>a[1].localeCompare(b[1]))];
+}
+function selectedGenreKeys(){
+  return [...new Set(preference('genres',defaultGenres).split(',').filter(Boolean))];
+}
+function orderedCategoryIDs(){
+  const available=new Set(availableGenres().map(row=>row[0]));
+  const all=featuredIDs.map(key=>'featured:'+key).concat(
+    selectedGenreKeys().filter(key=>available.has(key)).map(key=>'category:'+key));
+  const allowed=new Set(all),seen=new Set();
+  return preference('category_order','').split(',').filter(id=>allowed.has(id))
+    .concat(all).filter(id=>!seen.has(id)&&seen.add(id));
+}
+function featuredEnabled(key){
+  const old=key.startsWith('popular_')?'show_tops':'show_recent';
+  return preference('special_category_'+key,preference(old,'true'))==='true';
+}
+function persistCategoryOrder(ids){
+  persistPreference('category_order',ids.join(','));
+  persistPreference('genres',ids.filter(id=>id.startsWith('category:'))
+    .map(id=>id.slice('category:'.length)).join(','));
+}
 function scoreLimit(key,fallback){
   const score=Number(preference(key,String(fallback)));
   return Number.isFinite(score)?Math.min(10,Math.max(0,score)):fallback;
@@ -427,21 +459,32 @@ function filterChips(){
 }
 function computeShelves(){
   const kinds=state.kind==='both'?['tv','movie']:[state.kind];
-  const selections=preference('genres','action,drama,comedy').split(',');
-  const genres=genreOptions.filter(g=>selections.includes(g[0]));
+  const byKey=new Map(availableGenres().map(option=>[option[0],option]));
   const result=[];
-  if(preference('show_tops','true')==='true')
-    for(const kind of kinds) result.push({kind,sort:'top',genre:null,
-      heading:kind==='tv'?'Popular series across my services':'Popular movies across my services'});
-  if(preference('show_recent','true')==='true')
-    for(const kind of kinds) result.push({kind,sort:'recent',genre:null,
-      heading:kind==='tv'?'Recently available · series':'Recently available · movies'});
-  for(const g of genres)for(const kind of kinds){
-    const genre=kind==='tv'?g[3]:g[2],extra=g[4]||{};
-    if(genre==null&&!(extra.allowNoGenre&&extra.kind===kind))continue;
-    result.push({kind,sort:'popularity',genre,genreKey:g[0],
-      originCountry:extra.originCountry,originalLanguage:extra.originalLanguage,
-      heading:g[1]+' · '+(kind==='tv'?'series':'movies')});
+  for(const id of orderedCategoryIDs()){
+    if(id.startsWith('featured:')){
+      const key=id.slice('featured:'.length);
+      if(!featuredEnabled(key))continue;
+      const kind=key.endsWith('_tv')?'tv':'movie';
+      if(!kinds.includes(kind))continue;
+      const popular=key.startsWith('popular_');
+      result.push({kind,sort:popular?'top':'recent',genre:null,
+        heading:popular?(kind==='tv'?'Popular series across my services':
+          'Popular movies across my services'):
+          (kind==='tv'?'Recently available · series':'Recently available · movies')});
+    }else{
+      const option=byKey.get(id.slice('category:'.length));
+      if(!option)continue;
+      const [key,label,movieGenre,tvGenre,extra={}]=option;
+      for(const kind of kinds){
+        const genre=kind==='tv'?tvGenre:movieGenre;
+        if(genre==null&&!(extra.allowNoGenre&&(!extra.kind||extra.kind===kind)))continue;
+        result.push({kind,sort:'popularity',genre,genreKey:key,
+          keywordID:extra.keywordID,originCountry:extra.originCountry,
+          originalLanguage:extra.originalLanguage,
+          heading:label+' · '+(kind==='tv'?'series':'movies')});
+      }
+    }
   }
   return result;
 }
@@ -566,7 +609,7 @@ async function publicCachedRequest(key,ttl,loader){
 }
 
 function cacheKey(def,page=1) {
-  return [def.kind,def.sort,def.genre||'',def.originCountry||'',
+  return [def.kind,def.sort,def.genre||'',def.keywordID||'',def.originCountry||'',
     def.originalLanguage||'',state.visible.join(','),validRegion(),page].join(':');
 }
 async function retrieve(def,page=1){
@@ -582,6 +625,7 @@ async function retrieve(def,page=1){
     params.set('page',String(page));
     params.set('sort',def.sort==='top'?'popularity':def.sort);
     if(def.genre!=null)params.set('genre',String(def.genre));
+    if(def.keywordID)params.set('keyword_id',String(def.keywordID));
     if(def.originCountry)params.set('origin_country',def.originCountry);
     if(def.originalLanguage)params.set('original_language',def.originalLanguage);
   }
@@ -769,6 +813,7 @@ async function performSubviewSearch(){
       q:phrase,service:state.visible.join(','),kind:def.kind,region:validRegion()
     });
     if(def.genre!=null)params.set('genre',String(def.genre));
+    if(def.keywordID)params.set('keyword_id',String(def.keywordID));
     if(def.originCountry)params.set('origin_country',def.originCountry);
     if(def.originalLanguage)params.set('original_language',def.originalLanguage);
     const cacheID='category-search:'+cacheKey(def,1)+':'+phrase.toLocaleLowerCase();
