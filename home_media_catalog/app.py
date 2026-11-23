@@ -70,7 +70,6 @@ from .enrichment import (
     probe_tmdb,
     resolve_tmdb_poster,
     tmdb_connection,
-    tmdb_rating_lookup,
     tmdb_metrics_lookup,
 )
 from .internal_catalog import (
