@@ -261,7 +261,8 @@ def _reconcile_watch_progress(store: Any, rows: list[dict[str, Any]]) -> int:
             inventory = states.get("inventory:tv:" + tmdb_id)
             if personal is None:
                 continue
-            status = effective_series_status(personal, inventory)
+            cleared = personal.get("watch_cleared") == "true"
+            status = "unwatched" if cleared else effective_series_status(personal, inventory)
             available = decode_episodes((inventory or {}).get("episodes"))
             baseline = decode_episodes(personal.get("watched_episode_snapshot"))
             try:
@@ -280,10 +281,10 @@ def _reconcile_watch_progress(store: Any, rows: list[dict[str, Any]]) -> int:
                 # The iPhone may have changed an episode before its public
                 # TMDB inventory was uploaded. Explicit local overrides and
                 # watched snapshots must still be applied to canonical episodes.
-                if (coord not in available and coord not in baseline
+                if (not cleared and coord not in available and coord not in baseline
                         and key not in overrides):
                     continue
-                watched = overrides.get(key, coord in baseline)
+                watched = False if cleared else overrides.get(key, coord in baseline)
                 if not isinstance(watched, bool):
                     watched = coord in baseline
                 if row["watch_status"] != ("watched" if watched else "unwatched"):
@@ -325,8 +326,8 @@ def _reconcile_catalogue_personal(
 
     Streaming rows are edited on the iPhone first. /state/sync reconciles the
     journal, then the NAS updates its canonical /media read model without
-    requiring a separate, failure-prone PATCH from the same device. Never
-    create catalogue entries merely because a Streaming title was rated.
+    requiring a separate, failure-prone PATCH from the same device. Canonical
+    Streaming-only works are created by the preceding item reconciliation.
     """
     states = {
         row["key"]: row["payload"]
@@ -367,8 +368,11 @@ def _reconcile_catalogue_personal(
 
         # A movie has a single watched flag. For TV, the episode inventory and
         # partial progress remain authoritative in _reconcile_watch_progress.
-        if kind == "movie" and payload.get("watched") in {"true", "false"}:
-            watched = payload["watched"] == "true"
+        if kind == "movie" and (
+            payload.get("watched") in {"true", "false"}
+            or payload.get("watch_cleared") == "true"
+        ):
+            watched = payload.get("watched") == "true"
             if row["personal_watched"] is None or bool(row["personal_watched"]) != watched:
                 updates["watched"] = watched
         if updates and store.update_personal(row["work_id"], updates):
