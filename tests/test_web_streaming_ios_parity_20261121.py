@@ -23,8 +23,6 @@ def test_streaming_web_exposes_native_watch_and_rating_filters():
         "streaming-rating-max",
         "streaming-user-rating-min",
         "streaming-user-rating-max",
-        "streaming-show-tops",
-        "streaming-show-recent",
         "streaming-genre-options",
     ):
         assert f'id="{identifier}"' in html
@@ -40,7 +38,13 @@ def test_streaming_web_exposes_native_watch_and_rating_filters():
     assert "streaming/catalogue-metrics" in script
     assert "matchesStreamingFilters" in script
     assert "persistPreference(" in script
-    assert "deleted:!!existing" in script
+    # A heart toggle no longer tombstones a streaming title used by a list.
+    assert "liked:liked?'true':'false'" in script
+    assert "deleted:false" in script
+    # One ordered category preference is shared with native iOS.
+    assert "category_order" in script
+    assert "special_category_" in script
+    assert "data-streaming-move" in script
 
 
 def test_streaming_web_manages_subscriptions_lists_and_collections():
