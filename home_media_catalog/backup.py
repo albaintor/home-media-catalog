@@ -31,7 +31,7 @@ COLLECTION_TABLES = ("collections", "collection_items")
 # New catalogue relations are optional on import for compatibility with
 # previously exported schema-v2 backups. Unlike transient playback settings,
 # per-edition resume positions and role indexes must survive a restore.
-OPTIONAL_CATALOGUE_TABLES = ("playback_resume", "work_person_roles")
+OPTIONAL_CATALOGUE_TABLES = ("playback_resume", "work_person_roles", "streaming_state")
 
 # Music tables (added later). Older backups without them remain importable.
 MUSIC_TABLES = (
@@ -138,6 +138,7 @@ def import_backup(store, document: object) -> tuple[list[str], list[str]]:
         conn.execute("PRAGMA defer_foreign_keys=ON")
         try:
             for table in (
+                "streaming_state",
                 "music_tracks_fts",
                 "music_albums_fts",
                 "music_artists_fts",

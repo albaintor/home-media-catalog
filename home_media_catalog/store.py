@@ -26,6 +26,11 @@ from .watch_progress import effective_series_status
 WRITEBACK_AUDIT_MAX_ENTRIES = 10
 
 SCHEMA = """
+-- Streaming journal is durable domain state, not a regenerable cache.
+CREATE TABLE IF NOT EXISTS streaming_state (
+ key TEXT PRIMARY KEY, payload TEXT NOT NULL,
+ modified_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS sources (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
  enabled INTEGER NOT NULL DEFAULT 1, config TEXT NOT NULL DEFAULT '{}',
