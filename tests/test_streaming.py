@@ -792,6 +792,61 @@ def test_streaming_heart_state_materializes_media_for_web_video_catalogue(tmp_pa
     assert store.detail(film["id"])["streaming_services"] == ["netflix", "prime_video"]
 
 
+def test_streaming_catalogue_service_filter_is_applied_before_pagination(tmp_path):
+    """A Netflix-only catalogue page must not depend on the first unfiltered page."""
+    from home_media_catalog.streaming import _reconcile_streaming_catalogue
+
+    store = Store(tmp_path / "streaming-service-filter.sqlite")
+    store.initialize()
+    stamp = datetime(2026, 11, 23, tzinfo=UTC).isoformat()
+    entries = [
+        StreamingStateRow(
+            key=f"item:movie:{tmdb}",
+            modified_at=stamp,
+            payload={
+                "kind": "movie", "tmdb_id": str(tmdb),
+                "title": name, "services": service, "status": "saved",
+            },
+        )
+        for tmdb, name, service in (
+            (990301, "Disney Movie", "disney_plus"),
+            (990302, "Netflix Movie", "netflix"),
+            (990303, "Another Netflix Movie", "netflix"),
+        )
+    ]
+    rows = _merge(store, entries)
+    assert _reconcile_streaming_catalogue(store, rows) == 3
+
+    first = store.media(
+        streaming_mode="selected", streaming_service=["netflix"],
+        sort="title", order="asc", limit=1, offset=0,
+    )
+    assert first["total"] == 2
+    assert first["items"][0]["title"] == "Another Netflix Movie"
+    second = store.media(
+        streaming_mode="selected", streaming_service=["netflix"],
+        sort="title", order="asc", limit=1, offset=1,
+    )
+    assert second["total"] == 2
+    assert second["items"][0]["title"] == "Netflix Movie"
+
+    excluded = store.media(streaming_mode="none")
+    assert excluded["total"] == 0
+
+    # Merge an external edition into the Netflix work. Provider filtering
+    # must not depend on the original journal work_id after merge.
+    from home_media_catalog.connectors.base import Record
+
+    source = store.save_source({"name": "Kodi", "type": "kodi"})["id"]
+    store.apply_snapshot(source, [
+        Record("movie:22", "movie", "Netflix Movie", year=2025,
+               identifiers={"tmdb": "990302"})
+    ])
+    after = store.media(streaming_mode="selected", streaming_service=["netflix"])
+    assert after["total"] == 2
+    assert any(item["title"] == "Netflix Movie" for item in after["items"])
+
+
 def test_unheart_deletes_only_the_streaming_internal_edition(tmp_path):
     """A tombstoned heart removes the real edition, not just the sync row."""
     from home_media_catalog.streaming import _reconcile_streaming_catalogue, _streaming_edition_uuid
