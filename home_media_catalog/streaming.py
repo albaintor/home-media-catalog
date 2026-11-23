@@ -553,6 +553,11 @@ def _streaming_trailers(raw: dict[str, Any]) -> list[dict[str, Any]]:
 def _tmdb_popularity(row: dict[str, Any]) -> float | None:
     """Preserve TMDB's original popularity index (not a 0–10 rating)."""
     value = row.get("popularity")
+    if isinstance(value, str) and len(value) <= 32:
+        try:
+            value = float(value)
+        except ValueError:
+            return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     number = float(value)
