@@ -3006,6 +3006,7 @@ class Store:
         source_type: str | list[str] | None = None,
         streaming_mode: str = "all",
         streaming_service: str | list[str] | None = None,
+        include_streaming_personal: bool = True,
         source_id: str | None = None,
         parent_id: str | None = None,
         season: int | None = None,
@@ -3203,6 +3204,31 @@ class Store:
                         f"WHERE value COLLATE NOCASE IN ({placeholders}))"
                     )
                 params.extend(values)
+        # Main-grid visibility is opt-in filtering. The default True keeps
+        # raw /media, full-catalogue replication and backups lossless.
+        # Only works consisting exclusively of Streaming reference editions
+        # are eligible for hiding; physical/Kodi and ordinary internal titles
+        # must never disappear because the same TMDB work was tracked.
+        if not include_streaming_personal and ids is None and parent_id is None:
+            clauses.append(
+                "("
+                "NOT EXISTS(SELECT 1 FROM records sr WHERE sr.work_id=w.id "
+                "AND json_extract(sr.payload,'$.metadata.streaming_reference')=1)"
+                " OR EXISTS(SELECT 1 FROM records other WHERE other.work_id=w.id "
+                "AND coalesce(json_extract(other.payload,'$.metadata.streaming_reference'),0)<>1)"
+                " OR EXISTS(SELECT 1 FROM list_items li WHERE li.work_id=w.id)"
+                " OR EXISTS(SELECT 1 FROM collection_items ci "
+                "JOIN collections c ON c.id=ci.collection_id "
+                "WHERE ci.work_id=w.id AND c.is_manual=1)"
+                " OR EXISTS(SELECT 1 FROM identifiers si "
+                "JOIN streaming_state st ON st.key='item:'||"
+                "(CASE WHEN w.kind='tvshow' THEN 'tv' ELSE 'movie' END)"
+                "||':'||si.value "
+                "WHERE si.work_id=w.id AND si.namespace='tmdb' AND st.deleted=0 "
+                "AND json_extract(st.payload,'$.status') IN ('saved','pending') "
+                "AND coalesce(json_extract(st.payload,'$.liked'),'true')<>'false')"
+                ")"
+            )
         if streaming_mode not in {"all", "selected", "none"}:
             raise ValueError("Invalid streaming catalogue filter.")
         if streaming_mode != "all":
