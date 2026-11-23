@@ -467,8 +467,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return app.openapi()
 
     @app.get(API + "/discovery", include_in_schema=False)
-    def discovery_info():
-        # Deliberately public, with no credentials, file paths or catalogue data.
+    def discovery_info(response: Response):
+        # Negotiation must never use a stale reverse-proxy response after a
+        # Docker upgrade. No credentials or sensitive server data are exposed.
+        response.headers["Cache-Control"] = "no-store, max-age=0"
         return {
             "service": "home-kodi-library",
             "api_version": "v1",
