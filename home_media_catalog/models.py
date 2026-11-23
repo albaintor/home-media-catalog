@@ -26,6 +26,7 @@ class SortField(StrEnum):
     YEAR = "year"
     RATING = "rating"
     USER_RATING = "user_rating"
+    POPULARITY = "popularity"
     LAST_PLAYED = "last_played"
     EPISODE = "episode"
 
@@ -165,6 +166,7 @@ class InternalMediaInput(StrictModel):
     year: int | None = Field(default=None, ge=1870, le=2200)
     plot: str | None = Field(default=None, max_length=5000)
     rating: float | None = Field(default=None, ge=0, le=10)
+    popularity: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     tmdb_id: str | None = Field(default=None, pattern=r"^[0-9]{1,24}$")
     imdb_id: str | None = Field(default=None, pattern=r"^tt[0-9]{5,12}$")
     barcode: str | None = Field(default=None, pattern=r"^[0-9]{8}$|^[0-9]{12,14}$")
@@ -286,6 +288,7 @@ class MediaSummary(BaseModel):
     runtime_minutes: int | None = None
     rating: float | None = None
     user_rating: float | None = None
+    popularity: float | None = None
     date_added: str | None = None
     last_played: str | None = None
     watch_status: WatchStatus
