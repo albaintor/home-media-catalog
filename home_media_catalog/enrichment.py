@@ -1,5 +1,6 @@
 """Optional TMDB credits, portraits and trailers, matched only by known IDs."""
 
+import math
 import asyncio
 import re
 from contextlib import asynccontextmanager
@@ -196,6 +197,7 @@ async def enrich_tmdb(detail: dict, token: str) -> dict:
                 "people": people,
                 "trailers": list(dict.fromkeys(trailers)),
                 "tmdb_id": tmdb_id,
+                **({"tmdb_popularity": popularity} if isinstance((popularity := data.get("popularity")), (int, float)) and not isinstance(popularity, bool) and math.isfinite(popularity) and popularity >= 0 else {}),
                 **({"tmdb_rating": rating} if (rating := tmdb_rating(data.get("vote_average"))) is not None else {}),
                 **({"poster": poster} if (poster := tmdb_poster_reference(data.get("poster_path"))) else {}),
                 **({"season_posters": season_posters} if kind == "tv" else {}),
