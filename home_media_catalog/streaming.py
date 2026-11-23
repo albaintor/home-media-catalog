@@ -711,6 +711,7 @@ def _reconcile_streaming_catalogue(store: Any, rows: list[dict[str, Any]]) -> in
             "tmdb_id": tmdb_id, "title": title.strip(),
             "original_title": original.strip(),
             "plot": overview, "rating": rating,
+            "popularity": _tmdb_popularity({"popularity": data.get("popularity")}),
             "year": int(year) if year is not None else None,
             "poster_path": poster, "backdrop_path": backdrop,
             "format": "", "streaming_services": services,
