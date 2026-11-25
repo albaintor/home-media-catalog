@@ -36,6 +36,78 @@ depends on the checked-out branch, server compatibility, network source and devi
   release checks](../THIRD_PARTY_NOTICES.md). An experimental dynamic-FFmpeg
   dependency does not make every transitive library App Store compliant.
 
+## Native Streaming and Kodi Remote navigation (iOS `streaming` branch)
+
+The **Streaming** system tab now has two segments at the top:
+**Streaming** and **Kodi Remote** (translated as *Télécommande Kodi* where
+the system language is French). The old standalone Kodi Remote tab has been
+removed. Playback and catalogue shortcuts which previously presented the
+remote navigate to the **Kodi Remote** segment. The last selected section
+is saved locally; upgrading from an older saved `remote` system tab also
+selects this segment. The remote's existing controls and split/compact
+layout are unchanged.
+
+Streaming discovery shelves use stable-height poster cells and an eagerly
+retained outer shelf layout to prevent later sections from appearing far down
+the vertical scroll and disappearing when scrolling back up. Each poster
+shows **Add to catalog (heart)** at the upper left, a **TMDB score** at the
+upper right when one exists, and **verified provider logos** at the bottom
+left. When a title has multiple providers, their logos appear together
+(with a count if more than four fit). The catalogue's regular grid and list
+posters use the same badge component, based on explicit
+`streaming_services` metadata or the saved streaming association—not
+simply the user's configured subscriptions. Missing provider membership
+may be checked against the actual **French** TMDB/connected-server
+availability before a Streaming card displays logos.
+
+Streaming **title detail sheets** now reuse the **same compact horizontal
+icon-only action row and `CompactMediaActionStyle`** as the regular movie/series
+details. The actions are positioned between the media header and synopsis:
+**Play**, **save to catalogue**, **add to list**, and **add to collection**.
+Buttons share the standard equal-width capsule appearance, not a separate
+vertical floating panel or blue text buttons. Actions retain VoiceOver labels;
+when more than one provider carries a title, Play prompts for a service.
+
+These are iOS presentation features and do not alter server streaming
+subscription availability or grant playback rights. [External data
+services](external-data-services.md) documents the sources and their
+limitations.
+
+## Unified iOS synchronization activity (branch `streaming`)
+
+Settings now exposes **one conditional Synchronization and activity entry**,
+driven by the same snapshot as the Settings tab badge. It is shown for active
+operations, pending changes, or failed tasks; once these clear, both the
+badge and the entry disappear. The detail page stays open if the final task
+finishes while it is being viewed. That single screen combines **catalogue
+jobs, Streaming state, local/remote artwork, personal changes, third-party
+writebacks, TMDB pending uploads and synchronization history**, with
+appropriate retry controls. The old separate **Synchronization history**
+and **External synchronization** Settings/Sources entries were removed.
+Manual **Synchronize catalog now** and **Refresh remote Kodi libraries**
+actions remain available in Settings → Sources even when no work is active.
+The app periodically refreshes the pending server writeback count while
+foregrounded so older failed outbound changes also affect the badge.
+
+**Streaming synchronization:** a specific iOS decoder bug previously
+produced `rows.Index 0.modified_at` even when the server correctly returned
+that JSON field. The shared `JSONDecoder` converts snake_case keys to
+camelCase, so the `StreamingSyncRow` model must declare `modifiedAt`
+rather than an explicit `"modified_at"` coding key. The iOS `streaming`
+branch includes this correction. Until the response can be decoded, local
+changes remain pending in SQLite; a successful retry then acknowledges
+matching revisions and clears the count. Genuine schema incompatibilities
+continue to report their precise JSON key path, and the local journal
+is never discarded on decode failure.
+
+**Streaming playback fallback:** iOS first attempts a verified provider
+title URL as a native universal link. For Prime Video, if no installed app
+accepts that direct link, it opens the provider's search for the original
+title; this avoids a broken web-only Prime detail route or silently
+rejecting an intentional `/search` URL. Netflix, Disney+ and other services
+retain their verified title-page browser fallback. A failed regional
+availability request does not disable search for a configured provider.
+
 ## Built-in catalogue, barcode identification and collection grouping
 
 The **internal catalogue** is available alongside Kodi, CLZ Movies, My Movies and Filmotech. A movie, TV series or physical DVD/Blu-ray edition can be added without a playable file, an XML export or a Kodi instance. It is usable through the web server and in the native iPhone/iPad app, including iOS standalone mode.
@@ -47,6 +119,8 @@ The **internal catalogue** is available alongside Kodi, CLZ Movies, My Movies an
 5. **Browse by collection:** group catalog items by collection instead of displaying only individual titles. The web and iOS navigation show collection artwork and allow opening a group to browse its members. Imported collections are separate from user-maintained custom lists.
 
 TMDB identification requires access to TMDB: the server's configured API token for web/paired operation, or a TMDB token configured on-device for standalone mode. The catalogue still supports manual title entry without that service. Local and server-synchronized behavior depends on compatible client/server versions.
+
+For an inventory of barcode, disc-metadata and streaming providers—including which integrations are implemented in iOS versus the server, optional credentials, and unimplemented candidate resolvers—see [External data services](external-data-services.md).
 
 ## Full feature list
 

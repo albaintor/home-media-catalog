@@ -58,9 +58,10 @@ async function open() {
 
 function syncLibraryRoute() {
   const music = window.location.hash === '#music';
-  $('video-page').hidden = music;
+  const streaming = window.location.hash === '#streaming';
+  $('video-page').hidden = music || streaming;
   $('music-page').hidden = !music;
-  $('video-link').setAttribute('aria-current', music ? 'false' : 'page');
+  $('video-link').setAttribute('aria-current', music || streaming ? 'false' : 'page');
   $('music-link').setAttribute('aria-current', music ? 'page' : 'false');
   if (music && !$('app').hidden) void open();
 }

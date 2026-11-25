@@ -1,0 +1,47 @@
+name: Streaming web parity
+on:
+  push:
+    paths:
+      - 'home_media_catalog/streaming.py'
+      - 'home_media_catalog/static/streaming.js'
+      - 'home_media_catalog/static/app.js'
+      - 'home_media_catalog/static/rating-range.js'
+      - 'home_media_catalog/static/app.css'
+      - 'home_media_catalog/static/format-logos.svg'
+      - 'tests/test_web_rating_ranges_and_dvd.py'
+      - 'home_media_catalog/static/streaming.css'
+      - 'home_media_catalog/static/streaming-genres/**'
+      - 'tests/test_web_streaming_ios_parity_20261122.py'
+      - 'home_media_catalog/static/index.html'
+      - 'tests/test_web_streaming_ios_parity_20261121.py'
+      - '.github/workflows/streaming-parity.yml'
+  pull_request:
+    paths:
+      - 'home_media_catalog/streaming.py'
+      - 'home_media_catalog/static/streaming.js'
+      - 'home_media_catalog/static/app.js'
+      - 'home_media_catalog/static/rating-range.js'
+      - 'home_media_catalog/static/app.css'
+      - 'home_media_catalog/static/format-logos.svg'
+      - 'tests/test_web_rating_ranges_and_dvd.py'
+      - 'home_media_catalog/static/streaming.css'
+      - 'home_media_catalog/static/streaming-genres/**'
+      - 'tests/test_web_streaming_ios_parity_20261122.py'
+      - 'home_media_catalog/static/index.html'
+      - 'tests/test_web_streaming_ios_parity_20261121.py'
+      - '.github/workflows/streaming-parity.yml'
+permissions:
+  contents: read
+jobs:
+  focused-parity-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e '.[dev]'
+      - run: ruff check home_media_catalog/streaming.py tests/test_web_streaming_ios_parity_20261121.py tests/test_web_streaming_ios_parity_20261122.py
+      - run: node --check home_media_catalog/static/streaming.js
+      - run: node --check home_media_catalog/static/app.js && node --check home_media_catalog/static/rating-range.js
+      - run: pytest -q tests/test_streaming.py tests/test_streaming_rating_filters.py tests/test_web_streaming_ui.py tests/test_web_streaming_ios_parity_20261121.py tests/test_web_streaming_ios_parity_20261122.py tests/test_web_rating_ranges_and_dvd.py

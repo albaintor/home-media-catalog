@@ -178,8 +178,9 @@ for component details and unresolved compliance checks.
 
 ## Documentation
 
-- [Server installation, configuration, updates and troubleshooting](docs/installat
+- [Server installation, configuration, updates and troubleshooting](docs/installation.md)
 - [Features and usage](docs/features.md) · [AI search and model setup](docs/ai-search.md)
+- [External data services: streaming, barcodes and disc metadata](docs/external-data-services.md)
 - [Home Assistant access](docs/home-assistant.md)
 - [REST API](docs/api.md) · [OpenAPI schema](docs/openapi-v1.json)
 - [Music library: Kodi sync and physical collections](docs/music.md)

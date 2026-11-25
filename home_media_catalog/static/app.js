@@ -2,17 +2,53 @@ import { startKodiRemote, stopKodiRemote, showKodiRemote } from './remote.js';
 import { startI18n, displayLocale, tr, localizedPrompt, localizedConfirm } from './i18n.js';
 import { MediaPlayer } from './player.js';
 import { startMusic, replayRecentMusic } from './music.js';
+import { startStreaming } from './streaming.js';
+import { bindRatingRange } from './rating-range.js';
 startI18n();
 startMusic();
+startStreaming();
+window.addEventListener('streaming-open-media', event => {
+  const id = event.detail?.mediaID;
+  if (typeof id !== 'string' || !/^[a-z0-9_-]{1,128}$/i.test(id)) return;
+  window.location.hash = '#video';
+  void openDetail(id);
+});
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const stateLabels = {watched:tr('Vu'),unwatched:tr('Non vu'),in_progress:tr('En cours'),unknown:tr('État non renseigné')};
 const kindLabels = {movie:tr('Film'),tvshow:tr('Série'),episode:tr('Épisode')};
 const baseURL = new URL('.', window.location.href);
-const url = (path) => new URL(path.replace(/^\/+/, ''), baseURL).href;
 const preferenceKey = `kodi_library_preferences_v1:${baseURL.pathname}`;
 function readStorage(key) { try { return localStorage.getItem(key); } catch { return null; } }
 function writeStorage(key,value) { try { localStorage.setItem(key,value); } catch { /* Browsing also works when storage is unavailable. */ } }
+// A server-side poster edit changes only this media's browser cache key.
+// Persist a small bounded revision map across page reloads; never append a
+// global catalogue revision that would redownload thousands of other covers.
+const artworkVersionKey = 'catalogue_artwork_versions_v1:' + baseURL.pathname;
+const artworkVersions = new Map();
+try {
+  const saved=JSON.parse(readStorage(artworkVersionKey));
+  if(Array.isArray(saved))for(const entry of saved) {
+    if(Array.isArray(entry)&&typeof entry[0]==='string'&&
+       Number.isSafeInteger(entry[1])&&entry[1]>0)artworkVersions.set(entry[0],entry[1]);
+  }
+} catch { /* A corrupt preference must not block images. */ }
+function persistArtworkVersions() {
+  const latest=[...artworkVersions.entries()].sort((a,b)=>b[1]-a[1]).slice(0,512);
+  artworkVersions.clear();
+  for(const [id,revision] of latest)artworkVersions.set(id,revision);
+  writeStorage(artworkVersionKey,JSON.stringify(latest));
+}
+const url = (path) => {
+  const relative=path.replace(/^\/+/, '');
+  const target=new URL(relative,baseURL);
+  const match=/^api\/v1\/media\/([^/?]+)\/artwork\/(?:poster|fanart)(?:$|\?)/.exec(relative);
+  if(match) {
+    const revision=artworkVersions.get(decodeURIComponent(match[1]));
+    if(revision)target.searchParams.set('artrev',String(revision));
+  }
+  return target.href;
+};
 let preferences;
 try { preferences=JSON.parse(readStorage(preferenceKey)) || {}; } catch { preferences={}; }
 if(typeof preferences!=='object'||Array.isArray(preferences)) preferences={};
@@ -77,7 +113,7 @@ let filtersRestored=false;
 const savedView = ['grid','list'].includes(preferences.view)?preferences.view:readStorage('kodi_library_view');
 const canonicalFormat = value => {
   const label=String(value).trim();
-  return /^(4k uhd|4k blu-ray|blu-ray 4k|uhd blu-ray|ultra hd blu-ray)$/i.test(label)?'Blu-ray 4K':/^4k$/i.test(label)?'4K':label;
+  return /^(4k uhd|4k blu-ray|blu-ray 4k|uhd blu-ray|ultra hd blu-ray|4k ultra hd blu-ray|bluray 4k|4k bluray|4k ultra hd bluray)$/i.test(label)?'Blu-ray 4K':/^4k$/i.test(label)?'4K':label;
 };
 function formatCategory(label) {
   if (/^(dolby atmos|dolby truehd|dolby digital|dts(?:[-:]|$)|aac|flac|pcm|lpcm|ac3|eac3|mp3|opus)/i.test(label)) return 'audio';
@@ -101,6 +137,9 @@ function updateFormatSelections() {
 
 const state = {csrf:null,role:'read',view:savedView==='list'?'list':'grid',order:preferences.order==='asc'?'asc':'desc',limit:60,recent:preferences.recent===true,formats:[],deepSearch:preferences.deepSearch===true,facets:null,players:[],tmdbAvailable:false,jobs:[],activityPollBusy:false,activityWasRunning:false,personalUpdateState:null,personalRemoteFailure:false,personalPollBusy:false,personalSaveCount:0,seq:0,controller:null,detail:null,detailSeq:0,personalSeq:0,personalPending:new Set(),quickPending:new Set(),enrichingIds:new Set(),personSearch:null,seasons:[],playbackDraft:null,playbackMediaId:null,listId:typeof preferences.listId==='string'?preferences.listId:null,listItems:[],listRevision:0,listSort:['position','title','year','date_added','rating','user_rating'].includes(preferences.listSort)?preferences.listSort:'position',listOrder:preferences.listOrder==='desc'?'desc':'asc',listTotal:0,listSeq:0,items:[],ids:new Set(),nextOffset:0,total:0,hasMore:false,loading:false,loadError:false};
 state.multi={source_type:[],genre:[],watch_status:[]};
+// Reuse the native 0–10 / 0.5-point dual-handle rating semantics.
+const cataloguePublicRating = bindRatingRange('catalog-rating', () => loadMedia());
+const cataloguePersonalRating = bindRatingRange('catalog-user-rating', () => loadMedia());
 state.groupBy=preferences.collectionDefaultsVersion===2?(preferences.groupBy==='collection'?'collection':''):'collection';
 state.openCollection=null;
 state.openCollectionMembers=null;
@@ -172,7 +211,7 @@ function renderCollectionPicker() {
 }
 function savePreferences() {
   if(!filtersRestored)return;
-  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,mergeEquivalentCollections:state.mergeEquivalentCollections,collectionDefaultsVersion:2,collections:state.collections,internalCollectionsOnly:state.internalCollectionsOnly,formats:state.formats,deepSearch:state.deepSearch,order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
+  writeStorage(preferenceKey,JSON.stringify({filters:Object.fromEntries(filterIds.map(id=>[id,$(id).value])),multiFilters:state.multi,groupBy:state.groupBy,mergeEquivalentCollections:state.mergeEquivalentCollections,collectionDefaultsVersion:2,collections:state.collections,internalCollectionsOnly:state.internalCollectionsOnly,formats:state.formats,deepSearch:state.deepSearch,ratingRanges:{public:cataloguePublicRating.get(),personal:cataloguePersonalRating.get()},order:state.order,recent:state.recent,view:state.view,listId:state.listId,listSort:state.listSort,listOrder:state.listOrder}));
 }
 function updateSearchClearButton() {
   $('clear-search').hidden=!$('search').value&&!state.personSearch;
@@ -198,6 +237,8 @@ function restoreFilters() {
     const value=id==='kind'&&preferences.filters?.kind==='episode'?'':preferences.filters?.[id];
     if(typeof value==='string'&&(id==='search'||[...$(id).options].some(option=>option.value===value)))$(id).value=value;
   }
+  cataloguePublicRating.set(preferences.ratingRanges?.public?.min ?? 0,preferences.ratingRanges?.public?.max ?? 10);
+  cataloguePersonalRating.set(preferences.ratingRanges?.personal?.min ?? 0,preferences.ratingRanges?.personal?.max ?? 10);
   for(const name of multiNames) {
     const saved=preferences.multiFilters?.[name];
     const legacy=preferences.filters?.[multiLegacyIds[name]];
@@ -554,8 +595,9 @@ const formatLogos = {'4K':['4k','video'],'Blu-ray 4K':['bluray4k','disc'],'8K':[
 // New native PDF vector badges use the equivalent SVG symbols below because
 // browser <img> does not reliably render PDFs.
 const formatImages = {
-  '4K':'format-4k','3D':'format-3d','Blu-ray 3D':'format-3d',
-  'Blu-ray':'format-blu-ray','Dolby Vision':'format-dolby-vision',
+  '4K':'format-4k','3D':'format-3d','Blu-ray 3D':'format-blu-ray-3d',
+  'Blu-ray':'format-blu-ray','Blu-ray 4K':'format-blu-ray-4k',
+  'Dolby Vision':'format-dolby-vision',
   'HDR10':'format-hdr10','HDR10+':'format-hdr10-plus','HLG':'format-hlg',
   'Dolby Atmos':'format-dolby-atmos','Dolby TrueHD':'format-dolby-truehd',
   'Dolby Digital':'format-dolby-digital','Dolby Digital+':'format-dolby-digital-plus',
@@ -572,7 +614,7 @@ function formatBadges(values, compact=false, provenance=null) {
     const logo=formatLogos[label];
     const sources=provenance?.get(label);
     const description=sources?.length?`${label} · ${sources.join(', ')}`:label;
-    return logo?`<span class="format-badge ${logo[1]}" title="${esc(description)}" aria-label="${esc(description)}">${formatImages[label]?`<img src="${esc(url('static/format-icons/'+formatImages[label]+'.png'))}" alt="" loading="eager" decoding="async">`:`<svg aria-hidden="true" viewBox="0 0 112 36"><use href="${esc(url('static/format-logos.svg'))}#${logo[0]}"></use></svg>`}</span>`:`<span class="format-chip" title="${esc(description)}">${esc(label)}</span>`;
+    return logo?`<span class="format-badge ${logo[1]} format-${logo[0]}" title="${esc(description)}" aria-label="${esc(description)}">${formatImages[label]?`<img src="${esc(url('static/format-icons/'+formatImages[label]+'.png'))}" alt="" loading="eager" decoding="async">`:`<svg aria-hidden="true" viewBox="0 0 112 36"><use href="${esc(url('static/format-logos.svg'))}#${logo[0]}"></use></svg>`}</span>`:`<span class="format-chip" title="${esc(description)}">${esc(label)}</span>`;
   }).join('')+(compact&&labels.length>4?`<span class="format-overflow" title="${esc(labels.slice(4).join(', '))}">+${labels.length-4}</span>`:'');
 }
 function detailFormatBadges(item) {
@@ -1214,6 +1256,17 @@ function currentParams(offset=0) {
   for(const name of names.slice(0,40))params.append('collection',name);
   for(const name of multiNames)for(const value of state.multi[name])params.append(name,value);
   for (const value of state.formats) params.append('format',value);
+  for(const [controller,minKey,maxKey] of [
+    [cataloguePublicRating,'rating_min','rating_max'],
+    [cataloguePersonalRating,'user_rating_min','user_rating_max']
+  ]) {
+    const {min,max}=controller.get();
+    // The unrestricted range must keep films/series without a stored rating.
+    if(min>0||max<10) {
+      params.set(minKey,String(min));
+      params.set(maxKey,String(max));
+    }
+  }
   if(state.personSearch) {
     params.delete('q');
     if(state.personSearch.tmdbId)params.set('person_tmdb_id',state.personSearch.tmdbId);
@@ -1249,7 +1302,9 @@ function currentParams(offset=0) {
 function updateFilterState() {
   const count=['search','kind'].filter(id=>$(id).value).length + state.collections.length + Number(state.internalCollectionsOnly)
     + multiNames.reduce((total,name)=>total+state.multi[name].length,0)
-    + state.formats.length + Number(state.recent) + Number(state.deepSearch) + Number(!!state.groupBy);
+    + state.formats.length + Number(state.recent) + Number(state.deepSearch) + Number(!!state.groupBy)
+    + Number(cataloguePublicRating.get().min>0||cataloguePublicRating.get().max<10)
+    + Number(cataloguePersonalRating.get().min>0||cataloguePersonalRating.get().max<10);
   $('filter-count').textContent=count || '';
   $('reset-filters').hidden=!count;
   const quickStatus=state.multi.watch_status.length===1?state.multi.watch_status[0]:'';
@@ -2074,11 +2129,17 @@ async function pollArtworkChanges() {
       if(!Array.isArray(result.changes)||!Number.isSafeInteger(result.cursor)||
          result.cursor<cursor)break;
       const count=result.changes.length;
+      for(const entry of result.changes) {
+        const id=entry.media_id,revision=entry.revision;
+        if(typeof id==='string'&&Number.isSafeInteger(revision)&&revision>0 &&
+           revision>(artworkVersions.get(id)||0))artworkVersions.set(id,revision);
+      }
       cursor=result.cursor;
       received+=count;
       if(count<200)break;
     }
     if(received) {
+      persistArtworkVersions();
       const position={x:window.scrollX,y:window.scrollY};
       await loadMedia();
       await refreshHomeListThumbnails();
@@ -2167,6 +2228,7 @@ function reset() {
   state.mergeEquivalentCollections=true;$('merge-collections').checked=true;
   $('merge-collections-label').hidden=false;
   renderMultiFilters();
+  cataloguePublicRating.set(0,10);cataloguePersonalRating.set(0,10);
   state.formats=[];state.deepSearch=false;$('deep-search').checked=false;
   updateFormatSelections();state.recent=false;updateSearchClearButton();loadMedia();
 }

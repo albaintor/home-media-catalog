@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 from collections import defaultdict
@@ -18,12 +19,18 @@ from .media_formats import AUDIO_FORMAT_LABELS, canonical_format, canonical_sour
 from .people import category as credit_category
 from .people import person_view, youtube_url
 from .utils import fold, modification_time, now
+from .watch_progress import effective_series_status
 
 # Keep at most ten completed/failed writeback events in persistent history.
 # Pending work is separate and must never be discarded by history retention.
 WRITEBACK_AUDIT_MAX_ENTRIES = 10
 
 SCHEMA = """
+-- Streaming journal is durable domain state, not a regenerable cache.
+CREATE TABLE IF NOT EXISTS streaming_state (
+ key TEXT PRIMARY KEY, payload TEXT NOT NULL,
+ modified_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS sources (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
  enabled INTEGER NOT NULL DEFAULT 1, config TEXT NOT NULL DEFAULT '{}',
@@ -32,7 +39,7 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE TABLE IF NOT EXISTS works (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
  sort_title TEXT NOT NULL DEFAULT '', original_title TEXT, year INTEGER, plot TEXT,
- runtime_minutes INTEGER, rating REAL, user_rating REAL, date_added TEXT, last_played TEXT,
+ runtime_minutes INTEGER, rating REAL, user_rating REAL, popularity REAL, date_added TEXT, last_played TEXT,
  watch_status TEXT NOT NULL DEFAULT 'unknown', play_count INTEGER, resume_seconds REAL DEFAULT 0,
  total_seconds REAL DEFAULT 0, parent_id TEXT REFERENCES works(id) ON DELETE SET NULL,
  season INTEGER, episode INTEGER, genres TEXT DEFAULT '[]', formats TEXT DEFAULT '[]',
@@ -279,6 +286,14 @@ class Store:
                 )
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            if "popularity" not in {row["name"] for row in conn.execute("PRAGMA table_info(works)")}:
+                conn.execute("ALTER TABLE works ADD COLUMN popularity REAL")
+                conn.execute(
+                    "UPDATE works SET popularity=json_extract(e.payload,'$.tmdb_popularity') "
+                    "FROM enrichment e WHERE e.work_id=works.id "
+                    "AND json_type(e.payload,'$.tmdb_popularity') IN ('real','integer')"
+                )
+            conn.execute("CREATE INDEX IF NOT EXISTS works_popularity ON works(popularity,id)")
             # Existing SQLite databases predate locally managed collections.
             if "is_manual" not in {
                 row["name"] for row in conn.execute("PRAGMA table_info(collections)")
@@ -1058,6 +1073,11 @@ class Store:
                     else ["https://image.tmdb.org/t/p/w500" + path]
                     if path and data.get("tmdb_id") else []
                 )
+                backdrop = data.get("backdrop_path")
+                fanart = (
+                    ["https://image.tmdb.org/t/p/w1280" + backdrop]
+                    if backdrop and data.get("tmdb_id") else []
+                )
                 record = Record(
                     external_key=external_key,
                     kind=kind,
@@ -1070,9 +1090,17 @@ class Store:
                     formats=merge_disc_formats([], data.get("format", ""), data.get("technical_formats") or []),
                     date_added=now(),
                     poster=poster,
+                    fanart=fanart,
                     metadata={
                         **self._physical_edition_fields(data.get("edition_details")),
                         "barcode": barcode, "internal": True,
+                        **({"tmdb_popularity": data["popularity"]}
+                           if self._tmdb_popularity(data.get("popularity")) is not None else {}),
+                        **({"streaming_services": data["streaming_services"]}
+                           if data.get("streaming_services") else {}),
+                        **({"streaming_reference": True}
+                           if data.get("streaming_reference") or data.get("streaming_services")
+                           else {}),
                         **({"intentional_copy": True} if data.get("allow_duplicate") else {}),
                         **({
                             "physical_season": physical_season,
@@ -1125,6 +1153,88 @@ class Store:
             work_id = current["work_id"]
             self._touch(conn, [work_id])
         return {"id": work_id, "item_id": external_key}
+
+    def import_streaming_episodes(
+        self, parent_id: str, tmdb_id: int, episodes: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        """Create reference-only TV episodes for watch tracking.
+
+        Never create fake playback files and never replace existing Kodi or
+        collection episodes with the same season/episode coordinates.
+        """
+        if not 0 < tmdb_id < 1_000_000_000 or len(episodes) > 1500:
+            raise ValueError("Invalid TMDB series or episode count")
+        from uuid import NAMESPACE_URL, uuid5
+
+        imported = 0
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            parent = conn.execute(
+                "SELECT kind FROM works WHERE id=?", (parent_id,)
+            ).fetchone()
+            if not parent or parent["kind"] != "tvshow":
+                raise ValueError("Unknown TV series")
+            ids = {
+                row["value"] for row in conn.execute(
+                    "SELECT value FROM identifiers WHERE work_id=? AND namespace='tmdb'",
+                    (parent_id,),
+                )
+            }
+            if ids and str(tmdb_id) not in ids:
+                raise ValueError("TMDB series ID differs from catalogue work")
+            conn.execute(
+                "INSERT OR IGNORE INTO sources(id,name,type,enabled,config) VALUES(?,?,?,?,?)",
+                ("internal", "Internal catalog", "internal", 1, "{}"),
+            )
+            occupied = {
+                (row["season"], row["episode"])
+                for row in conn.execute(
+                    "SELECT season,episode FROM works WHERE parent_id=? AND kind='episode'",
+                    (parent_id,),
+                )
+            }
+            for entry in episodes:
+                season, number = entry.get("season"), entry.get("episode")
+                if (not isinstance(season, int) or isinstance(season, bool)
+                        or not isinstance(number, int) or isinstance(number, bool)
+                        or not 0 <= season <= 10000 or not 1 <= number <= 10000):
+                    continue
+                if (season, number) in occupied:
+                    continue
+                title = str(entry.get("title") or f"Episode {number}")[:300]
+                external_key = f"streaming-tv-{tmdb_id}-s{season}-e{number}"
+                if conn.execute(
+                    "SELECT 1 FROM records WHERE source_id='internal' AND external_key=?",
+                    (external_key,),
+                ).fetchone():
+                    continue
+                work_id = str(uuid5(NAMESPACE_URL, f"hmc:{parent_id}:{external_key}"))
+                conn.execute("INSERT OR IGNORE INTO works(id,kind) VALUES(?, 'episode')", (work_id,))
+                released = str(entry.get("air_date") or "")
+                year = int(released[:4]) if re.fullmatch(r"[0-9]{4}", released[:4]) else None
+                poster_path = entry.get("still_path")
+                poster = (["https://image.tmdb.org/t/p/w500" + poster_path]
+                          if isinstance(poster_path, str) and re.fullmatch(
+                              r"/[A-Za-z0-9_.-]{1,150}", poster_path) else [])
+                record = Record(
+                    external_key=external_key, kind="episode", title=title,
+                    identifiers={"tmdb": str(entry["tmdb_id"])}
+                    if isinstance(entry.get("tmdb_id"), int) else {},
+                    year=year, plot=str(entry.get("overview") or "")[:5000],
+                    date_added=now(), poster=poster,
+                    metadata={"streaming_reference": True, "streaming_parent_tmdb": tmdb_id},
+                )
+                payload = asdict(record)
+                payload.update(parent_id=parent_id, season=season, episode=number)
+                conn.execute(
+                    "INSERT INTO records(id,work_id,source_id,external_key,payload) "
+                    "VALUES(?,?,?,?,?)",
+                    (str(uuid4()), work_id, "internal", external_key, encode(payload)),
+                )
+                self._rebuild(conn, work_id)
+                occupied.add((season, number))
+                imported += 1
+        return {"added": imported, "total": len(episodes)}
 
     @staticmethod
     def _editor_payload(conn: sqlite3.Connection, work_id: str) -> dict[str, Any]:
@@ -1562,14 +1672,34 @@ class Store:
             return {"id": row["work_id"], "item_id": external_key.lower()}
 
     def delete_internal_media(self, external_key: str) -> None:
-        """Only remove the requested internal edition, never external sources."""
+        """Remove one internal edition, preserving external editions.
+
+        A Streaming reference removed via heart or context menu explicitly
+        leaves *all* lists and editable collections as well, even if the work
+        also has a physical/Kodi edition. Keep other editions intact.
+        """
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT id,work_id FROM records WHERE source_id='internal' AND external_key=?",
+                "SELECT id,work_id,payload FROM records "
+                "WHERE source_id='internal' AND external_key=?",
                 (external_key.lower(),),
             ).fetchone()
             if row is None:
                 raise KeyError(external_key)
+            payload = json.loads(row["payload"])
+            if (payload.get("metadata") or {}).get("streaming_reference") is True:
+                work_id = row["work_id"]
+                conn.execute(
+                    "UPDATE lists SET revision=revision+1 WHERE id IN "
+                    "(SELECT list_id FROM list_items WHERE work_id=?)", (work_id,),
+                )
+                conn.execute(
+                    "UPDATE collections SET revision=revision+1 WHERE id IN "
+                    "(SELECT collection_id FROM collection_items WHERE work_id=?)",
+                    (work_id,),
+                )
+                conn.execute("DELETE FROM list_items WHERE work_id=?", (work_id,))
+                conn.execute("DELETE FROM collection_items WHERE work_id=?", (work_id,))
             conn.execute("DELETE FROM records WHERE id=?", (row["id"],))
             self._rebuild(conn, row["work_id"])
             self._touch(conn, [row["work_id"]])
@@ -1633,9 +1763,16 @@ class Store:
                 r["external_key"]: r
                 for r in conn.execute("SELECT * FROM records WHERE source_id=?", (source_id,))
             }
+            # Compare image references only for works that existed before this
+            # import. A first import must not flood the artwork-change feed with
+            # thousands of already-new posters.
+            previous_artwork = {
+                row["id"]: (row["poster"], row["fanart"])
+                for row in conn.execute("SELECT id,poster,fanart FROM works")
+            }
             # A new edition of a known work, or a changed one (e.g. Kodi watch
             # status), modifies that work; a newly created work is only added.
-            existing_works = {row[0] for row in conn.execute("SELECT id FROM works")}
+            existing_works = previous_artwork.keys()
             # Only changed/removed works need their metadata and FTS rebuilt.
             # A no-op snapshot must not rewrite thousands of SQLite rows.
             affected = set()
@@ -1723,6 +1860,33 @@ class Store:
                 raise RuntimeError("Snapshot reconciliation mismatch; transaction rolled back.")
             for work_id in affected:
                 self._rebuild(conn, work_id)
+                old_images = previous_artwork.get(work_id)
+                if old_images is None:
+                    continue
+                current = conn.execute(
+                    "SELECT poster,fanart FROM works WHERE id=?", (work_id,)
+                ).fetchone()
+                if current and old_images != (current["poster"], current["fanart"]):
+                    # The iOS replica and web clients invalidate only this
+                    # work's stored poster/fanart, not the whole artwork cache.
+                    conn.execute(
+                        "INSERT INTO artwork_changes(work_id,updated_at) VALUES(?,?)",
+                        (work_id, now()),
+                    )
+                    if old_images[0] != current["poster"]:
+                        # Composite thumbnails depend on member posters.
+                        # Their versioned URLs must change with the poster,
+                        # even when the collection/list membership did not.
+                        conn.execute(
+                            "UPDATE collections SET revision=revision+1 WHERE id IN "
+                            "(SELECT collection_id FROM collection_items WHERE work_id=?)",
+                            (work_id,),
+                        )
+                        conn.execute(
+                            "UPDATE lists SET revision=revision+1 WHERE id IN "
+                            "(SELECT list_id FROM list_items WHERE work_id=?)",
+                            (work_id,),
+                        )
             self._touch(conn, affected & existing_works)
             if deleted or reassigned:
                 self._prune(conn)
@@ -2080,6 +2244,13 @@ class Store:
         return float(value) if 0 < value <= 10 else None
 
     @staticmethod
+    def _tmdb_popularity(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        score = float(value)
+        return score if math.isfinite(score) and score >= 0 else None
+
+    @staticmethod
     def _rebuild(conn: sqlite3.Connection, work_id: str) -> None:
         rows = conn.execute(
             "SELECT r.id,r.payload,s.type FROM records r JOIN sources s ON s.id=r.source_id WHERE r.work_id=?",
@@ -2238,6 +2409,12 @@ class Store:
                     "episode",
                 )
             },
+            "popularity": next(
+                (value for payload, _ in entries
+                 if (value := Store._tmdb_popularity(
+                     (payload.get("metadata") or {}).get("tmdb_popularity")
+                 )) is not None), None
+            ),
             "last_played": max(
                 (p["last_played"] for p, _ in entries if p.get("last_played")), default=None
             ),
@@ -2255,6 +2432,9 @@ class Store:
         }
         if enrichment:
             enriched = json.loads(enrichment["payload"])
+            current_popularity = Store._tmdb_popularity(enriched.get("tmdb_popularity"))
+            if current_popularity is not None:
+                values["popularity"] = current_popularity
             tmdb_rating = Store._tmdb_rating(enriched.get("tmdb_rating"))
             # An explicitly refreshed TMDB vote supersedes source ratings;
             # otherwise TMDB only fills a missing public rating.
@@ -2275,6 +2455,33 @@ class Store:
             if personal["watched"] is not None:
                 values["watch_status"] = "watched" if personal["watched"] else "unwatched"
                 values["resume_seconds"] = 0
+        # Refreshing catalogue records must not restore the stale bool after
+        # a new season has appeared. Inventory is metadata, snapshot is user data.
+        if primary["kind"] == "tvshow" and conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='streaming_state'"
+        ).fetchone():
+            tmdb_ids = {
+                str(identifier) for record, _ in entries
+                for identifier in [record.get("identifiers", {}).get("tmdb")]
+                if isinstance(identifier, (str, int)) and str(identifier).isdecimal()
+            }
+            for tmdb_id in sorted(tmdb_ids):
+                personal_row = conn.execute(
+                    "SELECT payload FROM streaming_state WHERE key=? AND deleted=0",
+                    ("personal:tv:" + tmdb_id,)
+                ).fetchone()
+                inventory_row = conn.execute(
+                    "SELECT payload FROM streaming_state WHERE key=? AND deleted=0",
+                    ("inventory:tv:" + tmdb_id,)
+                ).fetchone()
+                if personal_row and inventory_row:
+                    derived = effective_series_status(
+                        json.loads(personal_row["payload"]),
+                        json.loads(inventory_row["payload"]),
+                    )
+                    if derived is not None:
+                        values["watch_status"] = derived
+                        break
         conn.execute(
             "UPDATE works SET " + ",".join(f"{n}=?" for n in values) + " WHERE id=?",
             (*values.values(), work_id),
@@ -2430,7 +2637,7 @@ class Store:
         rows = conn.execute(
             "SELECT parent_id,COUNT(*) AS episode_count,"
             " SUM(CASE WHEN watch_status='watched' THEN 1 ELSE 0 END) AS watched_episode_count"
-            " FROM works WHERE kind='episode' AND parent_id IN ("
+            " FROM works WHERE kind='episode' AND season>0 AND parent_id IN ("
             + placeholders
             + ") GROUP BY parent_id",
             series_ids,
@@ -2485,6 +2692,51 @@ class Store:
         ids = [row["id"] for row in rows]
         by_work = cls._sources_for_works(conn, ids)
         collection_sources = cls._collection_sources_for_works(conn, ids)
+        # Only a recorded streaming association qualifies for the launch menu.
+        # Never infer it from a generic internal-collection edition.
+        # Explicit provenance: a heart-saved Streaming edition is not the
+        # same as a physical/internal edition that happens to be streamable.
+        by_streaming_reference: set[str] = set()
+        by_streaming: dict[str, set[str]] = defaultdict(set)
+        if ids:
+            slots = ",".join("?" for _ in ids)
+            for record in conn.execute(
+                "SELECT r.work_id, j.value AS service FROM records r, "
+                "json_each(r.payload, '$.metadata.streaming_services') j "
+                f"WHERE r.work_id IN ({slots}) AND j.type='text'",
+                ids,
+            ):
+                by_streaming[record["work_id"]].add(record["service"])
+            for record in conn.execute(
+                "SELECT DISTINCT work_id FROM records "
+                "WHERE work_id IN (" + slots + ") AND source_id='internal' "
+                "AND json_extract(payload, '$.metadata.streaming_reference')=1",
+                ids,
+            ):
+                by_streaming_reference.add(record["work_id"])
+            # Recover associations for titles saved before edition metadata
+            # carried provider keys, including works merged with Kodi or CLZ.
+            state_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='streaming_state'"
+            ).fetchone()
+            if state_table:
+                for entry in conn.execute(
+                    "SELECT ids.work_id,s.payload FROM identifiers ids "
+                    "JOIN works w ON w.id=ids.work_id "
+                    "JOIN streaming_state s ON s.key='item:' || "
+                    "(CASE WHEN w.kind='tvshow' THEN 'tv' ELSE 'movie' END) "
+                    "|| ':' || ids.value "
+                    f"WHERE ids.work_id IN ({slots}) AND ids.namespace='tmdb' "
+                    "AND w.kind IN ('movie','tvshow') AND s.deleted=0", ids
+                ):
+                    payload = json.loads(entry["payload"])
+                    for key in str(payload.get("services") or "").split(","):
+                        if key in {
+                            "netflix", "disney_plus", "prime_video",
+                            "apple_tv_plus", "hbo_max", "paramount_plus"
+                        }:
+                            by_streaming[entry["work_id"]].add(key)
         custom_titles = {}
         if ids:
             slots = ",".join("?" for _ in ids)
@@ -2551,6 +2803,8 @@ class Store:
                 cls._summary(row), resumes.get(row["id"])
             )
             item.update(progress.get(row["id"], {}))
+            item["streaming_services"] = sorted(by_streaming.get(row["id"], set()))
+            item["streaming_reference"] = row["id"] in by_streaming_reference
             if title := custom_titles.get(row["id"]):
                 item["provider_title"] = item["title"]
                 item["custom_title"] = title
@@ -2815,6 +3069,9 @@ class Store:
         collection: str | None = None,
         collection_id: str | None = None,
         source_type: str | list[str] | None = None,
+        streaming_mode: str = "all",
+        streaming_service: str | list[str] | None = None,
+        include_streaming_personal: bool = True,
         source_id: str | None = None,
         parent_id: str | None = None,
         season: int | None = None,
@@ -2822,7 +3079,13 @@ class Store:
         year_min: int | None = None,
         year_max: int | None = None,
         rating_min: float | None = None,
+        rating_max: float | None = None,
         user_rating_min: float | None = None,
+        user_rating_max: float | None = None,
+        rating_gt: float | None = None,
+        rating_lt: float | None = None,
+        user_rating_gt: float | None = None,
+        user_rating_lt: float | None = None,
         ids: list[str] | None = None,
         recent_days: int | None = None,
         sort: str = "date_added",
@@ -3006,18 +3269,125 @@ class Store:
                         f"WHERE value COLLATE NOCASE IN ({placeholders}))"
                     )
                 params.extend(values)
+        # Main-grid visibility is opt-in filtering. The default True keeps
+        # raw /media, full-catalogue replication and backups lossless.
+        # Only works consisting exclusively of Streaming reference editions
+        # are eligible for hiding; physical/Kodi and ordinary internal titles
+        # must never disappear because the same TMDB work was tracked.
+        if not include_streaming_personal and ids is None and parent_id is None:
+            clauses.append(
+                "("
+                "NOT EXISTS(SELECT 1 FROM records sr WHERE sr.work_id=w.id "
+                "AND json_extract(sr.payload,'$.metadata.streaming_reference')=1)"
+                " OR EXISTS(SELECT 1 FROM records other WHERE other.work_id=w.id "
+                "AND coalesce(json_extract(other.payload,'$.metadata.streaming_reference'),0)<>1)"
+                " OR EXISTS(SELECT 1 FROM list_items li WHERE li.work_id=w.id)"
+                " OR EXISTS(SELECT 1 FROM collection_items ci "
+                "JOIN collections c ON c.id=ci.collection_id "
+                "WHERE ci.work_id=w.id AND c.is_manual=1)"
+                " OR EXISTS(SELECT 1 FROM identifiers si "
+                "JOIN streaming_state st ON st.key='item:'||"
+                "(CASE WHEN w.kind='tvshow' THEN 'tv' ELSE 'movie' END)"
+                "||':'||si.value "
+                "WHERE si.work_id=w.id AND si.namespace='tmdb' AND st.deleted=0 "
+                "AND json_extract(st.payload,'$.status') IN ('saved','pending') "
+                "AND coalesce(json_extract(st.payload,'$.liked'),'true')<>'false')"
+                ")"
+            )
+        if streaming_mode not in {"all", "selected", "none"}:
+            raise ValueError("Invalid streaming catalogue filter.")
+        if streaming_mode != "all":
+            allowed_services = {
+                "netflix", "disney_plus", "prime_video", "apple_tv_plus",
+                "hbo_max", "paramount_plus", "crunchyroll", "rakuten_viki", "mubi",
+            }
+            selected_services = ([streaming_service]
+                                 if isinstance(streaming_service, str)
+                                 else streaming_service or [])
+            if len(selected_services) > len(allowed_services) or any(
+                service not in allowed_services for service in selected_services
+            ):
+                raise ValueError("Invalid streaming service.")
+            selected_services = list(dict.fromkeys(selected_services))
+            # A canonical internal edition retains service keys even if its
+            # original item: row's work_id has been merged into Kodi/CLZ.
+            # Historical catalogues may still only have the TMDB-indexed
+            # Streaming journal, so consult both representations.
+            if streaming_mode == "selected":
+                if not selected_services:
+                    clauses.append("0=1")
+                else:
+                    places = ",".join("?" for _ in selected_services)
+                    edition_match = (
+                        "EXISTS(SELECT 1 FROM records sr,"
+                        " json_each(sr.payload,'$.metadata.streaming_services') sp "
+                        "WHERE sr.work_id=w.id AND sp.type='text' "
+                        f"AND sp.value IN ({places}))"
+                    )
+                    journal_conditions = " OR ".join(
+                        "instr(','||coalesce(json_extract(st.payload,'$.services'),'')"
+                        "||',',','||?||',')>0"
+                        for _ in selected_services
+                    )
+                    journal_match = (
+                        "EXISTS(SELECT 1 FROM identifiers si "
+                        "JOIN streaming_state st ON st.key='item:'||"
+                        "(CASE WHEN w.kind='tvshow' THEN 'tv' ELSE 'movie' END)"
+                        "||':'||si.value WHERE si.work_id=w.id "
+                        "AND si.namespace='tmdb' AND st.deleted=0 "
+                        f"AND ({journal_conditions}))"
+                    )
+                    clauses.append("(" + edition_match + " OR " + journal_match + ")")
+                    params.extend(selected_services)
+                    params.extend(selected_services)
+            else:
+                edition_match = (
+                    "EXISTS(SELECT 1 FROM records sr,"
+                    " json_each(sr.payload,'$.metadata.streaming_services') sp "
+                    "WHERE sr.work_id=w.id AND sp.type='text' AND sp.value<>'')"
+                )
+                journal_match = (
+                    "EXISTS(SELECT 1 FROM identifiers si "
+                    "JOIN streaming_state st ON st.key='item:'||"
+                    "(CASE WHEN w.kind='tvshow' THEN 'tv' ELSE 'movie' END)"
+                    "||':'||si.value WHERE si.work_id=w.id "
+                    "AND si.namespace='tmdb' AND st.deleted=0 "
+                    "AND coalesce(json_extract(st.payload,'$.services'),'')<>'')"
+                )
+                clauses.append("NOT (" + edition_match + " OR " + journal_match + ")")
         if year_min is not None:
             clauses.append("w.year>=?")
             params.append(year_min)
         if year_max is not None:
             clauses.append("w.year<=?")
             params.append(year_max)
-        if rating_min is not None:
-            clauses.append("w.rating>=?")
-            params.append(rating_min)
-        if user_rating_min is not None:
-            clauses.append("w.user_rating>=?")
-            params.append(user_rating_min)
+        # Inclusive score ranges. Unrated (NULL) entries only disappear when
+        # either bound is supplied, never for an untouched [0,10] control.
+        for lower, upper, column in (
+            (rating_min, rating_max, "rating"),
+            (user_rating_min, user_rating_max, "user_rating"),
+        ):
+            for value in (lower, upper):
+                if value is not None and (not math.isfinite(value) or not 0 <= value <= 10):
+                    raise ValueError("Rating bounds must be between 0 and 10.")
+            if lower is not None and upper is not None and lower > upper:
+                raise ValueError("Rating minimum cannot exceed maximum.")
+            if lower is not None:
+                clauses.append(f"w.{column}>=?")
+                params.append(lower)
+            if upper is not None:
+                clauses.append(f"w.{column}<=?")
+                params.append(upper)
+        # Strict thresholds intentionally exclude unrated media (NULL).
+        for value, column, operator in (
+            (rating_gt, "rating", ">"), (rating_lt, "rating", "<"),
+            (user_rating_gt, "user_rating", ">"), (user_rating_lt, "user_rating", "<"),
+        ):
+            if value is not None:
+                if not math.isfinite(value) or not 0 <= value <= 10:
+                    raise ValueError("Rating threshold must be between 0 and 10.")
+                clauses.append(f"w.{column}{operator}?")
+                params.append(value)
         requested_formats = [format] if isinstance(format, str) else (format or [])
         if len(requested_formats) > 20 or any(
             not isinstance(label, str) or not 1 <= len(label.strip()) <= 120
@@ -3062,6 +3432,7 @@ class Store:
             "year": "year",
             "rating": "rating",
             "user_rating": "user_rating",
+            "popularity": "popularity",
             "last_played": "last_played",
             "date_modified": "date_modified",
             "episode": "episode",
@@ -3718,6 +4089,8 @@ class Store:
                               "edition_format_overrides"):
                     if field in old_payload:
                         payload = {**payload, field: old_payload[field]}
+                if "tmdb_popularity" not in payload and "tmdb_popularity" in old_payload:
+                    payload = {**payload, "tmdb_popularity": old_payload["tmdb_popularity"]}
                 # A lookup without a TMDB vote keeps the last known rating.
                 if "tmdb_rating" not in payload:
                     for field in ("tmdb_rating", "tmdb_rating_refreshed_at"):
@@ -4376,6 +4749,9 @@ class Store:
                     payload["tmdb_id"] = tmdb_id
                 if poster and not payload.get("poster"):
                     payload["poster"] = poster
+                incoming_popularity = self._tmdb_popularity(item.get("tmdb_popularity"))
+                if incoming_popularity is not None:
+                    payload["tmdb_popularity"] = incoming_popularity
                 # Local-first rating refresh: the most recent explicit refresh
                 # wins, whether it ran on the server or on a device.
                 rating = self._tmdb_rating(item.get("tmdb_rating"))
@@ -4439,7 +4815,7 @@ class Store:
     RATING_JOB_KEY = "tmdb_rating_refresh_v1"
 
     def _store_tmdb_rating(self, conn, work_id: str, rating: float,
-                           refreshed: datetime) -> str:
+                           refreshed: datetime, popularity: float | None = None) -> str:
         """Store a refreshed TMDB vote; the most recent refresh always wins.
 
         Returns "accepted" when the public rating changed, otherwise "unchanged".
@@ -4455,6 +4831,9 @@ class Store:
             return "unchanged"
         payload = {**old, "tmdb_rating": rating,
                    "tmdb_rating_refreshed_at": refreshed.isoformat(timespec="seconds")}
+        metric = self._tmdb_popularity(popularity)
+        if metric is not None:
+            payload["tmdb_popularity"] = metric
         if cached:
             conn.execute("UPDATE enrichment SET payload=? WHERE work_id=?",
                          (encode(payload), work_id))
@@ -4463,16 +4842,23 @@ class Store:
             # so it never suppresses the automatic credits/trailers worker.
             conn.execute("INSERT INTO enrichment(work_id,payload,updated_at) VALUES(?,?,?)",
                          (work_id, encode(payload), now()))
-        before = conn.execute("SELECT rating FROM works WHERE id=?", (work_id,)).fetchone()
+        before = conn.execute(
+            "SELECT rating,popularity FROM works WHERE id=?", (work_id,)
+        ).fetchone()
         self._rebuild(conn, work_id)
-        after = conn.execute("SELECT rating FROM works WHERE id=?", (work_id,)).fetchone()
-        if (before and before["rating"]) == (after and after["rating"]):
+        after = conn.execute(
+            "SELECT rating,popularity FROM works WHERE id=?", (work_id,)
+        ).fetchone()
+        if before and after and all(
+            before[field] == after[field] for field in ("rating", "popularity")
+        ):
             return "unchanged"
         conn.execute("INSERT INTO rating_changes(work_id,updated_at) VALUES(?,?)",
                      (work_id, now()))
         return "accepted"
 
-    def save_tmdb_rating(self, work_id: str, rating: float) -> str:
+    def save_tmdb_rating(self, work_id: str, rating: float,
+                         popularity: float | None = None) -> str:
         """Server-side bulk refresh result for one canonical work."""
         value = self._tmdb_rating(rating)
         if value is None:
@@ -4481,7 +4867,7 @@ class Store:
             conn.execute("BEGIN IMMEDIATE")
             if not conn.execute("SELECT 1 FROM works WHERE id=?", (work_id,)).fetchone():
                 return "rejected"
-            return self._store_tmdb_rating(conn, work_id, value, datetime.now(UTC))
+            return self._store_tmdb_rating(conn, work_id, value, datetime.now(UTC), popularity)
 
     def merge_device_tmdb_ratings(self, items: list[dict[str, Any]]) -> dict[str, list[str]]:
         """Accept ratings refreshed on a device (local-first) by canonical work.
@@ -4520,14 +4906,14 @@ class Store:
         """Bounded public-rating changes, including those made by other devices."""
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT c.id,c.work_id,w.rating FROM rating_changes c "
+                "SELECT c.id,c.work_id,w.rating,w.popularity FROM rating_changes c "
                 "JOIN works w ON w.id=c.work_id WHERE c.id>? ORDER BY c.id LIMIT ?",
                 (max(0, after), min(500, max(1, limit))),
             ).fetchall()
             cursor = conn.execute("SELECT COALESCE(MAX(id),0) FROM rating_changes").fetchone()[0]
         latest: dict[str, Any] = {}
         for row in rows:
-            latest[row["work_id"]] = row["rating"]
+            latest[row["work_id"]] = {"rating": row["rating"], "popularity": row["popularity"]}
         if rows:
             next_cursor = rows[-1]["id"]
         elif after > cursor:
@@ -4537,7 +4923,7 @@ class Store:
         return {
             "cursor": next_cursor,
             "has_more": bool(rows) and rows[-1]["id"] < cursor,
-            "changes": [{"media_id": key, "rating": value} for key, value in latest.items()],
+            "changes": [{"media_id": key, **value} for key, value in latest.items()],
         }
 
     def tmdb_rating_candidates(self) -> list[str]:

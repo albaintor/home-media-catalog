@@ -1,0 +1,1563 @@
+// Streaming web parity: personal heart shelves plus TMDB-backed discovery
+// via the NAS. User state is synced with the iOS local-first journal.
+import { tr, displayLocale } from './i18n.js';
+import { bindRatingRange } from './rating-range.js';
+
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const root = new URL('.', window.location.href);
+const names = {
+  netflix:'Netflix',disney_plus:'Disney+',prime_video:'Prime Video',
+  apple_tv_plus:'Apple TV+',hbo_max:'HBO Max',paramount_plus:'Paramount+',
+  crunchyroll:'Crunchyroll',rakuten_viki:'Rakuten Viki',mubi:'MUBI'
+};
+// Same illustrated vector assets and single-icon presentation as iOS.
+const streamingSymbolPaths = {
+  movie:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4m-4 6h4m10-6h4m-4 6h4"/>',
+  tv:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8 2 4 3 4-3M8 22h8"/>',
+  action:'<path d="m13 2-9 12h7l-1 8 10-13h-7z"/>',
+  adventure:'<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2.2 5-4.8 2 2.2-5z"/>',
+  science_fiction:'<path d="m12 2 2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z"/>',
+  popular:'<path d="M12 22c4.5 0 7-3.2 7-7.5 0-3.1-2-5.6-4-7-1 4-2 4-3 4-1-4.3-2.2-6.5-4-8C7 7 5 10 5 14.5 5 18.7 7.5 22 12 22z"/>',
+  recent:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
+};
+// Whitelist artwork names to prevent a saved preference from reaching CSS URLs.
+const genreArt = new Set([
+  'action','adventure','animation','comedy','documentary','drama','family',
+  'fantasy','history','horror','kids','romance','science_fiction','war','western'
+]);
+function streamingSymbol(name,extraClass=''){
+  const body=streamingSymbolPaths[name];
+  return body?'<svg class="'+extraClass+'" viewBox="0 0 24 24" aria-hidden="true">'+body+'</svg>':'';
+}
+function genreArtwork(key){
+  const name=key==='war_movies'||key==='war_politics'?'war':key;
+  if(!genreArt.has(name))return '';
+  return '<span class="streaming-genre-art" style="--genre-art:url(./streaming-genres/'+
+    name.replaceAll('_','-')+'.svg)"></span>';
+}
+function categoryIcons(kind,genreKey='',sort=''){
+  if(!['movie','tv'].includes(kind))return '';
+  const art=genreArtwork(genreKey);
+  const icon=art||streamingSymbol(
+    genreKey&&streamingSymbolPaths[genreKey]?genreKey:
+      sort==='top'?'popular':sort==='recent'?'recent':kind
+  );
+  return '<span class="streaming-category-icons streaming-kind-'+kind+
+    '" aria-hidden="true">'+icon+'</span>';
+}
+function genreIcons(option){
+  const [key,,movieGenre,tvGenre]=option;
+  const mixed=movieGenre!=null&&tvGenre!=null;
+  const cls=mixed?'streaming-kind-mixed':
+    movieGenre!=null?'streaming-kind-movie':'streaming-kind-tv';
+  const icon=genreArtwork(key)||streamingSymbol(streamingSymbolPaths[key]?key:
+    movieGenre!=null?'movie':'tv');
+  return '<span class="streaming-category-icons '+cls+'" aria-hidden="true">'+
+    icon+'</span>';
+}
+function displayPreference(key){
+  try{return localStorage.getItem('hmc-streaming-display-'+key)==='true';}
+  catch{return false;}
+}
+function setDisplayPreference(key,value){
+  try{localStorage.setItem('hmc-streaming-display-'+key,String(value));}catch{}
+}
+function popularityIndex(title){
+  const score=Number(title?.popularity);
+  return title?.popularity!=null&&Number.isFinite(score)&&score>=0?score:null;
+}
+
+const genreOptions = [
+  ['action','Action & adventure',28,10759],
+  ['comedy','Comedy',35,35],
+  ['drama','Drama',18,18],
+  ['crime','Crime',80,80],
+  ['science_fiction','Science fiction & fantasy',878,10765],
+  ['family','Family',10751,10751],
+  ['animation','Animation',16,16],
+  ['documentary','Documentary',99,99],
+  ['adventure','Adventure',12,null],
+  ['fantasy','Fantasy',14,null],
+  ['mystery','Mystery',9648,9648],
+  ['thriller','Thriller',53,null],
+  ['horror','Horror',27,null],
+  ['romance','Romance',10749,null],
+  ['reality','Reality TV',null,10764],
+  ['history','Historical movies',36,null],
+  ['music','Music movies',10402,null],
+  ['war_politics','War & politics',10752,10768],
+  ['kids','Kids',null,10762],
+  ['k_drama','K-dramas',null,18,{originCountry:'KR',originalLanguage:'ko'}],
+  ['korean_movies','Korean movies',null,null,
+    {originCountry:'KR',originalLanguage:'ko',allowNoGenre:true,kind:'movie'}],
+  ['anime','Japanese anime',16,16,{originCountry:'JP',originalLanguage:'ja'}],
+  ['british_crime','British crime series',null,80,
+    {originCountry:'GB',originalLanguage:'en'}],
+  ['french_movies','French movies',null,null,
+    {originCountry:'FR',originalLanguage:'fr',allowNoGenre:true,kind:'movie'}],
+  ['japanese_movies','Japanese movies',null,null,
+    {originCountry:'JP',originalLanguage:'ja',allowNoGenre:true,kind:'movie'}],
+  ['western','Westerns',37,37],
+  ['tv_movie','TV movies',10770,null],
+  ['soap','Soap operas',null,10766],
+  ['talk_shows','Talk shows',null,10767],
+  ['news','News & current affairs',null,10763],
+  ['war_movies','War movies',10752,null],
+  ['sci_fi_movies','Science fiction movies',878,null],
+  ['american_documentary','American documentaries',99,99,
+    {originCountry:'US',originalLanguage:'en'}],
+  ['action_tv','Action & adventure series',null,10759],
+  ['scifi_tv','Science fiction & fantasy series',null,10765]
+];
+const state = {
+  rows:[], visible:[],subscriptions:[], kind:'both', region:'FR',
+  query:'',loaded:false,loading:false,session:null,
+  cache:new Map(),titles:new Map(),shelves:new Map(),
+  observer:null,version:0,subview:null,selected:null,searchTimer:null,
+  subviewSearchTimer:null,
+  logos:{},detailCache:new Map(),metrics:new Map(),person:null,
+  personVersion:0,personReturnKey:null,personAvailabilityCache:new Map(),
+  lists:[],collections:[],detailMessage:'',personal:new Map()
+};
+function preference(key,fallback) {
+  const row=state.rows.find(r=>r.key==='prefs:'+key && !r.deleted);
+  return typeof row?.payload?.value==='string'?row.payload.value:fallback;
+}
+
+const defaultGenres='action,drama,comedy,k_drama,anime,mystery,thriller';
+const featuredIDs=['popular_tv','popular_movie','recent_tv','recent_movie'];
+function availableGenres(){
+  const dynamic=state.rows.filter(row=>!row.deleted &&
+    /^category:keyword:[0-9]+$/.test(row.key) && !!row.payload?.name)
+    .map(row=>{
+      const id=Number(row.key.slice('category:keyword:'.length));
+      return ['keyword_'+id,row.payload.name,null,null,{allowNoGenre:true,keywordID:id}];
+    });
+  return [...genreOptions,...dynamic.sort((a,b)=>a[1].localeCompare(b[1]))];
+}
+function selectedGenreKeys(){
+  return [...new Set(preference('genres',defaultGenres).split(',').filter(Boolean))];
+}
+function orderedCategoryIDs(){
+  const available=new Set(availableGenres().map(row=>row[0]));
+  const all=featuredIDs.map(key=>'featured:'+key).concat(
+    selectedGenreKeys().filter(key=>available.has(key)).map(key=>'category:'+key));
+  const allowed=new Set(all),seen=new Set();
+  return preference('category_order','').split(',').filter(id=>allowed.has(id))
+    .concat(all).filter(id=>!seen.has(id)&&seen.add(id));
+}
+function featuredEnabled(key){
+  const old=key.startsWith('popular_')?'show_tops':'show_recent';
+  return preference('special_category_'+key,preference(old,'true'))==='true';
+}
+function persistCategoryOrder(ids){
+  persistPreference('category_order',ids.join(','));
+  persistPreference('genres',ids.filter(id=>id.startsWith('category:'))
+    .map(id=>id.slice('category:'.length)).join(','));
+}
+
+function renderCategoryPreferences(){
+  const options=availableGenres();
+  const byKey=new Map(options.map(option=>[option[0],option]));
+  const selected=new Set(selectedGenreKeys());
+  const ids=orderedCategoryIDs();
+  const titles={
+    popular_tv:'Popular series',popular_movie:'Popular movies',
+    recent_tv:'Recent series',recent_movie:'Recent movies'
+  };
+  const configured=ids.map((id,index)=>{
+    const key=id.slice(id.indexOf(':')+1);
+    const featured=id.startsWith('featured:');
+    const option=byKey.get(key);
+    const title=featured?titles[key]:option?.[1];
+    if(!title)return '';
+    const attribute=featured?'data-streaming-featured':'data-streaming-genre';
+    const checked=featured?featuredEnabled(key):selected.has(key);
+    return '<div class="streaming-category-settings-row"><label><input type="checkbox" '+
+      attribute+'="'+esc(key)+'" '+(checked?'checked':'')+'> '+
+      (featured?streamingSymbol(key.startsWith('popular_')?'popular':'recent'):
+        genreIcons(option))+esc(title)+'</label>'+
+      '<span class="streaming-category-reorder">'+
+      '<button type="button" data-streaming-move="'+esc(id)+'" data-move="-1" '+
+      (index===0?'disabled':'')+' aria-label="Move '+esc(title)+' up">↑</button>'+
+      '<button type="button" data-streaming-move="'+esc(id)+'" data-move="1" '+
+      (index===ids.length-1?'disabled':'')+' aria-label="Move '+esc(title)+' down">↓</button>'+
+      '</span></div>';
+  });
+  const missing=options.filter(row=>!selected.has(row[0])).map(row=>
+    '<label class="streaming-available-genre"><input type="checkbox" '+
+      'data-streaming-genre="'+esc(row[0])+'"> '+
+      genreIcons(row)+esc(row[1])+'</label>');
+  $('streaming-genre-options').innerHTML=configured.join('')+
+    (missing.length?'<div class="streaming-category-unselected"><strong>Autres catégories</strong>'+
+      missing.join('')+'</div>':'');
+}
+function scoreLimit(key,fallback){
+  const score=Number(preference(key,String(fallback)));
+  return Number.isFinite(score)?Math.min(10,Math.max(0,score)):fallback;
+}
+function matchesStreamingFilters(title){
+  const key=keyFor(title),metric=state.metrics.get(key);
+  const personal=state.personal?.get(key);
+  const watched=personal?.watched==='true'?true:
+    personal?.watched==='false'?false:metric?.watch_status==='watched';
+  const watch=preference('watch_filter','all');
+  if(watch==='watched'&&!watched)return false;
+  if(watch==='unwatched'&&watched)return false;
+  const publicMin=scoreLimit('rating_min',0),publicMax=scoreLimit('rating_max',10);
+  const personalMin=scoreLimit('user_rating_min',0),personalMax=scoreLimit('user_rating_max',10);
+  const ownRating=personal?.rating_cleared==='true'?null:
+    personal?.rating!=null?Number(personal.rating):metric?.user_rating;
+  const rated=ownRating!=null&&Number.isFinite(Number(ownRating));
+  const status=preference('personal_rating_filter','all');
+  if(status==='rated'&&!rated)return false;
+  if(status==='unrated'&&rated)return false;
+  if(publicMin>0||publicMax<10){
+    const value=Number(title.rating)||Number(metric?.rating)||0;
+    if(!value||value<publicMin||value>publicMax)return false;
+  }
+  if(personalMin>0||personalMax<10){
+    const value=Number(ownRating);
+    if(!rated||value<personalMin||value>personalMax)return false;
+  }
+  return true;
+}
+let preferenceWrites=Promise.resolve();
+function persistPreference(key,value){
+  const recordKey='prefs:'+key;
+  const previous=state.rows.find(r=>r.key===recordKey);
+  const modified_at=new Date(Math.max(Date.now(),(Date.parse(previous?.modified_at)||0)+2)).toISOString();
+  const change={key:recordKey,payload:{value:String(value)},modified_at,deleted:false};
+  if(previous)Object.assign(previous,change);
+  else state.rows.push(change);
+  preferenceWrites=preferenceWrites.catch(()=>{}).then(async()=>{
+    if(!state.session)state.session=await api('auth/session');
+    if(state.session.role!=='admin')return;
+    try {
+      const result=await api('streaming/state/sync',{method:'POST',headers:{
+        'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
+      },body:JSON.stringify({changes:[change]})});
+      // Only update the acknowledged row; other unsent local preferences remain.
+      const acknowledged=(result.rows||[]).find(row=>row.key===recordKey);
+      const current=state.rows.find(row=>row.key===recordKey);
+      if(acknowledged&&current?.payload?.value===value)
+        Object.assign(current,acknowledged);
+    }catch(error){failure('Preference synchronization failed: '+error.message);}
+  });
+}
+const streamingRatingRanges = {};
+function syncFilterPreferences(){
+  $('streaming-watch-filter').value=preference('watch_filter','all');
+  $('streaming-personal-rating-filter').value=preference('personal_rating_filter','all');
+  streamingRatingRanges.public?.set(scoreLimit('rating_min',0),scoreLimit('rating_max',10));
+  streamingRatingRanges.personal?.set(scoreLimit('user_rating_min',0),scoreLimit('user_rating_max',10));
+  $('streaming-show-popularity').checked=displayPreference('popularity');
+  $('streaming-show-personal-rating').checked=displayPreference('personal_rating');
+  const subscribed=new Set(subscribedServices());
+  $('streaming-subscription-options').innerHTML=Object.keys(names).map(key=>
+    '<label><input type="checkbox" data-streaming-subscription="'+esc(key)+'" '+
+    (subscribed.has(key)?'checked':'')+'> '+esc(names[key])+'</label>').join('');
+  renderCategoryPreferences();
+}
+function indexPersonalRows(){
+  state.personal=new Map(state.rows.filter(row=>
+    !row.deleted && /^personal:(movie|tv):[0-9]+$/.test(row.key))
+    .map(row=>[row.key.slice('personal:'.length),row.payload||{}]));
+}
+function personalRatingFor(title){
+  const own=state.personal.get(keyFor(title));
+  if(own?.rating_cleared==='true')return null;
+  const raw=own?.rating??state.metrics.get(keyFor(title))?.user_rating;
+  if(raw==null||raw==='')return null;
+  const value=Number(raw);
+  return Number.isFinite(value)&&value>=0&&value<=10?value:null;
+}
+function personalRows(kind) {
+  return state.rows.filter(row=>!row.deleted &&
+    /^item:(movie|tv):[0-9]+$/.test(row.key) &&
+    (!kind || row.payload?.kind===kind) &&
+    ['saved','pending'].includes(row.payload?.status) &&
+    row.payload?.liked!=='false' && row.payload?.title)
+    .sort((a,b)=>String(b.modified_at||'').localeCompare(String(a.modified_at||'')));
+}
+function keyFor(title){return title.kind+':'+title.id;}
+function savedRow(title){
+  return state.rows.find(row=>!row.deleted&&row.key==='item:'+keyFor(title) &&
+    ['saved','pending'].includes(row.payload?.status) &&
+    row.payload?.liked!=='false');
+}
+function normalizeTitle(row){
+  const p=row.payload;
+  return {id:Number(p.tmdb_id),kind:p.kind,title:p.title,
+    original_title:p.original_title||p.title,year:Number(p.year)||null,
+    poster_path:p.poster_path||null,backdrop_path:p.backdrop_path||null,
+    overview:p.overview||'',rating:Number(p.rating)||0,
+    popularity:p.popularity==null||p.popularity===''?null:Number(p.popularity),
+    service_keys:(p.services||'').split(',').filter(x=>names[x]),
+    work_id:p.work_id||null};
+}
+function posterURL(raw,base='w342'){
+  return typeof raw==='string'&&/^\/[a-z0-9_.-]{1,150}$/i.test(raw)
+    ? 'https://image.tmdb.org/t/p/'+base+raw:'';
+}
+function validRegion(){
+  let v=state.region.toUpperCase();
+  if(v==='AUTO'){
+    try{v=new Intl.Locale(navigator.language||'fr-FR').region?.toUpperCase()||'FR';}
+    catch{v=(navigator.language||'fr-FR').split('-')[1]?.toUpperCase()||'FR';}
+  }
+  return /^[A-Z]{2}$/.test(v)?v:'FR';
+}
+async function api(route,options={}){
+  const response=await fetch(new URL('api/v1/'+route,root),{
+    credentials:'same-origin',cache:'no-store',...options
+  });
+  if(!response.ok){
+    let message='HTTP '+response.status;
+    try{const data=await response.json();message=data.detail||data.error?.message||message;}catch{}
+    throw new Error(typeof message==='string'?message:JSON.stringify(message));
+  }
+  return response.status===204?null:response.json();
+}
+function failure(text){$('streaming-error').textContent=text;$('streaming-error').hidden=false;}
+function servicesFor(title){
+  const saved=savedRow(title);
+  const source=title.service_keys||saved?.payload?.services?.split(',')||[];
+  return [...new Set(source)].filter(s=>names[s]);
+}
+function providerSearchURL(key,title) {
+  const q=encodeURIComponent(title);
+  switch(key){
+    case 'netflix':return 'https://www.netflix.com/search?q='+q;
+    case 'disney_plus':return 'https://www.disneyplus.com/search/'+q;
+    case 'prime_video':return 'https://www.primevideo.com/search/?phrase='+q;
+    case 'apple_tv_plus':return 'https://tv.apple.com/'+validRegion().toLowerCase()+'/search?term='+q;
+    case 'hbo_max':return 'https://play.max.com/search?q='+q;
+    case 'paramount_plus':return 'https://www.paramountplus.com/search/?q='+q;
+    case 'crunchyroll':return 'https://www.crunchyroll.com/search?q='+q;
+    case 'rakuten_viki':return 'https://www.viki.com/search?q='+q;
+    case 'mubi':return 'https://mubi.com/search?query='+q;
+    default:return '';
+  }
+}
+function directURL(title,key){
+  const pattern='link:'+title.kind+':'+title.id+':'+key;
+  const scoped='link:'+validRegion()+':'+title.kind+':'+title.id+':'+key;
+  const row=state.rows.find(r=>!r.deleted&&(r.key===scoped||
+    (validRegion()==='FR'&&r.key===pattern)));
+  const raw=row?.payload?.url;
+  if(!raw)return '';
+  try{
+    const u=new URL(raw),host=u.hostname.toLowerCase();
+    const allowed={netflix:['netflix.com'],disney_plus:['disneyplus.com'],
+      prime_video:['primevideo.com'],apple_tv_plus:['tv.apple.com'],
+      hbo_max:['max.com','hbomax.com'],paramount_plus:['paramountplus.com'],
+      crunchyroll:['crunchyroll.com'],rakuten_viki:['viki.com'],
+      mubi:['mubi.com']}[key]||[];
+    return u.protocol==='https:'&&!u.username&&!u.password&&
+      allowed.some(h=>host===h||host.endsWith('.'+h))?u.href:'';
+  }catch{return ''}
+}
+function providerIcon(key) {
+  const path=state.logos[key];
+  if(typeof path==='string' && /^\/[A-Za-z0-9_.-]{1,150}$/.test(path))
+    return '<img loading="lazy" decoding="async" src="'+
+      esc('https://image.tmdb.org/t/p/w92'+path)+'" alt="">';
+  const initials={
+    netflix:'N',disney_plus:'D+',prime_video:'Prime',apple_tv_plus:'',
+    hbo_max:'Max',paramount_plus:'P+',crunchyroll:'C',
+    rakuten_viki:'V',mubi:'M'
+  };
+  return '<span class="streaming-logo-fallback '+esc(key)+'" aria-hidden="true">'+
+    esc(initials[key]||'?')+'</span>';
+}
+function providerLogo(key) {
+  return '<span class="streaming-logo" data-provider-logo="'+esc(key)+
+    '" title="'+esc(names[key]||key)+'">'+providerIcon(key)+'</span>';
+}
+function refreshProviderLogos() {
+  document.querySelectorAll('#streaming-page [data-provider-logo]').forEach(node=>{
+    node.innerHTML=providerIcon(node.dataset.providerLogo);
+  });
+}
+async function loadProviderLogos() {
+  try {
+    const stored=sessionStorage.getItem('hmc-streaming-logos-'+validRegion());
+    if(stored)state.logos=JSON.parse(stored);
+  } catch {}
+  refreshProviderLogos();
+  try {
+    const result=await api('streaming/providers?'+new URLSearchParams({region:validRegion()}));
+    const logos={};
+    for(const item of result.providers||[])
+      if(names[item.key] && typeof item.logo_path==='string' &&
+         /^\/[A-Za-z0-9_.-]{1,150}$/.test(item.logo_path))
+        logos[item.key]=item.logo_path;
+    state.logos=logos;
+    try{sessionStorage.setItem('hmc-streaming-logos-'+validRegion(),JSON.stringify(logos));}catch{}
+    refreshProviderLogos();
+  } catch {
+    // Keep previously obtained provider artwork and fallbacks.
+  }
+}
+function card(title){
+  const key=keyFor(title);
+  state.titles.set(key,title);
+  const poster=posterURL(title.poster_path),isSaved=!!savedRow(title);
+  const badges=servicesFor(title).slice(0,4).map(s=>providerLogo(s)).join('');
+  const year=title.year||'',rating=Number(title.rating)||0;
+  const personal=personalRatingFor(title);
+  const hasPersonal=personal!=null&&personal>0;
+  const popularity=popularityIndex(title);
+  const scores=[
+    rating>0?'<span class="streaming-rating" title="Note TMDB">★ '+rating.toFixed(1)+'</span>':'',
+    displayPreference('personal_rating')&&hasPersonal?
+      '<span class="streaming-rating streaming-user-score" title="Ma note">☆ '+personal.toFixed(1)+'</span>':'',
+    displayPreference('popularity')&&popularity!=null?
+      '<span class="streaming-rating streaming-popularity" title="Indice de popularité TMDB">↗ '+
+      esc(Math.round(popularity))+'</span>':''
+  ].filter(Boolean).join('');
+  return '<article class="streaming-tile" data-streaming-title="'+esc(key)+
+    '"><div class="streaming-tile-art">'+
+    '<button class="streaming-tile-poster" type="button" data-streaming-card="'+esc(key)+'" aria-label="'+esc(title.title)+'">'+
+    (poster?'<img loading="lazy" decoding="async" src="'+esc(poster)+'" alt="">':
+      '<span>'+esc((title.title||'?').slice(0,2).toUpperCase())+'</span>')+'</button>'+
+    '<button type="button" class="streaming-heart'+(isSaved?' saved':'')+
+    '" aria-label="'+esc(isSaved?'In my catalog':'Add to catalog')+
+    '" title="'+esc(isSaved?'In my catalog':'Add to catalog')+
+    '" data-streaming-heart="'+esc(key)+'">'+(isSaved?'♥':'♡')+'</button>'+
+    (scores?'<span class="streaming-score-stack">'+scores+'</span>':'')+
+    (badges?'<span class="streaming-tile-services">'+badges+'</span>':'')+'</div>'+
+    '<div class="streaming-tile-title" title="'+esc(title.title)+'">'+esc(title.title)+'</div>'+
+    '<div class="streaming-tile-year">'+esc(year)+'</div></article>';
+}
+function shelf(id,heading,content,notes='',more=true,kind='',genreKey='',sort='') {
+  return '<section class="streaming-shelf" data-streaming-shelf="'+esc(id)+'">'+
+    '<div class="streaming-shelf-header"><h3>'+categoryIcons(kind,genreKey,sort)+
+      esc(heading)+'</h3>'+
+    (notes?'<span class="streaming-shelf-note">'+esc(notes)+'</span>':'')+'</div>'+
+    '<div class="streaming-shelf-track">'+content+'</div>'+
+    (more?'<button type="button" class="streaming-see-more" data-streaming-more="'+
+      esc(id)+'">'+esc('See more titles')+'</button>':'')+'</section>';
+}
+// The saved sections follow iOS: search, service, kind and personal filters
+// are applied before deciding whether a shelf exists.
+function matchesTitleText(title,phrase){
+  const q=String(phrase||'').trim().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase();
+  if(!q)return true;
+  return [title.title,title.original_title].some(value=>
+    String(value||'').normalize('NFD')
+      .replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase().includes(q));
+}
+function matchesSavedSearch(title){return matchesTitleText(title,state.query);}
+function matchesSavedVisibility(title){
+  const available=servicesFor(title);
+  return (!available.length||available.some(service=>state.visible.includes(service))) &&
+    matchesSavedSearch(title) && matchesStreamingFilters(title);
+}
+function renderSaved(){
+  const groups=[['movie','My Movies'],['tv','My Series']];
+  $('streaming-saved').innerHTML=groups.map(([kind,heading])=>{
+    if(state.kind!=='both'&&state.kind!==kind)return '';
+    const titles=personalRows(kind).map(normalizeTitle);
+    const visible=titles.filter(matchesSavedVisibility);
+    state.shelves.set('saved-'+kind,{
+      id:'saved-'+kind,heading,items:titles,kind,saved:true,page:1,total:1
+    });
+    if(!visible.length)return '';
+    return shelf('saved-'+kind,heading,visible.slice(0,12).map(card).join(''),
+      '',!state.query.trim(),kind);
+  }).join('');
+}
+function subscribedServices(){
+  const all=Object.keys(names);
+  const subs=preference('subscriptions',all.join(',')).split(',').filter(s=>names[s]);
+  return all.filter(s=>subs.includes(s));
+}
+function filterChips(){
+  const subs=state.subscriptions;
+  const fullySelected=subs.length>0&&state.visible.length===subs.length;
+  $('streaming-services').innerHTML=
+    '<button type="button" aria-pressed="'+fullySelected+'" data-streaming-service="all">'+
+    esc('All')+'</button>'+
+    subs.map(s=>'<button type="button" data-streaming-service="'+esc(s)+
+      '" aria-pressed="'+state.visible.includes(s)+'">'+providerLogo(s)+
+      esc(names[s])+'</button>').join('');
+}
+function computeShelves(){
+  const kinds=state.kind==='both'?['tv','movie']:[state.kind];
+  const byKey=new Map(availableGenres().map(option=>[option[0],option]));
+  const result=[];
+  for(const id of orderedCategoryIDs()){
+    if(id.startsWith('featured:')){
+      const key=id.slice('featured:'.length);
+      if(!featuredEnabled(key))continue;
+      const kind=key.endsWith('_tv')?'tv':'movie';
+      if(!kinds.includes(kind))continue;
+      const popular=key.startsWith('popular_');
+      result.push({kind,sort:popular?'top':'recent',genre:null,
+        heading:popular?(kind==='tv'?'Popular series across my services':
+          'Popular movies across my services'):
+          (kind==='tv'?'Recently available · series':'Recently available · movies')});
+    }else{
+      const option=byKey.get(id.slice('category:'.length));
+      if(!option)continue;
+      const [key,label,movieGenre,tvGenre,extra={}]=option;
+      for(const kind of kinds){
+        const genre=kind==='tv'?tvGenre:movieGenre;
+        if(genre==null&&!(extra.allowNoGenre&&(!extra.kind||extra.kind===kind)))continue;
+        result.push({kind,sort:'popularity',genre,genreKey:key,
+          keywordID:extra.keywordID,originCountry:extra.originCountry,
+          originalLanguage:extra.originalLanguage,
+          heading:label+' · '+(kind==='tv'?'series':'movies')});
+      }
+    }
+  }
+  return result;
+}
+let activeLoads=0;
+const queue=[];
+function limited(operation) {
+  return new Promise((resolve,reject)=>{
+    queue.push({operation,resolve,reject});
+    pump();
+  });
+}
+function pump() {
+  while(activeLoads<3&&queue.length){
+    const job=queue.shift();
+    activeLoads++;
+    Promise.resolve().then(job.operation).then(job.resolve,job.reject).finally(()=>{
+      activeLoads--;pump();
+    });
+  }
+}
+// Persistent, incremental cache for public TMDB listings, searches and details.
+// IndexedDB is optional (Safari private browsing may disable it); a small
+// in-memory L1 remains available either way. No personal/authorization rows
+// or catalogue state are stored here.
+const STREAMING_WEB_CACHE_LIMIT=50*1024*1024;
+const STREAMING_WEB_CACHE_TARGET=46*1024*1024;
+const streamingInFlight=new Map();
+let streamingCacheDatabase=null;
+function openStreamingCache(){
+  if(streamingCacheDatabase)return streamingCacheDatabase;
+  if(typeof indexedDB==='undefined')return Promise.resolve(null);
+  streamingCacheDatabase=new Promise(resolve=>{
+    let request;
+    try{request=indexedDB.open('hmc-streaming-public-cache',1);}
+    catch{resolve(null);return;}
+    request.onupgradeneeded=()=>{
+      const store=request.result.createObjectStore('entries',{keyPath:'key'});
+      store.createIndex('lastUsed','lastUsed');
+    };
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>resolve(null);
+    request.onblocked=()=>resolve(null);
+  });
+  return streamingCacheDatabase;
+}
+function cacheMemory(key,entry){
+  if(state.cache.has(key))state.cache.delete(key);
+  state.cache.set(key,entry);
+  while(state.cache.size>70)state.cache.delete(state.cache.keys().next().value);
+}
+async function readPublicCache(key){
+  const memory=state.cache.get(key);
+  if(memory){cacheMemory(key,memory);return memory;}
+  const db=await openStreamingCache();
+  if(!db)return null;
+  try{
+    const entry=await new Promise((resolve,reject)=>{
+      const request=db.transaction('entries','readonly').objectStore('entries').get(key);
+      request.onsuccess=()=>resolve(request.result||null);
+      request.onerror=()=>reject(request.error);
+    });
+    if(!entry)return null;
+    cacheMemory(key,entry);
+    // Do not block the render to update LRU metadata.
+    try{
+      const transaction=db.transaction('entries','readwrite');
+      transaction.objectStore('entries').put({...entry,lastUsed:Date.now()});
+    }catch{}
+    return entry;
+  }catch{return null;}
+}
+async function writePublicCache(key,value){
+  const savedAt=Date.now();
+  let size=0;
+  try{size=new TextEncoder().encode(JSON.stringify(value)).length;}catch{return;}
+  if(size>3*1024*1024)return;
+  const record={key,value,savedAt,lastUsed:savedAt,size};
+  cacheMemory(key,record);
+  const db=await openStreamingCache();
+  if(!db)return;
+  try{
+    await new Promise((resolve,reject)=>{
+      const request=db.transaction('entries','readwrite').objectStore('entries').put(record);
+      request.onsuccess=resolve;
+      request.onerror=()=>reject(request.error);
+    });
+    // Trim only after inserting new pages. Old entries are evicted by LRU;
+    // existing metadata pages are never cleared just because a filter changed.
+    const records=await new Promise((resolve,reject)=>{
+      const request=db.transaction('entries','readonly').objectStore('entries').getAll();
+      request.onsuccess=()=>resolve(request.result||[]);
+      request.onerror=()=>reject(request.error);
+    });
+    let total=records.reduce((sum,item)=>sum+(Number(item.size)||0),0);
+    if(total<=STREAMING_WEB_CACHE_LIMIT)return;
+    const victims=records.sort((a,b)=>a.lastUsed-b.lastUsed);
+    const transaction=db.transaction('entries','readwrite');
+    for(const item of victims){
+      if(total<=STREAMING_WEB_CACHE_TARGET)break;
+      transaction.objectStore('entries').delete(item.key);
+      state.cache.delete(item.key);
+      total-=Number(item.size)||0;
+    }
+  }catch{/* Storage quotas or denied IndexedDB must not block Streaming. */}
+}
+async function publicCachedRequest(key,ttl,loader){
+  const cached=await readPublicCache(key);
+  if(cached && Date.now()-cached.savedAt<ttl)return cached.value;
+  if(streamingInFlight.has(key))return streamingInFlight.get(key);
+  const work=(async()=>{
+    try{
+      const result=await loader();
+      await writePublicCache(key,result);
+      return result;
+    }catch(error){
+      if(cached)return cached.value; // Offline: preserve last-known metadata.
+      throw error;
+    }
+  })();
+  streamingInFlight.set(key,work);
+  try{return await work;}finally{streamingInFlight.delete(key);}
+}
+
+function cacheKey(def,page=1) {
+  return [def.kind,def.sort,def.genre||'',def.keywordID||'',def.originCountry||'',
+    def.originalLanguage||'',state.visible.join(','),validRegion(),page].join(':');
+}
+async function retrieve(def,page=1){
+  const key='discover:'+cacheKey(def,page);
+  const params=new URLSearchParams({
+    service:state.visible.join(','),kind:def.kind,region:validRegion()
+  });
+  let endpoint;
+  if(def.sort==='top'&&page===1){
+    endpoint='streaming/top';
+  }else{
+    endpoint='streaming/discover';
+    params.set('page',String(page));
+    params.set('sort',def.sort==='top'?'popularity':def.sort);
+    if(def.genre!=null)params.set('genre',String(def.genre));
+    if(def.keywordID)params.set('keyword_id',String(def.keywordID));
+    if(def.originCountry)params.set('origin_country',def.originCountry);
+    if(def.originalLanguage)params.set('original_language',def.originalLanguage);
+  }
+  return publicCachedRequest(key,15*60*1000,
+    ()=>limited(()=>api(endpoint+'?'+params)));
+}
+function renderDiscoveryShelf(element,def,providedNote){
+  const visible=(def.items||[]).filter(matchesStreamingFilters).slice(0,12);
+  // Do not keep empty categories visible after the first page is loaded.
+  element.hidden=!visible.length;
+  if(!visible.length)return;
+  const note=providedNote??(def.sort==='top'?
+    (def.ranking==='official_weekly'?'Official':'TMDB'):'');
+  const content=visible.map(card).join('');
+  element.innerHTML=shelf(def.id,def.heading,content,note,
+    def.page<def.total||visible.length>0,def.kind,def.genreKey,def.sort);
+}
+function refreshVisibleCards(){
+  document.querySelectorAll('#streaming-page .streaming-tile[data-streaming-title]')
+    .forEach(element=>{
+      const title=state.titles.get(element.dataset.streamingTitle);
+      if(title)element.outerHTML=card(title);
+    });
+  if(state.selected&&$('streaming-title-dialog').open){
+    const title=state.titles.get(state.selected);
+    if(title)renderTitleDetails(title,state.detailCache.get(state.selected));
+  }
+}
+function refreshFilteredViews(){
+  renderSaved();
+  if(!state.query.trim()||state.query.trim().length<2){
+    document.querySelectorAll('#streaming-discover [data-discovery-key]')
+      .forEach(element=>{
+        const def=state.shelves.get(element.dataset.discoveryKey);
+        if(def?.loaded)renderDiscoveryShelf(element,def);
+      });
+  }else{
+    document.querySelectorAll('#streaming-discover [data-streaming-shelf]')
+      .forEach(element=>{
+        const def=state.shelves.get(element.dataset.streamingShelf);
+        if(!def)return;
+        // Explicit title searches must not be constrained by discovery filters.
+        const visible=def.items;
+        element.hidden=!visible.length;
+        if(visible.length)element.innerHTML=shelf(def.id,def.heading,
+          visible.map(card).join(''),'',false,def.kind);
+      });
+  }
+  if(state.subview)renderSubviewGrid();
+}
+
+function setupDiscover(){
+  state.version++;
+  if(state.observer)state.observer.disconnect();
+  const list=$('streaming-discover');
+  list.innerHTML='';
+  const version=state.version;
+  if(!state.visible.length){
+    list.innerHTML='<p class="streaming-shelf-message">'+esc(
+      'Choose a subscription service to discover titles.')+'</p>';
+    return;
+  }
+  for(const [i,def] of computeShelves().entries()){
+    def.id='discovery-'+i+'-'+def.kind+'-'+def.sort;
+    state.shelves.set(def.id,{...def,items:[],page:1,total:1,loaded:false});
+    const element=document.createElement('div');
+    element.dataset.discoveryKey=def.id;
+    element.innerHTML=shelf(def.id,def.heading,
+      '<div class="streaming-shelf-loading">Loading…</div>','',false,
+      def.kind,def.genreKey,def.sort);
+    list.append(element);
+  }
+  async function populate(element) {
+    const id=element.dataset.discoveryKey;
+    const def=state.shelves.get(id);
+    if(!def||def.loaded)return;
+    def.loaded=true;
+    try{
+      const result=await retrieve(def);
+      if(version!==state.version)return;
+      def.items=Array.isArray(result.items)?result.items:[];
+      def.page=1;
+      def.total=result.total_pages||1;
+      def.ranking=result.ranking_type;
+      if(def.sort==='top'&&result.ranking_type==='official_weekly')
+        def.heading=def.kind==='tv'?'Top 10 series · Netflix (weekly)':
+          'Top 10 movies · Netflix (weekly)';
+      const note=def.sort==='top'&&result.ranking_type==='official_weekly'?'Official':
+        def.sort==='top'?'TMDB':'';
+      renderDiscoveryShelf(element,def,note);
+    }catch(e){
+      if(version!==state.version)return;
+      def.loaded=false;
+      element.innerHTML=shelf(id,def.heading,
+        '<p class="streaming-shelf-message">'+esc(e.message)+'</p>','',false,
+        def.kind,def.genreKey,def.sort);
+    }
+  }
+  if('IntersectionObserver' in window){
+    state.observer=new IntersectionObserver(entries=>{
+      for(const entry of entries)if(entry.isIntersecting){
+        state.observer.unobserve(entry.target);
+        void populate(entry.target);
+      }
+    },{rootMargin:'380px'});
+    for(const el of list.querySelectorAll('[data-discovery-key]'))
+      state.observer.observe(el);
+  } else {
+    for(const el of list.querySelectorAll('[data-discovery-key]'))
+      void populate(el);
+  }
+}
+let searchGeneration=0;
+async function performSearch(){
+  const q=state.query.trim(),gen=++searchGeneration;
+  if(q.length<2){
+    state.version++;
+    if(state.observer)state.observer.disconnect();
+    $('streaming-discover').innerHTML=q.length?
+      '<p class="streaming-shelf-message">Enter at least two characters.</p>':'';
+    return;
+  }
+  state.version++;
+  if(state.observer)state.observer.disconnect();
+  $('streaming-discover').innerHTML='<div class="streaming-shelf-loading">Searching…</div>';
+  if(!state.visible.length){
+    $('streaming-discover').innerHTML='';
+    return;
+  }
+  try{
+    const params=new URLSearchParams({
+      q:q,service:state.visible.join(','),kind:'both',region:validRegion()
+    });
+    const result=await publicCachedRequest(
+      'search:'+validRegion()+':'+state.visible.join(',')+':both:'+q.toLowerCase(),
+      15*60*1000,()=>limited(()=>api('streaming/search?'+params))
+    );
+    if(gen!==searchGeneration)return;
+    $('streaming-discover').innerHTML='';
+    for(const kind of ['tv','movie']){
+      const items=(result.items||[]).filter(x=>x.kind===kind);
+      if(!items.length)continue;
+      const id='search-'+kind;
+      const heading=kind==='tv'?'Series · search results':'Movies · search results';
+      state.shelves.set(id,{id,kind,heading,items,saved:true,page:1,total:1});
+      $('streaming-discover').insertAdjacentHTML('beforeend',
+        shelf(id,heading,items.map(card).join(''),'',false,kind));
+    }
+    if(!$('streaming-discover').childElementCount)
+      $('streaming-discover').innerHTML='<p class="streaming-shelf-message">No titles found.</p>';
+  }catch(e){if(gen===searchGeneration)failure(e.message);}
+}
+function renderBrowser(){
+  state.titles.clear();
+  state.shelves.clear();
+  filterChips();
+  syncFilterPreferences();
+  renderSaved();
+  if(state.query.trim())void performSearch();
+  else {++searchGeneration;setupDiscover();}
+  const saved=personalRows().length;
+  $('streaming-summary').textContent=saved+' '+tr('titres enregistrés')+
+    ' · '+state.visible.length+' '+tr('services');
+}
+// Search within a specific streaming category, not just the already-loaded
+// pagination window. This uses the same region and TMDB qualifiers as iOS.
+let subviewSearchGeneration=0;
+async function performSubviewSearch(){
+  const subview=state.subview,def=state.shelves.get(subview?.id);
+  if(!subview||!def)return;
+  const phrase=subview.searchQuery.trim(),generation=++subviewSearchGeneration;
+  subview.searchItems=null;
+  subview.searchError='';
+  subview.searchLoading=phrase.length>=2;
+  if(phrase.length<2){renderSubviewGrid();return;}
+  if(def.saved){
+    subview.searchItems=def.items.filter(title=>matchesTitleText(title,phrase));
+    subview.searchLoading=false;
+    renderSubviewGrid();
+    return;
+  }
+  renderSubviewGrid();
+  try{
+    const params=new URLSearchParams({
+      q:phrase,service:state.visible.join(','),kind:def.kind,region:validRegion()
+    });
+    if(def.genre!=null)params.set('genre',String(def.genre));
+    if(def.keywordID)params.set('keyword_id',String(def.keywordID));
+    if(def.originCountry)params.set('origin_country',def.originCountry);
+    if(def.originalLanguage)params.set('original_language',def.originalLanguage);
+    const cacheID='category-search:'+cacheKey(def,1)+':'+phrase.toLocaleLowerCase();
+    const result=await publicCachedRequest(cacheID,15*60*1000,
+      ()=>limited(()=>api('streaming/search?'+params)));
+    if(generation!==subviewSearchGeneration||state.subview!==subview)return;
+    subview.searchItems=(result.items||[]).filter(item=>item.kind===def.kind);
+  }catch(error){
+    if(generation!==subviewSearchGeneration||state.subview!==subview)return;
+    subview.searchError=error.message;
+    subview.searchItems=[];
+  }finally{
+    if(generation===subviewSearchGeneration&&state.subview===subview){
+      subview.searchLoading=false;renderSubviewGrid();
+    }
+  }
+}
+let streamingSubviewObserver=null;
+function sortedSubviewItems(def,source=def.items,explicit=false){
+  const titles=source.filter(title=>def.saved?matchesSavedVisibility(title):
+    explicit||matchesStreamingFilters(title));
+  const sort=def.localSort||'default',asc=def.localOrder==='asc';
+  if(sort==='default'||(sort==='date_added'&&def.saved))
+    return sort==='date_added'&&def.saved&&asc?[...titles].reverse():titles;
+  function numberFor(title){
+    switch(sort){
+      case 'popularity':return popularityIndex(title);
+      case 'rating':return Number(title.rating)>0?Number(title.rating):null;
+      case 'user_rating':return personalRatingFor(title);
+      case 'year':return title.year==null?null:Number(title.year);
+      default:return null;
+    }
+  }
+  return [...titles].sort((a,b)=>{
+    if(sort==='title'){
+      const compare=String(a.title||'').localeCompare(String(b.title||''),undefined,{
+        numeric:true,sensitivity:'base'
+      });
+      return compare?(asc?compare:-compare):keyFor(a).localeCompare(keyFor(b));
+    }
+    const lhs=numberFor(a),rhs=numberFor(b);
+    if(lhs==null&&rhs!=null)return 1;
+    if(rhs==null&&lhs!=null)return -1;
+    if(lhs!=null&&rhs!=null&&lhs!==rhs)return asc?lhs-rhs:rhs-lhs;
+    return keyFor(a).localeCompare(keyFor(b));
+  });
+}
+function renderSubviewGrid(){
+  const def=state.shelves.get(state.subview?.id);
+  if(!def)return;
+  $('streaming-subview-title').innerHTML=categoryIcons(
+    def.kind,def.genreKey,def.sort)+esc(def.heading);
+  const sort=def.localSort||'default';
+  $('streaming-subview-sort').value=sort;
+  $('streaming-subview-order').value=def.localOrder||'desc';
+  const search=state.subview,phrase=search?.searchQuery?.trim()||'';
+  $('streaming-subview-search').value=search?.searchQuery||'';
+  const items=phrase.length>=2?sortedSubviewItems(def,search.searchItems||[],true):
+    phrase?[]:sortedSubviewItems(def);
+  const message=phrase.length===1?'Enter at least two characters.':
+    search?.searchError|| (search?.searchLoading?'Searching…':
+      'No titles match the active filters.');
+  $('streaming-subview-grid').innerHTML=items.map(card).join('')||
+    '<p class="streaming-shelf-message">'+esc(message)+'</p>';
+  $('streaming-subview-more').hidden=!!phrase||!!def.saved||def.page>=def.total;
+  $('streaming-subview-more').disabled=!!def.loadingNext;
+}
+function maybeResumeSubviewPagination(){
+  if(!state.subview||$('streaming-subview').hidden)return;
+  const def=state.shelves.get(state.subview.id);
+  if(!def||def.saved||def.loadingNext||def.page>=def.total)return;
+  // Avoid downloading an unbounded number of pages when a very restrictive
+  // filter yields no posters. The manual "More" button remains available.
+  if((def.autoBlankPages||0)>=4&&
+     !def.items.some(matchesStreamingFilters))return;
+  const trigger=$('streaming-subview-trigger');
+  const rect=trigger.getBoundingClientRect();
+  if(rect.top<=window.innerHeight+220&&rect.bottom>=-100)
+    void loadNext(true);
+}
+function connectStreamingSubviewObserver(){
+  if(streamingSubviewObserver)streamingSubviewObserver.disconnect();
+  if(!('IntersectionObserver' in window))return;
+  streamingSubviewObserver=new IntersectionObserver(entries=>{
+    if(entries.some(entry=>entry.isIntersecting))
+      maybeResumeSubviewPagination();
+  },{rootMargin:'220px'});
+  streamingSubviewObserver.observe($('streaming-subview-trigger'));
+}
+function showSubview(id){
+  const def=state.shelves.get(id);
+  if(!def)return;
+  const same=state.subview?.id===id;
+  state.subview=same?state.subview:
+    {id,searchQuery:'',searchItems:null,searchLoading:false,searchError:''};
+  if(!same){def.localSort='default';def.localOrder='desc';}
+  $('streaming-browser').hidden=true;
+  $('streaming-subview').hidden=false;
+  renderSubviewGrid();
+  connectStreamingSubviewObserver();
+  if(!same)$('streaming-subview').scrollIntoView({block:'start'});
+  requestAnimationFrame(maybeResumeSubviewPagination);
+}
+function closeSubview(){
+  clearTimeout(state.subviewSearchTimer);
+  ++subviewSearchGeneration;
+  state.subview=null;
+  if(streamingSubviewObserver)streamingSubviewObserver.disconnect();
+  $('streaming-subview').hidden=true;
+  $('streaming-browser').hidden=false;
+}
+async function loadNext(automatic=false){
+  const id=state.subview?.id;
+  const def=state.shelves.get(id);
+  if(!def||def.saved||def.loadingNext||def.page>=def.total)return;
+  if(!automatic)def.autoBlankPages=0;
+  def.loadingNext=true;
+  $('streaming-subview-more').disabled=true;
+  try{
+    const response=await retrieve(def,def.page+1);
+    const present=new Set(def.items.map(keyFor));
+    def.items.push(...(response.items||[]).filter(x=>!present.has(keyFor(x))));
+    def.page++;
+    def.total=response.total_pages||def.total;
+    if(automatic){
+      def.autoBlankPages=def.items.some(matchesStreamingFilters)?0:
+        (def.autoBlankPages||0)+1;
+    }
+    if(state.subview?.id===id)renderSubviewGrid();
+  }catch(e){failure(e.message);}finally{
+    def.loadingNext=false;
+    if(state.subview?.id===id){
+      renderSubviewGrid();
+      // An empty/short result can leave the sentinel continuously visible.
+      // IntersectionObserver does not emit again without a visibility change.
+      requestAnimationFrame(maybeResumeSubviewPagination);
+    }
+  }
+}
+function renderListCollectionActions(){
+  if(state.session?.role!=='admin')return '';
+  const listOptions=state.lists.map(item=>
+    '<option value="'+esc(item.id)+'">'+esc(item.name)+'</option>').join('');
+  const collections=state.collections.filter(row=>row.is_manual===true);
+  const collectionOptions=collections.map(item=>
+    '<option value="'+esc(item.id)+'">'+esc(item.name)+'</option>').join('');
+  return '<div class="streaming-assignments">'+
+    '<label>Liste<select id="streaming-list-pick" aria-label="Choisir une liste">'+
+      (listOptions||'<option value="">Aucune liste</option>')+'</select></label>'+
+    '<button type="button" data-streaming-assign="list" '+
+      (!state.lists.length?'disabled':'')+'>Ajouter</button>'+
+    '<button type="button" data-streaming-new="list">+ Nouvelle liste</button>'+
+    '<label>Collection interne<select id="streaming-collection-pick" aria-label="Choisir une collection">'+
+      (collectionOptions||'<option value="">Aucune collection</option>')+'</select></label>'+
+    '<button type="button" data-streaming-assign="collection" '+
+      (!collections.length?'disabled':'')+'>Ajouter</button>'+
+    '<button type="button" data-streaming-new="collection">+ Nouvelle collection</button>'+
+    '</div>';
+}
+async function refreshListsCollections(){
+  try{
+    const [lists,collections]=await Promise.all([
+      api('lists'),api('collections')
+    ]);
+    state.lists=Array.isArray(lists)?lists:[];
+    state.collections=Array.isArray(collections)?collections:[];
+  }catch{/* Catalogue remains usable when list management is unavailable. */}
+}
+async function ensureWorkID(title){
+  const key=keyFor(title);
+  const tracked=state.rows.find(row=>!row.deleted && row.key==='item:'+key);
+  let workID=state.metrics.get(key)?.work_id||tracked?.payload?.work_id;
+  if(workID)return workID;
+  // A list/collection creates an unliked canonical edition, exactly as on
+  // the iPhone. It must never silently activate the explicit heart.
+  if(!tracked){
+    const saved=await save(title,false);
+    if(!saved)throw new Error('Could not track the title in the catalogue.');
+  } else {
+    await api('streaming/state/sync',{
+      method:'POST',headers:{
+        'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
+      },body:JSON.stringify({changes:[]})
+    });
+  }
+  const metrics=await api('streaming/catalogue-metrics');
+  state.metrics=new Map((metrics.items||[]).map(item=>
+    [item.kind+':'+item.tmdb_id,item]));
+  workID=state.metrics.get(key)?.work_id;
+  if(!workID)throw new Error('The title has not yet been indexed in the catalogue.');
+  return workID;
+}
+async function assignToListOrCollection(type,create=false){
+  const key=state.selected;
+  const title=state.titles.get(key);
+  if(!title||!['list','collection'].includes(type))return;
+  const existing=type==='list'?state.lists:state.collections.filter(row=>row.is_manual===true);
+  const id=create?'':$(type==='list'?'streaming-list-pick':'streaming-collection-pick')?.value;
+  if(!create&&!existing.some(item=>item.id===id))return;
+  let name='';
+  if(create){
+    name=prompt(type==='list'?'Nom de la nouvelle liste':'Nom de la nouvelle collection')?.trim();
+    if(!name)return;
+  }
+  try{
+    state.detailMessage='Enregistrement…';
+    renderTitleDetails(title,state.detailCache.get(key));
+    if(!state.session)state.session=await api('auth/session');
+    if(state.session.role!=='admin')throw new Error('Administrator access required.');
+    const workID=await ensureWorkID(title);
+    let targetID=id;
+    if(create){
+      const created=await api(type==='list'?'lists':'collections',{
+        method:'POST',headers:{
+          'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
+        },body:JSON.stringify({name})
+      });
+      targetID=created.id;
+    }
+    await api(type==='list'?'lists/'+encodeURIComponent(targetID)+'/items':
+      'collections/'+encodeURIComponent(targetID)+'/items',{
+      method:'POST',headers:{
+        'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
+      },body:JSON.stringify(type==='list'?{media_id:workID}:{media_ids:[workID]})
+    });
+    if(create)await refreshListsCollections();
+    state.detailMessage=type==='list'?'Ajouté à la liste.':'Ajouté à la collection.';
+  }catch(error){state.detailMessage='Échec de l’ajout : '+error.message;}
+  finally{
+    // The asynchronous save can rebuild the shelf map; keep the selected title.
+    state.titles.set(key,title);
+    if(state.selected===key&&$('streaming-title-dialog').open)
+      renderTitleDetails(title,state.detailCache.get(key));
+  }
+}
+function renderTitleDetails(title,full=null,loading=false,error='') {
+  const key=keyFor(title);
+  const saved=savedRow(title);
+  const work=state.metrics.get(key)?.work_id||saved?.payload?.work_id;
+  const data=full||{};
+  const titleText=data.title||title.title;
+  const poster=posterURL(title.poster_path||data.poster_path,'w500');
+  const backdrop=posterURL(data.backdrop_path||title.backdrop_path,'w1280');
+  const available=servicesFor(title);
+  const links=available.map(s=>{
+    const direct=directURL(title,s),fallback=providerSearchURL(s,title.title);
+    const destination=direct||fallback;
+    return destination?'<a href="'+esc(destination)+'" target="_blank" rel="noopener noreferrer">'+
+      providerLogo(s)+' '+esc((direct?'Open on ':'Search on ')+names[s])+'</a>':'';
+  }).join('');
+  const body=data.overview||title.overview||saved?.payload?.overview||'';
+  const genres=(data.genres||[]).map(g=>'<span>'+esc(g)+'</span>').join('');
+  const cast=(data.cast||[]).slice(0,24).map(p=>{
+    const photo=posterURL(p.profile_path,'w185');
+    return '<button type="button" class="streaming-person" data-streaming-person="'+
+      esc(p.id)+'" aria-label="Voir la fiche et la filmographie de '+esc(p.name)+'">'+
+      (photo?'<img loading="lazy" src="'+esc(photo)+'" alt="">':
+        '<span class="streaming-person-placeholder" aria-hidden="true">◉</span>')+
+      '<strong>'+esc(p.name)+'</strong><small>'+esc(p.role||'')+'</small></button>';
+  }).join('');
+  const creators=(data.crew||[]).filter(p=>['Director','Creator','Writer','Screenplay','Producer'].includes(p.role))
+    .slice(0,10).map(p=>'<span>'+esc(p.name)+(p.role?' · '+esc(p.role):'')+'</span>').join(' · ');
+  const seasons=(data.seasons||[]).filter(s=>s.number>=0).map(s=>
+    '<div class="streaming-season">'+
+    (posterURL(s.poster_path,'w185')?'<img loading="lazy" alt="" src="'+esc(posterURL(s.poster_path,'w185'))+'">':'')+
+    '<span><strong>'+esc(s.title||('Season '+s.number))+'</strong><small>'+
+    esc((s.episode_count||0)+' episodes')+'</small></span></div>').join('');
+  const rating=Number(data.rating||title.rating)||0;
+  const personal=personalRatingFor(title);
+  const popularity=popularityIndex(data)??popularityIndex(title);
+  const meta=[title.kind==='tv'?'Series':'Movie',data.year||title.year,
+    data.runtime_minutes?data.runtime_minutes+' min':'',
+    rating>0?'★ '+rating.toFixed(1)+'/10':''].filter(Boolean).join(' · ');
+  $('streaming-title-content').innerHTML=
+    (backdrop?'<div class="streaming-detail-backdrop" aria-hidden="true"><img src="'+esc(backdrop)+'" alt=""></div>':'')+
+    '<div class="streaming-detail-layout">'+
+    (poster?'<img src="'+esc(poster)+'" alt="">':'<div></div>')+
+    '<div><h2 id="streaming-detail-heading">'+esc(titleText)+'</h2>'+
+    (data.original_title&&data.original_title!==titleText?
+      '<p class="streaming-original-title">'+esc(data.original_title)+'</p>':'')+
+    '<p>'+esc(meta)+'</p>'+
+    (personal!=null?
+      '<p class="streaming-popularity-label"><span aria-hidden="true">☆</span> Ma note <span class="streaming-popularity-value">'+
+      esc(personal.toFixed(1))+'/10</span></p>':'')+
+    (popularity!=null?
+      '<p class="streaming-popularity-label"><span aria-hidden="true">↗</span> Popularité TMDB <span class="streaming-popularity-value">'+
+      esc(Math.round(popularity))+'</span></p>':'')+
+    '<div class="streaming-detail-actions"><button type="button" class="secondary" data-streaming-save-detail="'+
+    esc(key)+'">'+esc(saved?'♥ In my catalog':'♡ Add to catalog')+'</button>'+
+    (work?
+      '<button type="button" class="secondary" data-streaming-work="'+
+      esc(work)+'">Open catalog entry</button>':'')+
+    '</div>'+renderListCollectionActions()+
+    '<div class="streaming-detail-services">'+links+'</div>'+
+    (state.detailMessage?'<p class="streaming-detail-feedback" role="status">'+
+      esc(state.detailMessage)+'</p>':'')+'</div></div>'+
+    (genres?'<div class="streaming-detail-genres">'+genres+'</div>':'')+
+    (body?'<section class="streaming-detail-section"><h3>Synopsis</h3><p class="synopsis">'+esc(body)+'</p></section>':
+      loading?'<p class="streaming-detail-loading">Loading synopsis…</p>':'')+
+    (cast?'<section class="streaming-detail-section"><h3>Cast</h3><div class="streaming-cast-track">'+cast+'</div></section>':'')+
+    (creators?'<section class="streaming-detail-section"><h3>Crew</h3><p>'+creators+'</p></section>':'')+
+    (seasons?'<section class="streaming-detail-section"><h3>Seasons</h3><div class="streaming-seasons">'+seasons+'</div></section>':'')+
+    (loading?'<p class="streaming-detail-loading">Loading full title information…</p>':'')+
+    (error?'<p class="streaming-detail-note">'+esc(error)+'</p>':'');
+}
+async function details(key) {
+  const title=state.titles.get(key);
+  if(!title)return;
+  state.selected=key;
+  state.detailMessage='';
+  const cached=state.detailCache.get(key);
+  renderTitleDetails(title,cached||null,!cached);
+  if(!$('streaming-title-dialog').open)$('streaming-title-dialog').showModal();
+  if(cached)return;
+  try{
+    const language=validRegion()==='FR'?'fr-FR':'en-US';
+    const endpoint='streaming/titles/'+encodeURIComponent(title.kind)+'/'+
+      encodeURIComponent(title.id)+'/details?'+new URLSearchParams({language});
+    const full=await publicCachedRequest('details:'+key+':'+language,
+      6*60*60*1000,()=>limited(()=>api(endpoint)));
+    if(!full||full.id!==title.id||full.kind!==title.kind)
+      throw new Error('The title metadata does not match this item.');
+    state.detailCache.set(key,full);
+    if(state.selected===key&&$('streaming-title-dialog').open)
+      renderTitleDetails(title,full);
+  }catch(error){
+    if(state.selected===key&&$('streaming-title-dialog').open)
+      renderTitleDetails(title,null,false,'Full details are currently unavailable: '+error.message);
+  }
+}
+function personCatalogueCard(item){
+  if(!item||typeof item.id!=='string'||!/^[a-z0-9_-]{1,128}$/i.test(item.id))return '';
+  const image=new URL('api/v1/media/'+encodeURIComponent(item.id)+'/artwork/poster',root).href;
+  return '<button type="button" class="streaming-catalog-result" data-streaming-catalog-item="'+
+    esc(item.id)+'"><img src="'+esc(image)+'" alt="" loading="lazy">'+
+    '<span><strong>'+esc(item.title||'')+'</strong><small>'+esc(item.year||'')+
+    (item.watch_status==='watched'?' · Vu':'')+'</small></span></button>';
+}
+function renderPerson(){
+  const p=state.person;
+  if(!p)return;
+  const image=posterURL(p.profile_path,'w300');
+  const catalog=p.catalog||[];
+  const hasMoreCatalogue=catalog.length<(p.catalogTotal||0);
+  const stream=p.available||[];
+  const remaining=(p.filmography||[]).length-(p.checked||0);
+  $('streaming-person-content').innerHTML=
+    '<div class="streaming-person-header">'+
+    (image?'<img src="'+esc(image)+'" alt="" loading="lazy">':'')+
+    '<div><h2 id="streaming-person-heading">'+esc(p.name)+'</h2>'+
+    (p.department?'<p class="muted">'+esc(p.department)+'</p>':'')+
+    (p.biography?'<p class="streaming-person-bio">'+esc(p.biography)+'</p>':'')+
+    '</div></div><div class="streaming-person-tabs" role="group" aria-label="Source des médias">'+
+    '<button type="button" data-streaming-person-tab="catalog" aria-pressed="'+
+      (p.tab==='catalog')+'">Catalogue ('+esc(p.catalogTotal||0)+')</button>'+
+    '<button type="button" data-streaming-person-tab="streaming" aria-pressed="'+
+      (p.tab==='streaming')+'">Streaming</button></div>'+
+    (p.tab==='catalog'
+      ?'<div class="streaming-person-catalog">'+catalog.map(personCatalogueCard).join('')+
+        (!catalog.length?'<p class="muted">Aucun média associé dans le catalogue.</p>':'')+
+        (hasMoreCatalogue?'<button type="button" class="secondary" data-streaming-person-more="catalog">Afficher davantage de médias</button>':'')+'</div>'
+      :'<p class="streaming-filter-hint">Disponibilité dans la région '+esc(validRegion())+
+        ' : tous les services sont vérifiés, indépendamment de vos abonnements et filtres.</p>'+
+        '<div class="streaming-grid streaming-person-streaming-grid">'+stream.map(card).join('')+'</div>'+
+        (p.checking?'<p class="muted">Vérification des disponibilités…</p>':'')+
+        (!p.checking&&!stream.length?'<p class="muted">Aucun titre disponible parmi les '+
+          esc(p.checked)+' titres vérifiés.</p>':'')+
+        (remaining>0?'<button type="button" class="secondary" data-streaming-person-more="streaming" '+
+          (p.checking?'disabled':'')+'>Vérifier '+Math.min(12,remaining)+' autres titres ('+
+          p.checked+'/'+p.filmography.length+')</button>':'')
+    );
+}
+async function loadPersonCatalogueMore(){
+  const p=state.person;
+  if(!p||p.catalogLoading||p.catalog.length>=p.catalogTotal)return;
+  p.catalogLoading=true;
+  const version=state.personVersion;
+  try{
+    const params=new URLSearchParams({
+      person_tmdb_id:String(p.id),person_name:p.name,limit:'60',offset:String(p.catalog.length)
+    });
+    const result=await api('media?'+params);
+    if(version!==state.personVersion)return;
+    const seen=new Set(p.catalog.map(item=>item.id));
+    p.catalog.push(...(result.items||[]).filter(item=>!seen.has(item.id)));
+    p.catalogTotal=Number(result.total)||p.catalog.length;
+  }catch(error){failure('Person catalogue: '+error.message);}
+  finally{p.catalogLoading=false;if(version===state.personVersion)renderPerson();}
+}
+async function loadPersonStreamingMore(){
+  const p=state.person;
+  if(!p||p.checking||p.checked>=p.filmography.length)return;
+  p.checking=true;renderPerson();
+  const version=state.personVersion;
+  const batch=p.filmography.slice(p.checked,p.checked+12);
+  const selection=Object.keys(names).join(',');
+  const checked=await Promise.all(batch.map(async title=>{
+    const key=validRegion()+':'+keyFor(title);
+    try{
+      let available=state.personAvailabilityCache.get(key);
+      if(!available){
+        const data=await limited(()=>api('streaming/availability/'+title.kind+'/'+title.id+
+          '?'+new URLSearchParams({service:selection,region:validRegion()})));
+        available=Array.isArray(data.service_keys)?data.service_keys:[];
+        state.personAvailabilityCache.set(key,available);
+      }
+      return available.length?{...title,service_keys:available}:null;
+    }catch{return null;}
+  }));
+  if(version!==state.personVersion)return;
+  p.available.push(...checked.filter(Boolean));
+  p.checked+=batch.length;
+  p.checking=false;
+  renderPerson();
+}
+async function openPerson(id){
+  const personID=Number(id);
+  if(!Number.isSafeInteger(personID)||personID<1||personID>999999999)return;
+  const version=++state.personVersion;
+  state.personReturnKey=state.selected;
+  if($('streaming-title-dialog').open)$('streaming-title-dialog').close();
+  state.selected=null;
+  const dialog=$('streaming-person-dialog');
+  $('streaming-person-content').innerHTML='<h2 id="streaming-person-heading">Chargement de la fiche personne…</h2>';
+  if(!dialog.open)dialog.showModal();
+  try{
+    const person=await api('streaming/people/'+personID+'?'+new URLSearchParams({
+      language:validRegion()==='FR'?'fr-FR':'en-US'
+    }));
+    if(version!==state.personVersion)return;
+    state.person={
+      ...person,tab:'catalog',catalog:[],catalogTotal:1,available:[],checked:0,checking:false,
+      catalogLoading:false
+    };
+    const params=new URLSearchParams({
+      person_tmdb_id:String(personID),person_name:person.name,limit:'60',offset:'0'
+    });
+    const catalogue=await api('media?'+params);
+    if(version!==state.personVersion)return;
+    state.person.catalog=catalogue.items||[];
+    state.person.catalogTotal=Number(catalogue.total)||state.person.catalog.length;
+    renderPerson();
+  }catch(error){
+    if(version===state.personVersion)
+      $('streaming-person-content').innerHTML='<h2 id="streaming-person-heading">Fiche personne indisponible</h2>'+
+        '<p class="muted">'+esc(error.message)+'</p>';
+  }
+}
+function closePerson(){
+  ++state.personVersion;
+  if($('streaming-person-dialog').open)$('streaming-person-dialog').close();
+}
+async function save(title,requestedLike=null){
+  try{
+    if(!state.session)state.session=await api('auth/session');
+    if(state.session.role!=='admin')throw new Error('Administrator access required to save streaming titles.');
+    const existing=savedRow(title);
+    const liked=requestedLike===null?!existing:!!requestedLike;
+    const selected=servicesFor(title).filter(x=>names[x]);
+    const membership=selected.length?selected:state.visible;
+    const key='item:'+keyFor(title);
+    const original=state.rows.find(row=>row.key===key);
+    const nextTime=new Date(Math.max(Date.now(),(Date.parse(original?.modified_at)||0)+2)).toISOString();
+    const payload={
+      ...(original?.deleted?{}:original?.payload||{}),
+      tmdb_id:String(title.id),kind:title.kind,title:title.title,
+      original_title:title.original_title||title.title,
+      overview:title.overview||'',rating:String(title.rating||0),
+      popularity:title.popularity==null?'':String(title.popularity),
+      year:title.year?String(title.year):'',poster_path:title.poster_path||'',
+      backdrop_path:title.backdrop_path||'',services:membership.join(','),
+      status:original?.payload?.work_id?'saved':'pending',
+      liked:liked?'true':'false'
+    };
+    const result=await api('streaming/state/sync',{
+      method:'POST',headers:{
+        'Content-Type':'application/json','X-CSRF-Token':state.session.csrf_token
+      },body:JSON.stringify({changes:[{key,payload,modified_at:nextTime,deleted:false}]})
+    });
+    state.rows=result.rows;
+    indexPersonalRows();
+    // Retain the full discovery page if a heart is saved from its subview:
+    // re-rendering the home shelves alone would discard loaded pagination.
+    const currentSubview=state.subview;
+    const previousShelf=currentSubview&&state.shelves.get(currentSubview.id);
+    renderBrowser();
+    if(currentSubview&&previousShelf) {
+      state.shelves.set(currentSubview.id,previousShelf);
+      showSubview(currentSubview.id);
+    }
+    state.titles.set(keyFor(title),title);
+    if(state.selected===keyFor(title))void details(state.selected);
+    if($('streaming-person-dialog').open)renderPerson();
+    return true;
+  }catch(e){failure(e.message);return false;}
+}
+async function load(){
+  if(state.loading)return;
+  state.loading=true;
+  $('streaming-refresh').disabled=true;
+  $('streaming-error').hidden=true;
+  try{
+    const [response,session,metrics]=await Promise.all([
+      api('streaming/state'),api('auth/session'),api('streaming/catalogue-metrics').catch(()=>({items:[]}))
+    ]);
+    state.metrics=new Map((metrics.items||[]).map(m=>[m.kind+':'+m.tmdb_id,m]));
+    if(!Array.isArray(response.rows))throw new Error('Invalid streaming state.');
+    state.rows=response.rows;
+    indexPersonalRows();
+    state.session=session;
+    state.subscriptions=subscribedServices();
+    state.visible=preference('visible_services',state.subscriptions.join(','))
+      .split(',').filter(s=>state.subscriptions.includes(s));
+    state.kind=preference('kinds','both');
+    if(!['both','tv','movie'].includes(state.kind))state.kind='both';
+    $('streaming-kind').value=state.kind;
+    state.loaded=true;
+    await refreshListsCollections();
+    renderBrowser();
+    void loadProviderLogos();
+  }catch(e){failure(e.message);}finally{
+    state.loading=false;$('streaming-refresh').disabled=false;
+  }
+}
+function route(){
+  const active=window.location.hash==='#streaming';
+  $('streaming-page').hidden=!active;
+  $('streaming-link').setAttribute('aria-current',active?'page':'false');
+  if(active&&!$('app').hidden)void load();
+  if(!active&&state.observer)state.observer.disconnect();
+}
+export function startStreaming(){
+  if(!$('streaming-page'))return;
+  function connectRange(prefix,minKey,maxKey,scope){
+    streamingRatingRanges[scope]=bindRatingRange(prefix,({min,max})=>{
+      if(min!==scoreLimit(minKey,0))persistPreference(minKey,String(min));
+      if(max!==scoreLimit(maxKey,10))persistPreference(maxKey,String(max));
+      refreshFilteredViews();
+    });
+  }
+  connectRange('streaming-rating','rating_min','rating_max','public');
+  connectRange('streaming-user-rating','user_rating_min','user_rating_max','personal');
+  try{state.region=localStorage.getItem('hmc-streaming-region')||'auto';}
+  catch{state.region='auto';}
+  if(![...$('streaming-region').options].some(x=>x.value===state.region))
+    state.region='auto';
+  $('streaming-region').value=state.region;
+  $('streaming-region').addEventListener('change',e=>{
+    state.region=e.target.value;
+    try{localStorage.setItem('hmc-streaming-region',state.region);}catch{}
+    state.cache.clear();state.logos={};renderBrowser();void loadProviderLogos();
+  });
+  $('streaming-customize').addEventListener('change',event=>{
+    const target=event.target;
+    const keyById={
+      'streaming-watch-filter':'watch_filter',
+      'streaming-personal-rating-filter':'personal_rating_filter',
+    };
+    const key=keyById[target.id];
+    if(target.dataset.streamingSubscription){
+      const selection=new Set(subscribedServices());
+      if(target.checked)selection.add(target.dataset.streamingSubscription);
+      else selection.delete(target.dataset.streamingSubscription);
+      const next=Object.keys(names).filter(key=>selection.has(key));
+      persistPreference('subscriptions',next.join(','));
+      state.subscriptions=next;
+      state.visible=state.visible.filter(key=>next.includes(key));
+      for(const key of next)if(!state.visible.includes(key))state.visible.push(key);
+      persistPreference('visible_services',state.visible.join(','));
+    }else if(target.id==='streaming-show-popularity'||
+             target.id==='streaming-show-personal-rating'){
+      setDisplayPreference(target.id==='streaming-show-popularity'?
+        'popularity':'personal_rating',target.checked);
+      refreshVisibleCards();
+      return;
+    }else if(target.dataset.streamingFeatured){
+      persistPreference('special_category_'+target.dataset.streamingFeatured,
+        String(target.checked));
+      renderCategoryPreferences();
+    }else if(target.dataset.streamingGenre){
+      const id='category:'+target.dataset.streamingGenre;
+      const ids=orderedCategoryIDs().filter(item=>item!==id);
+      if(target.checked)ids.push(id);
+      persistCategoryOrder(ids);
+      renderCategoryPreferences();
+    } else if(key){
+      if(target.type==='checkbox')persistPreference(key,String(target.checked));
+      else persistPreference(key,target.value);
+      if(key==='watch_filter'||key==='personal_rating_filter'){
+        refreshFilteredViews();
+        return;
+      }
+    }else return;
+    renderBrowser();
+  });
+  $('streaming-customize').addEventListener('click',event=>{
+    const button=event.target.closest('[data-streaming-move]');
+    if(!button)return;
+    const ids=orderedCategoryIDs(),index=ids.indexOf(button.dataset.streamingMove);
+    const destination=index+Number(button.dataset.move);
+    if(index<0||destination<0||destination>=ids.length)return;
+    const [entry]=ids.splice(index,1);
+    ids.splice(destination,0,entry);
+    persistCategoryOrder(ids);
+    renderCategoryPreferences();
+    renderBrowser();
+  });
+  $('streaming-search').addEventListener('input',e=>{
+    state.query=e.target.value;
+    clearTimeout(state.searchTimer);
+    state.searchTimer=setTimeout(()=>renderBrowser(),350);
+  });
+  $('streaming-kind').addEventListener('change',e=>{
+    state.kind=e.target.value;persistPreference('kinds',state.kind);renderBrowser();
+  });
+  $('streaming-refresh').addEventListener('click',()=>void load());
+  $('streaming-services').addEventListener('click',event=>{
+    const button=event.target.closest('[data-streaming-service]');
+    if(!button)return;
+    const key=button.dataset.streamingService;
+    if(key==='all')state.visible=[...state.subscriptions];
+    else if(state.visible.includes(key))state.visible=state.visible.filter(x=>x!==key);
+    else if(state.subscriptions.includes(key))state.visible.push(key);
+    persistPreference('visible_services',state.visible.join(','));renderBrowser();
+  });
+  $('streaming-page').addEventListener('click',event=>{
+    const member=event.target.closest('[data-streaming-person]');
+    if(member){void openPerson(member.dataset.streamingPerson);return;}
+    const personTab=event.target.closest('[data-streaming-person-tab]');
+    if(personTab&&state.person){
+      state.person.tab=personTab.dataset.streamingPersonTab;
+      renderPerson();
+      if(state.person.tab==='streaming'&&!state.person.checked)
+        void loadPersonStreamingMore();
+      return;
+    }
+    const personMore=event.target.closest('[data-streaming-person-more]');
+    if(personMore){
+      if(personMore.dataset.streamingPersonMore==='catalog')void loadPersonCatalogueMore();
+      else void loadPersonStreamingMore();
+      return;
+    }
+    const personCatalog=event.target.closest('[data-streaming-catalog-item]');
+    if(personCatalog){
+      state.personReturnKey=null;closePerson();
+      window.dispatchEvent(new CustomEvent('streaming-open-media',{
+        detail:{mediaID:personCatalog.dataset.streamingCatalogItem}
+      }));
+      return;
+    }
+    const add=event.target.closest('[data-streaming-assign],[data-streaming-new]');
+    if(add){
+      void assignToListOrCollection(
+        add.dataset.streamingAssign||add.dataset.streamingNew,
+        !!add.dataset.streamingNew
+      );return;
+    }
+    const heart=event.target.closest('[data-streaming-heart],[data-streaming-save-detail]');
+    if(heart){
+      const title=state.titles.get(heart.dataset.streamingHeart||heart.dataset.streamingSaveDetail);
+      if(title)void save(title);
+      return;
+    }
+    const tile=event.target.closest('[data-streaming-card]');
+    if(tile){
+      if($('streaming-person-dialog').open){state.personReturnKey=null;closePerson();}
+      void details(tile.dataset.streamingCard);return;
+    }
+    const more=event.target.closest('[data-streaming-more]');
+    if(more){showSubview(more.dataset.streamingMore);return;}
+    const work=event.target.closest('[data-streaming-work]');
+    if(work){
+      $('streaming-title-dialog').close();
+      window.dispatchEvent(new CustomEvent('streaming-open-media',{detail:{mediaID:work.dataset.streamingWork}}));
+    }
+  });
+  $('streaming-subview-search').addEventListener('input',event=>{
+    if(!state.subview)return;
+    state.subview.searchQuery=event.target.value;
+    state.subview.searchItems=null;
+    state.subview.searchError='';
+    clearTimeout(state.subviewSearchTimer);
+    ++subviewSearchGeneration;
+    renderSubviewGrid();
+    state.subviewSearchTimer=setTimeout(()=>void performSubviewSearch(),350);
+  });
+  $('streaming-back').addEventListener('click',closeSubview);
+  $('streaming-subview-more').addEventListener('click',()=>void loadNext());
+  window.addEventListener('scroll',maybeResumeSubviewPagination,{passive:true});
+  $('streaming-subview-sort').addEventListener('change',event=>{
+    const def=state.shelves.get(state.subview?.id);
+    if(!def)return;
+    def.localSort=event.target.value;
+    renderSubviewGrid();
+  });
+  $('streaming-subview-order').addEventListener('change',event=>{
+    const def=state.shelves.get(state.subview?.id);
+    if(!def)return;
+    def.localOrder=event.target.value;
+    renderSubviewGrid();
+  });
+  $('streaming-detail-close').addEventListener('click',()=>{
+    $('streaming-title-dialog').close();state.selected=null;
+  });
+  $('streaming-person-close').addEventListener('click',closePerson);
+  $('streaming-person-dialog').addEventListener('close',()=>{
+    ++state.personVersion;
+    const returnKey=state.personReturnKey;
+    state.personReturnKey=null;
+    state.person=null;
+    if(returnKey&&window.location.hash==='#streaming')void details(returnKey);
+  });
+  $('streaming-title-dialog').addEventListener('close',()=>{state.selected=null;});
+  window.addEventListener('hashchange',route);
+  window.addEventListener('media-app-ready',route);
+  route();
+}

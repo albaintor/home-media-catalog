@@ -1,0 +1,228 @@
+/* Streaming catalogue: shares Home Media Catalog's dark surfaces and posters. */
+.streaming-page .streaming-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:24px}
+.streaming-page .streaming-heading h2{margin:4px 0 7px;font-size:24px}
+.streaming-page .streaming-heading .eyebrow{margin:0;color:var(--muted)}
+.streaming-page .streaming-heading .muted{font-size:12px;margin:0}
+.streaming-controls{display:grid;grid-template-columns:minmax(180px,1fr) minmax(120px,210px) minmax(120px,175px);gap:13px;margin-bottom:24px}
+.streaming-controls .search-box{min-width:0}
+.streaming-controls select{min-height:45px;background:var(--surface);font-size:12px;max-width:100%}
+.streaming-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:18px;align-items:start}
+.streaming-card{min-width:0;overflow:hidden;background:var(--surface);border:1px solid var(--border);border-radius:12px}
+.streaming-poster{position:relative;aspect-ratio:2/3;background:linear-gradient(145deg,#293447,#192332);display:grid;place-items:center;color:var(--muted);font-size:24px;font-weight:700}
+.streaming-poster img{position:absolute;width:100%;height:100%;inset:0;object-fit:cover}
+.streaming-card-body{padding:13px}
+.streaming-card h3{margin:0 0 6px;font-size:13px;line-height:1.35;min-height:2.7em}
+.streaming-meta{font-size:11px;color:var(--muted);margin:0 0 10px}
+.streaming-providers{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.streaming-provider{font-size:10px;border-radius:6px;border:1px solid #64768f66;color:#c2d2e5;background:#30405c33;padding:4px 7px}
+.streaming-provider-link{text-decoration:none;cursor:pointer}
+.streaming-provider-link:hover{border-color:var(--accent);color:var(--accent)}
+.streaming-open{width:100%;min-height:35px;font-size:11px;margin-top:5px}
+.streaming-pending{display:block;color:#e9c977;font-size:11px;margin-bottom:8px}
+.streaming-page .streaming-error{margin:0 0 20px}
+@media(max-width:700px){.streaming-page .streaming-heading{align-items:start}.streaming-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.streaming-controls{grid-template-columns:1fr 1fr}.streaming-controls .search-box{grid-column:1/-1}.streaming-card-body{padding:9px}.streaming-card h3{font-size:11px}.streaming-provider{font-size:9px}}
+@media(max-width:420px){.streaming-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Saved shelves and browse shelves share the native horizontal-poster layout. */
+.streaming-page [hidden]{display:none!important}
+.streaming-service-chips{display:flex;gap:8px;flex-wrap:nowrap;overflow:auto;scrollbar-width:thin;margin:0 0 28px;padding:2px 0 8px}
+.streaming-service-chips button{flex:none;min-height:40px;padding:6px 12px;border-radius:24px;display:inline-flex;align-items:center;gap:8px;font-size:12px}
+.streaming-service-chips button[aria-pressed=true]{border-color:var(--accent);background:#bcdb8019;color:var(--accent)}
+.streaming-service-chips .streaming-service-dot{height:10px;width:10px;border-radius:50%;background:#8bb6ec}
+.streaming-service-chips .netflix{background:#e50914}.streaming-service-chips .disney_plus{background:#4875db}.streaming-service-chips .prime_video{background:#00a8e1}.streaming-service-chips .apple_tv_plus{background:#c7c7c7}.streaming-service-chips .hbo_max{background:#915dda}.streaming-service-chips .paramount_plus{background:#2a5fdb}.streaming-service-chips .crunchyroll{background:#f47521}.streaming-service-chips .rakuten_viki{background:#00bbd6}.streaming-service-chips .mubi{background:#444}
+.streaming-shelf{margin:0 0 26px}
+.streaming-shelf-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 1px;margin:0 0 12px}
+.streaming-shelf-header h3{font-size:17px;margin:0;font-weight:700}
+.streaming-shelf-note{font-size:11px;color:var(--muted)}
+.streaming-shelf-track{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x proximity;scrollbar-width:thin;padding:2px 1px 10px}
+.streaming-shelf-track .streaming-tile{flex:0 0 144px;scroll-snap-align:start}
+.streaming-tile{min-width:0;position:relative}
+.streaming-tile-art{position:relative;width:100%;aspect-ratio:2/3;border:1px solid var(--border);border-radius:10px;background:linear-gradient(145deg,#293447,#192332);overflow:hidden;display:grid;place-items:center}
+.streaming-tile-poster{border:0;background:transparent;padding:0;width:100%;height:100%;display:grid;place-items:center;color:var(--muted);font-size:20px}
+.streaming-tile-poster img{display:block;width:100%;height:100%;object-fit:cover}
+.streaming-tile-title{font-size:12px;font-weight:600;line-height:1.32;margin:8px 1px 2px;min-height:32px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.streaming-tile-year{font-size:10px;color:var(--muted)}
+.streaming-tile .streaming-heart{position:absolute;top:7px;left:7px;min-height:27px;width:30px;border-radius:8px;border-color:#fff5;background:#111c;color:white;padding:2px;font-size:19px;z-index:1}
+.streaming-tile .streaming-heart.saved{color:#f0808b}
+.streaming-tile .streaming-rating{position:absolute;top:8px;right:6px;font-size:10px;font-weight:700;background:#111d;padding:3px 5px;border-radius:5px;color:#f5e0a6;pointer-events:none}
+.streaming-tile .streaming-tile-services{position:absolute;left:4px;bottom:5px;display:flex;gap:2px;max-width:calc(100% - 8px);flex-wrap:wrap;pointer-events:none}
+.streaming-tile-services span{background:#101820e8;color:#f1f4fb;font-size:9px;border-radius:4px;padding:2px 4px}
+.streaming-see-more{background:transparent;border:0;color:var(--accent);padding:6px 0;min-height:29px;font-size:12px}
+.streaming-see-more:hover{text-decoration:underline}
+.streaming-shelf-loading{min-height:100px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px;background:var(--surface);border-radius:12px}
+.streaming-shelf-message{color:var(--muted);font-size:12px;padding:8px 0}
+.streaming-subview h2{font-size:23px;margin:18px 0}
+.streaming-subview .streaming-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(142px,1fr));gap:16px}
+.streaming-subview .streaming-tile{width:100%}
+#streaming-subview-more{margin:24px auto;display:block}
+.streaming-title-dialog{max-width:650px;padding:25px;width:calc(100% - 25px)}
+.streaming-detail-layout{display:grid;grid-template-columns:150px minmax(0,1fr);gap:20px;padding-right:17px}
+.streaming-detail-layout>img{width:100%;border-radius:9px}
+.streaming-detail-layout h2{font-size:22px;margin:0 0 10px}
+.streaming-detail-layout p{font-size:13px;line-height:1.6;color:var(--muted)}
+.streaming-detail-actions{display:flex;gap:9px;flex-wrap:wrap;margin:12px 0}
+.streaming-detail-actions button{min-height:37px;font-size:12px}
+.streaming-detail-services{display:flex;gap:6px;flex-wrap:wrap}
+.streaming-detail-services a{display:inline-flex;padding:7px 10px;text-decoration:none;font-size:11px;border:1px solid var(--border);border-radius:7px}
+.streaming-detail-services a:hover{color:var(--accent)}
+@media(max-width:700px){.streaming-shelf-track .streaming-tile{flex-basis:118px}.streaming-shelf-header h3{font-size:15px}.streaming-controls{grid-template-columns:1fr 1fr}.streaming-controls .search-box{grid-column:1/-1}.streaming-detail-layout{grid-template-columns:100px minmax(0,1fr);gap:12px}.streaming-detail-layout h2{font-size:18px}}
+
+/* TMDB service artwork, mirroring the native iOS providers strip. */
+.streaming-logo{width:25px;height:25px;display:inline-grid;place-items:center;flex:none;border-radius:6px;overflow:hidden;background:#222e3f;vertical-align:middle}
+.streaming-logo img{display:block;width:100%;height:100%;object-fit:contain}
+.streaming-logo-fallback{width:100%;height:100%;display:grid;place-items:center;font-size:10px;color:white;font-weight:800;background:#44536c}
+.streaming-logo-fallback.netflix{background:#d50914}.streaming-logo-fallback.disney_plus{background:#0d2a72}.streaming-logo-fallback.prime_video{background:#007cae}.streaming-logo-fallback.apple_tv_plus{background:#222}.streaming-logo-fallback.hbo_max{background:#6334a3}.streaming-logo-fallback.paramount_plus{background:#204a9e}.streaming-logo-fallback.crunchyroll{background:#f47521}.streaming-logo-fallback.rakuten_viki{background:#00bbd6}.streaming-logo-fallback.mubi{background:#252525}
+.streaming-tile .streaming-tile-services{display:flex;align-items:center;gap:3px;padding:3px;background:#101820dc;border-radius:7px}
+.streaming-tile .streaming-tile-services .streaming-logo{width:19px;height:19px;background:transparent;padding:0;border:0}
+.streaming-tile .streaming-tile-services .streaming-logo-fallback{font-size:8px}
+.streaming-detail-services{align-items:center}
+.streaming-detail-services a{align-items:center;gap:6px}
+.streaming-detail-services .streaming-logo{width:24px;height:24px}
+.streaming-title-dialog{max-width:780px;max-height:min(92dvh,950px);overflow-y:auto;position:relative}
+.streaming-detail-backdrop{position:absolute;inset:0 0 auto;height:250px;pointer-events:none;opacity:.16;overflow:hidden;mask-image:linear-gradient(black,transparent)}
+.streaming-detail-backdrop img{width:100%;height:100%;object-fit:cover;filter:blur(14px)}
+.streaming-detail-layout,.streaming-detail-section,.streaming-detail-genres,.streaming-detail-loading,.streaming-detail-note{position:relative}
+.streaming-detail-genres{display:flex;flex-wrap:wrap;gap:7px;margin:16px 0}
+.streaming-detail-genres span{border:1px solid var(--border);background:var(--raised);border-radius:20px;font-size:11px;padding:6px 10px}
+.streaming-detail-section{margin-top:23px}
+.streaming-detail-section h3{font-size:14px;margin:0 0 12px}
+.streaming-detail-section .synopsis{line-height:1.65;color:var(--text);margin:0}
+.streaming-detail-loading,.streaming-detail-note{font-size:12px;color:var(--muted);margin-top:15px}
+.streaming-cast-track{display:flex;gap:14px;overflow-x:auto;scrollbar-width:thin;padding-bottom:8px}
+.streaming-person{width:90px;flex:none;display:flex;flex-direction:column;gap:4px;font-size:11px}
+.streaming-person img,.streaming-person-placeholder{width:90px;height:118px;object-fit:cover;border-radius:8px;background:var(--raised);display:grid;place-items:center;font-size:24px;color:var(--muted)}
+.streaming-person strong{font-weight:600}
+.streaming-person small{color:var(--muted);line-height:1.3}
+.streaming-seasons{display:flex;gap:9px;flex-wrap:wrap}
+.streaming-season{display:flex;align-items:center;gap:9px;min-width:155px;background:var(--surface);border:1px solid var(--border);padding:8px;border-radius:9px}
+.streaming-season img{width:40px;height:60px;object-fit:cover;border-radius:4px}
+.streaming-season span{display:flex;flex-direction:column;gap:5px;font-size:11px}
+.streaming-season small{color:var(--muted)}
+@media(max-width:650px){.streaming-title-dialog{padding:18px}.streaming-person{width:76px}.streaming-person img,.streaming-person-placeholder{width:76px;height:105px}}
+
+/* Streaming settings share the native watch/rating predicates without
+   placing configuration controls over the discovery shelves. */
+.streaming-customize{margin:10px 0 16px;padding:12px 14px;border:1px solid var(--border);border-radius:11px;background:var(--surface)}
+.streaming-customize>summary{cursor:pointer;color:var(--text);font-weight:650;list-style:revert}
+.streaming-customize-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:16px;align-items:start}
+.streaming-customize label{font-size:12px}
+.streaming-customize select{margin-top:7px}
+.streaming-customize fieldset{min-width:0;border:1px solid var(--border);border-radius:8px;display:flex;gap:10px;padding:10px}
+.streaming-customize legend{font-size:12px;padding:0 6px}
+.streaming-rating-filter label{flex:1}
+.streaming-rating-filter input{width:100%;margin-top:7px}
+.streaming-toggle-filter,.streaming-genre-filter{flex-direction:column}
+.streaming-toggle-filter label,.streaming-genre-filter label{display:flex;gap:6px;align-items:center;color:var(--text);cursor:pointer}
+.streaming-customize input[type=checkbox]{width:18px;height:18px;min-height:18px;margin:0}
+#streaming-genre-options{display:grid;gap:9px;max-height:155px;overflow-y:auto}
+.streaming-filter-hint{font-size:12px;margin:11px 0 0;line-height:1.5}
+.streaming-person{color:var(--text);background:transparent;text-align:left;min-height:0;border:none;border-radius:9px;padding:0}
+.streaming-person:hover,.streaming-person:focus-visible{background:var(--raised)}
+.streaming-person-header{display:flex;align-items:start;gap:20px;position:relative}
+.streaming-person-header>img{width:128px;max-width:32%;aspect-ratio:2/3;object-fit:cover;border-radius:10px}
+.streaming-person-header h2{margin:0 0 8px;padding-right:38px}
+.streaming-person-header p{margin-bottom:10px}
+.streaming-person-bio{font-size:13px;max-height:165px;overflow:auto;white-space:pre-line;line-height:1.55}
+.streaming-person-tabs{display:flex;gap:8px;border-bottom:1px solid var(--border);margin:20px 0 16px;padding-bottom:12px}
+.streaming-person-tabs button{min-height:36px;padding:8px 14px}
+.streaming-person-tabs button[aria-pressed=true]{background:var(--raised);border-color:var(--accent);color:var(--accent)}
+.streaming-person-catalog{display:grid;gap:8px}
+.streaming-catalog-result{display:flex;gap:12px;text-align:left;align-items:center;min-height:72px;width:100%;padding:7px 9px}
+.streaming-catalog-result img{width:42px;height:62px;object-fit:cover;border-radius:5px;background:var(--raised)}
+.streaming-catalog-result span{display:flex;flex-direction:column;gap:5px;min-width:0}
+.streaming-catalog-result strong{font-size:13px}
+.streaming-catalog-result small{color:var(--muted);font-size:11px}
+.streaming-person-streaming-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(114px,1fr));gap:14px;margin:12px 0}
+.streaming-person-dialog{min-height:260px}
+.streaming-person-dialog .streaming-detail-note{margin:16px 0}
+@media(max-width:650px){.streaming-customize-grid{grid-template-columns:1fr}.streaming-person-header{gap:12px}.streaming-person-header>img{width:85px}.streaming-person-bio{max-height:120px}.streaming-person-streaming-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}}
+
+.streaming-assignments{display:grid;grid-template-columns:minmax(130px,1fr) auto auto;gap:7px;align-items:end;margin:12px 0}
+.streaming-assignments label{min-width:0;color:var(--muted);font-size:11px}
+.streaming-assignments select{display:block;margin-top:5px;width:100%;min-height:35px;padding:6px}
+.streaming-assignments button{min-height:35px;padding:7px 9px;font-size:11px;white-space:nowrap}
+.streaming-detail-feedback{font-size:12px;color:var(--accent);margin:8px 0}
+@media(max-width:650px){.streaming-assignments{grid-template-columns:minmax(110px,1fr) auto}.streaming-assignments [data-streaming-new]{grid-column:1/-1;justify-self:start}}
+
+/* Align streaming choices in logical rows: status, scoring and subscriptions. */
+.streaming-customize-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-areas:"watch discovery" "public personal" "display display" "subscriptions genres";
+  gap:16px;align-items:stretch
+}
+.streaming-customize-grid>.streaming-personal-filter-controls{
+  grid-area:watch;display:flex;flex-direction:column;
+  justify-content:start;gap:9px;
+  padding:12px 15px;border-radius:10px;border:1px solid var(--border);
+  background:var(--surface);color:var(--text);font-weight:600;min-width:0
+}
+.streaming-personal-filter-controls label{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+.streaming-personal-filter-controls select{margin-top:auto;min-height:42px}
+.streaming-customize-grid>[data-rating-range="streaming-rating"]{grid-area:public}
+.streaming-customize-grid>[data-rating-range="streaming-user-rating"]{grid-area:personal}
+.streaming-customize-grid>.streaming-subscription-filter{grid-area:subscriptions}
+.streaming-customize-grid>.streaming-content-filter{grid-area:discovery}
+.streaming-customize-grid>.streaming-display-filter{grid-area:display;flex-direction:row;flex-wrap:wrap;gap:16px}
+.streaming-customize-grid>.streaming-genre-filter{grid-area:genres}
+.streaming-customize-grid>fieldset{min-width:0;margin:0}
+.streaming-customize .rating-range-control{display:block;min-inline-size:0}
+.streaming-customize-grid>.streaming-toggle-filter,
+.streaming-customize-grid>.streaming-genre-filter{
+  padding:12px 15px;background:var(--surface);border-radius:10px;gap:10px
+}
+.streaming-customize-grid>.streaming-toggle-filter legend,
+.streaming-customize-grid>.streaming-genre-filter legend{
+  font-weight:650;color:var(--text)
+}
+#streaming-subscription-options{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;
+}
+#streaming-subscription-options label{min-width:0;font-size:12px}
+#streaming-genre-options{grid-template-columns:repeat(2,minmax(0,1fr));max-height:unset}
+@media(max-width:690px){
+  .streaming-customize-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"watch" "discovery" "public" "personal" "display" "subscriptions" "genres"}
+  #streaming-subscription-options,#streaming-genre-options{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:380px){
+  #streaming-subscription-options,#streaming-genre-options{grid-template-columns:minmax(0,1fr)}
+}
+
+/* iOS colour convention: violet for movies, turquoise for series.
+   Category artwork is a single masked monochrome vector, not a duplicate icon. */
+.streaming-shelf-header h3{display:flex;align-items:center;gap:8px}
+.streaming-category-icons{display:inline-flex;align-items:center;justify-content:center;flex:none;vertical-align:middle;width:29px;height:29px;color:var(--muted)}
+.streaming-category-icons svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.streaming-category-icons.streaming-kind-movie{color:#b49aff}
+.streaming-category-icons.streaming-kind-tv{color:#4bd7cd}
+.streaming-category-icons .streaming-genre-art{display:block;width:29px;height:29px;flex:none;background:currentColor;-webkit-mask:var(--genre-art) center / contain no-repeat;mask:var(--genre-art) center / contain no-repeat}
+.streaming-category-icons.streaming-kind-mixed .streaming-genre-art{background:linear-gradient(90deg,#b49aff,#4bd7cd)}
+#streaming-genre-options .streaming-category-icons{width:30px;height:30px;margin-right:3px}
+#streaming-genre-options .streaming-category-icons svg{width:20px;height:20px}
+@media(prefers-color-scheme:light){
+  .streaming-category-icons.streaming-kind-movie{color:#7540d8}
+  .streaming-category-icons.streaming-kind-tv{color:#0d9488}
+  .streaming-category-icons.streaming-kind-mixed .streaming-genre-art{background:linear-gradient(90deg,#7540d8,#0d9488)}
+}
+
+.streaming-tile .streaming-score-stack{position:absolute;top:8px;right:6px;z-index:1;display:flex;flex-direction:column;gap:3px;align-items:flex-end;pointer-events:none}
+.streaming-tile .streaming-score-stack .streaming-rating{position:static;display:inline-flex;gap:4px;align-items:center}
+.streaming-tile .streaming-score-stack .streaming-user-score{color:#74d7e9}
+.streaming-tile .streaming-score-stack .streaming-popularity{color:#fac77c}
+.streaming-popularity-label{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}
+.streaming-popularity-label .streaming-popularity-value{font-weight:700;color:var(--text)}
+.streaming-subview-search{display:block;max-width:460px;margin:12px 0 16px;font-size:12px;color:var(--muted)}
+.streaming-subview-search span{display:block;margin-bottom:6px}
+.streaming-subview-search input{display:block;width:100%;min-height:42px;background:var(--surface)}
+.streaming-subview-controls{display:flex;flex-wrap:wrap;gap:12px;margin:4px 0 16px}
+.streaming-subview-controls label{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--muted)}
+.streaming-subview-controls select{min-height:37px;min-width:135px;padding:5px 9px}
+#streaming-subview-trigger{height:2px;pointer-events:none}
+
+/* Shared Streaming category order: small up/down controls respect iOS order. */
+.streaming-category-settings-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.25rem 0}
+.streaming-category-settings-row label{flex:1;min-width:0}
+.streaming-category-reorder{display:flex;gap:.25rem}
+.streaming-category-reorder button{min-width:2.1rem;min-height:2rem}
+.streaming-category-unselected{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.7rem}
+.streaming-category-unselected strong{flex-basis:100%}

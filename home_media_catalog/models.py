@@ -26,6 +26,7 @@ class SortField(StrEnum):
     YEAR = "year"
     RATING = "rating"
     USER_RATING = "user_rating"
+    POPULARITY = "popularity"
     LAST_PLAYED = "last_played"
     DATE_MODIFIED = "date_modified"
     EPISODE = "episode"
@@ -166,6 +167,7 @@ class InternalMediaInput(StrictModel):
     year: int | None = Field(default=None, ge=1870, le=2200)
     plot: str | None = Field(default=None, max_length=5000)
     rating: float | None = Field(default=None, ge=0, le=10)
+    popularity: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     tmdb_id: str | None = Field(default=None, pattern=r"^[0-9]{1,24}$")
     imdb_id: str | None = Field(default=None, pattern=r"^tt[0-9]{5,12}$")
     barcode: str | None = Field(default=None, pattern=r"^[0-9]{8}$|^[0-9]{12,14}$")
@@ -173,6 +175,9 @@ class InternalMediaInput(StrictModel):
     technical_formats: list[Literal["480p", "480i", "576p", "576i", "720p", "1080p", "1080i", "4K", "HDR10", "HDR10+", "Dolby Vision", "HLG", "Dolby Atmos", "DTS:X", "Dolby TrueHD", "DTS-HD MA", "DTS-HD", "DTS-HD HR", "Dolby Digital+", "Dolby Digital", "DTS", "LPCM", "PCM", "Auro-3D"]] = Field(default_factory=list, max_length=32)
     edition_details: PhysicalEditionDetails | None = None
     poster_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
+    backdrop_path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9_.-]{1,150}$")
+    streaming_services: list[Literal["netflix", "disney_plus", "prime_video", "apple_tv_plus", "hbo_max", "paramount_plus"]] = Field(default_factory=list, max_length=6)
+    streaming_reference: bool = False
     physical_season: int | None = Field(default=None, ge=0, le=10000)
     physical_title: str | None = Field(default=None, max_length=300)
     physical_episode_count: int | None = Field(default=None, ge=0, le=10000)
@@ -284,6 +289,7 @@ class MediaSummary(BaseModel):
     runtime_minutes: int | None = None
     rating: float | None = None
     user_rating: float | None = None
+    popularity: float | None = None
     date_added: str | None = None
     last_played: str | None = None
     # Last edition/metadata/personal change; None until first modified.
@@ -306,6 +312,8 @@ class MediaSummary(BaseModel):
     # Raw collection label -> exact provider UUIDs, for safe cross-source merging.
     collection_sources: dict[str, list[str]] = Field(default_factory=dict)
     source_types: list[str] = Field(default_factory=list)
+    streaming_services: list[str] = Field(default_factory=list)
+    streaming_reference: bool = False
     media_sources: list[MediaSource] = Field(default_factory=list)
     # Filled only for a local cast/crew search; omitted roles mean no known
     # character/job, not that the person has no credit for the title.

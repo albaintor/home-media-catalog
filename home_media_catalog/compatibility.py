@@ -12,7 +12,7 @@ force the app to show an update-required screen before reading the catalogue.
 # Public schema/DTO revision, independent of the backwards-compatibility
 # contract negotiated by iOS. Increment on every data-model change; the
 # server's version identifier includes the model revision automatically.
-DATA_MODEL_VERSION = 11
+DATA_MODEL_VERSION = 16
 
 # Contract 2 requires the bounded rich-detail batch endpoint used by iOS.
 # Keep contract 1 available for older installed app versions.
@@ -24,7 +24,25 @@ MIN_MOBILE_CONTRACT = 1
 # Contract 5 supports deleting custom poster overrides.
 # Contract 6 adds per-edition video/audio format overrides
 # (PATCH /media/{id}/editions/{edition_id}/formats).
-MAX_MOBILE_CONTRACT = 6
+# Contract 7 introduces per-installation streaming discovery and revisioned state
+# sync. Contract 6 clients remain supported; only clients requesting the new
+# streaming functionality require contract 7.
+# Contract 8 adds title-specific provider opening and persisted TMDB backdrops
+# for streaming additions. Contract 7 clients remain supported.
+# Contract 9 adds stream-source memberships to media DTOs and persistent
+# reference-only TV episodes with watch status. Older clients remain supported.
+# Contract 10 identifies the post-2.7 Streaming/mobile model and requires the
+# incremental artwork synchronization and personal rating/watch parity changes
+# introduced after the published 2.7 client. Keep contracts 1–9 available so
+# existing released clients remain compatible with this updated NAS.
+# Contract 11 adds season-aware episode snapshots, aired-episode inventories,
+# reverse synchronization of canonical personal edits, and legacy retrofitting.
+# Older clients remain supported while they use the pre-11 watch-status behavior.
+# Contract 12 distinguishes canonical Streaming-edition provenance from the
+# optional list of active streaming providers, allowing iPhone-authored notes,
+# watched state and collection/list membership without a heart/provider.
+# Contract 11 and older clients remain supported.
+MAX_MOBILE_CONTRACT = 12
 
 
 def mobile_compatibility() -> dict[str, int]:

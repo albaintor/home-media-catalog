@@ -8,6 +8,7 @@
   <link rel="icon" type="image/svg+xml" href="static/cinema.svg">
   <link rel="stylesheet" href="static/app.css">
   <link rel="stylesheet" href="static/music.css">
+  <link rel="stylesheet" href="static/streaming.css">
   <script type="module" src="static/app.js"></script>
 </head>
 <body>
@@ -47,6 +48,9 @@
       <nav class="main-section-nav" aria-label="Bibliothèques">
         <a id="video-link" class="library-link" href="#video" aria-current="page">
           <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4V8Z"/></svg>Vidéo
+        </a>
+        <a id="streaming-link" class="library-link" href="#streaming">
+          <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3V9Z"/><path d="M6 2v2m12-2v2"/></svg>Streaming
         </a>
         <a id="music-link" class="library-link" href="#music">
           <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Musique
@@ -129,23 +133,47 @@
           <span>Filtres et tris <span id="filter-count"></span></span><span class="filter-chevron" aria-hidden="true">⌄</span>
         </summary>
         <section id="filters" class="filters" aria-label="Filtres et tri">
-        <label>Type<select id="kind"><option value="">Tous les médias</option><option value="movie">Films</option><option value="tvshow">Séries</option></select></label>
-        <details class="multi-filter" id="multi-source-type"><summary>Source <span id="source-type-summary">Toutes</span></summary><div class="multi-choices" id="source-type-choices" role="group" aria-label="Sources"></div></details>
-        <details class="multi-filter" id="multi-genre"><summary>Genre <span id="genre-summary">Tous</span></summary><div class="multi-choices" id="genre-choices" role="group" aria-label="Genres"></div></details>
-        <div class="format-picker" role="group" aria-label="Formats cumulables">
+          <div class="catalogue-filter-primary">
+            <label>Type<select id="kind"><option value="">Tous les médias</option><option value="movie">Films</option><option value="tvshow">Séries</option></select></label>
+            <details class="multi-filter" id="multi-source-type"><summary>Source <span id="source-type-summary">Toutes</span></summary><div class="multi-choices" id="source-type-choices" role="group" aria-label="Sources"></div></details>
+            <details class="multi-filter" id="multi-genre"><summary>Genre <span id="genre-summary">Tous</span></summary><div class="multi-choices" id="genre-choices" role="group" aria-label="Genres"></div></details>
+            <details class="multi-filter collection-filter" id="collection-picker"><summary>Collection <span id="collection-summary">Toutes les collections</span></summary><div class="collection-picker-content"><label class="collection-internal-option"><input type="checkbox" id="collection-internal-only"> Collections internes uniquement</label><input id="collection-filter-search" type="search" placeholder="Rechercher une collection…" aria-label="Rechercher une collection" autocomplete="off"><div class="multi-choices collection-choices" id="collection-choices" role="group" aria-label="Collections"></div><button id="collection-clear" class="text-button" type="button">Effacer la sélection</button></div></details>
+            <details class="multi-filter" id="multi-watch-status"><summary>État <span id="watch-status-summary">Tous</span></summary><div class="multi-choices" id="watch-status-choices" role="group" aria-label="États de lecture"></div></details>
+          </div>
+          <div class="format-picker" role="group" aria-label="Formats cumulables">
           <div class="format-category"><span class="format-category-title">Vidéo</span><div id="video-formats" class="format-choices" role="group" aria-label="Formats vidéo"></div></div>
           <div class="format-category"><span class="format-category-title">Audio</span><div id="audio-formats" class="format-choices" role="group" aria-label="Formats audio"></div></div>
           <div class="format-category"><span class="format-category-title">Support</span><div id="disc-formats" class="format-choices" role="group" aria-label="Formats des supports"></div></div>
           <span id="format-selection-count" class="format-help" aria-live="polite">Sélectionnez plusieurs formats pour les cumuler (ET).</span>
         </div>
-        <details class="multi-filter collection-filter" id="collection-picker"><summary>Collection <span id="collection-summary">Toutes les collections</span></summary><div class="collection-picker-content"><label class="collection-internal-option"><input type="checkbox" id="collection-internal-only"> Collections internes uniquement</label><input id="collection-filter-search" type="search" placeholder="Rechercher une collection…" aria-label="Rechercher une collection" autocomplete="off"><div class="multi-choices collection-choices" id="collection-choices" role="group" aria-label="Collections"></div><button id="collection-clear" class="text-button" type="button">Effacer la sélection</button></div></details>
-        <details class="multi-filter" id="multi-watch-status"><summary>État <span id="watch-status-summary">Tous</span></summary><div class="multi-choices" id="watch-status-choices" role="group" aria-label="États de lecture"></div></details>
-        <label class="deep-search-option"><input id="deep-search" type="checkbox"> Recherche avancée <small>Synopsis, acteurs, genres et autres métadonnées</small></label>
-        <label>Regrouper<select id="group-by"><option value="">Aucun</option><option value="collection">Collection</option></select></label>
-        <label class="deep-search-option" id="merge-collections-label"><input type="checkbox" id="merge-collections"> Fusionner les noms de collections équivalents</label>
-        <label>Tri<select id="sort"><option value="date_added">Date d’ajout</option><option value="date_modified">Date de modification</option><option value="title">Titre</option><option value="year">Année</option><option value="rating">Note</option><option value="user_rating">Votre note</option><option value="last_played">Dernière lecture</option></select></label>
-        <button id="sort-order" class="sort-order" aria-label="Inverser le sens du tri">↓ Décroissant</button>
-        </section>
+          <div class="catalogue-filter-ratings" role="group" aria-label="Notes des films et séries">
+            <fieldset class="rating-range-control" data-rating-range="catalog-rating">
+              <legend>Note publique (IMDb / TMDB)</legend>
+              <div class="rating-range-values"><output id="catalog-rating-min-value" for="catalog-rating-min">0</output><span aria-hidden="true">–</span><output id="catalog-rating-max-value" for="catalog-rating-max">10</output></div>
+              <div class="rating-range-slider">
+                <div class="rating-range-rail" aria-hidden="true"></div>
+                <input id="catalog-rating-min" type="range" min="0" max="10" step="0.5" value="0" aria-label="Note publique (IMDb / TMDB) : minimum">
+                <input id="catalog-rating-max" type="range" min="0" max="10" step="0.5" value="10" aria-label="Note publique (IMDb / TMDB) : maximum">
+              </div>
+            </fieldset>
+            <fieldset class="rating-range-control" data-rating-range="catalog-user-rating">
+              <legend>Ma note</legend>
+              <div class="rating-range-values"><output id="catalog-user-rating-min-value" for="catalog-user-rating-min">0</output><span aria-hidden="true">–</span><output id="catalog-user-rating-max-value" for="catalog-user-rating-max">10</output></div>
+              <div class="rating-range-slider">
+                <div class="rating-range-rail" aria-hidden="true"></div>
+                <input id="catalog-user-rating-min" type="range" min="0" max="10" step="0.5" value="0" aria-label="Ma note : minimum">
+                <input id="catalog-user-rating-max" type="range" min="0" max="10" step="0.5" value="10" aria-label="Ma note : maximum">
+              </div>
+            </fieldset>
+          </div>
+          <div class="catalogue-filter-secondary">
+            <label class="deep-search-option"><input id="deep-search" type="checkbox"> Recherche avancée <small>Synopsis, acteurs, genres et autres métadonnées</small></label>
+            <label>Regrouper<select id="group-by"><option value="">Aucun</option><option value="collection">Collection</option></select></label>
+            <label class="deep-search-option" id="merge-collections-label"><input type="checkbox" id="merge-collections"> Fusionner les noms de collections équivalents</label>
+            <label>Tri<select id="sort"><option value="date_added">Date d’ajout</option><option value="date_modified">Date de modification</option><option value="title">Titre</option><option value="year">Année</option><option value="rating">Note</option><option value="user_rating">Votre note</option><option value="last_played">Dernière lecture</option></select></label>
+            <button id="sort-order" class="sort-order" aria-label="Inverser le sens du tri">↓ Décroissant</button>
+          </div>
+                </section>
       </details>
       <div class="results-heading"><span id="result-count" aria-live="polite"></span><button id="reset-filters" class="text-button" hidden>Effacer les filtres</button></div>
       <div id="collection-backdrop" class="collection-backdrop" hidden aria-hidden="true"></div><div id="collection-navigation" class="collection-navigation" hidden><button id="collection-back" type="button" class="secondary">← Toutes les collections</button><strong id="collection-current"></strong><span class="manual-collection-actions" id="manual-collection-actions" hidden><button id="manual-edit-button" class="secondary" type="button">Modifier</button><button id="manual-add-items-button" class="secondary" type="button">＋ Ajouter</button><button id="manual-remove-selected-button" class="secondary" type="button" hidden>Retirer la sélection</button><button id="manual-delete-button" class="secondary" type="button">Supprimer la collection</button></span></div>
@@ -153,6 +181,106 @@
       <section id="results" class="poster-grid" aria-label="Résultats du catalogue" aria-busy="false"></section>
       <div id="pagination" class="pagination catalogue-loading" hidden><span id="page-info" aria-live="polite"></span><p id="load-more-status" role="status"></p><button id="load-more" class="secondary" type="button" aria-controls="results">Charger la suite</button><div id="load-more-trigger" aria-hidden="true"></div></div>
       <footer class="catalogue-footer"><span>Home Media Catalog</span><span id="server-version"></span><span id="sync-status"></span></footer>
+    </section>
+    <section id="streaming-page" class="catalogue streaming-page" aria-labelledby="streaming-title" hidden>
+      <div class="streaming-heading">
+        <div><p class="eyebrow">VOTRE CATALOGUE STREAMING</p><h2 id="streaming-title">Streaming</h2><p id="streaming-summary" class="muted" aria-live="polite"></p></div>
+        <button id="streaming-refresh" class="secondary" type="button">Actualiser</button>
+      </div>
+      <div id="streaming-browser">
+        <div class="streaming-controls">
+          <div class="search-box"><span aria-hidden="true">⌕</span><input id="streaming-search" type="search" autocomplete="off" placeholder="Rechercher dans le streaming…" aria-label="Rechercher dans le streaming"></div>
+          <select id="streaming-kind" aria-label="Type de média"><option value="both">Films et séries</option><option value="movie">Films</option><option value="tv">Séries</option></select>
+          <select id="streaming-region" aria-label="Région des services"><option value="auto">Automatique (région du navigateur)</option><option value="FR">France</option><option value="BE">Belgique</option><option value="CH">Suisse</option><option value="CA">Canada</option><option value="US">États-Unis</option><option value="GB">Royaume-Uni</option><option value="DE">Allemagne</option><option value="ES">Espagne</option><option value="IT">Italie</option><option value="KR">Corée du Sud</option><option value="JP">Japon</option></select>
+        </div>
+        <details id="streaming-customize" class="streaming-customize">
+          <summary>Personnaliser le streaming</summary>
+          <div class="streaming-customize-grid">
+            <div class="streaming-personal-filter-controls">
+              <label>État de visionnage
+                <select id="streaming-watch-filter"><option value="all">Tous</option><option value="watched">Vus</option><option value="unwatched">Non vus</option></select>
+              </label>
+              <label>Note personnelle
+                <select id="streaming-personal-rating-filter"><option value="all">Toutes</option><option value="rated">Notées</option><option value="unrated">Non notées</option></select>
+              </label>
+            </div>
+            <fieldset class="rating-range-control" data-rating-range="streaming-rating">
+              <legend>Note publique (TMDB)</legend>
+              <div class="rating-range-values"><output id="streaming-rating-min-value" for="streaming-rating-min">0</output><span aria-hidden="true">–</span><output id="streaming-rating-max-value" for="streaming-rating-max">10</output></div>
+              <div class="rating-range-slider">
+                <div class="rating-range-rail" aria-hidden="true"></div>
+                <input id="streaming-rating-min" type="range" min="0" max="10" step="0.5" value="0" aria-label="Note publique (TMDB) : minimum">
+                <input id="streaming-rating-max" type="range" min="0" max="10" step="0.5" value="10" aria-label="Note publique (TMDB) : maximum">
+              </div>
+            </fieldset>
+            <fieldset class="rating-range-control" data-rating-range="streaming-user-rating">
+              <legend>Ma note (catalogue)</legend>
+              <div class="rating-range-values"><output id="streaming-user-rating-min-value" for="streaming-user-rating-min">0</output><span aria-hidden="true">–</span><output id="streaming-user-rating-max-value" for="streaming-user-rating-max">10</output></div>
+              <div class="rating-range-slider">
+                <div class="rating-range-rail" aria-hidden="true"></div>
+                <input id="streaming-user-rating-min" type="range" min="0" max="10" step="0.5" value="0" aria-label="Ma note (catalogue) : minimum">
+                <input id="streaming-user-rating-max" type="range" min="0" max="10" step="0.5" value="10" aria-label="Ma note (catalogue) : maximum">
+              </div>
+            </fieldset>
+            <fieldset class="streaming-toggle-filter streaming-subscription-filter">
+              <legend>Mes abonnements</legend>
+              <div id="streaming-subscription-options"></div>
+            </fieldset>
+            <fieldset class="streaming-toggle-filter streaming-display-filter">
+              <legend>Affichage</legend>
+              <label><input id="streaming-show-personal-rating" type="checkbox"> Afficher ma note sur les affiches</label>
+              <label><input id="streaming-show-popularity" type="checkbox"> Afficher la popularité TMDB</label>
+            </fieldset>
+            <fieldset class="streaming-genre-filter">
+              <legend>Catégories et ordre (synchronisés avec iOS)</legend>
+              <div id="streaming-genre-options"></div>
+            </fieldset>
+          </div>
+          <p class="muted streaming-filter-hint">Les notes et les statuts personnels proviennent du catalogue. Les titres sans note ne sont exclus que lorsque la plage de notes est restreinte.</p>
+        </details>
+        <div id="streaming-services" class="streaming-service-chips" role="group" aria-label="Services de streaming"></div>
+        <div id="streaming-error" class="error-banner streaming-error" role="alert" hidden></div>
+        <section id="streaming-saved" class="streaming-shelves" aria-label="Mes contenus streaming"></section>
+        <section id="streaming-discover" class="streaming-shelves" aria-label="Découvrir les contenus streaming"></section>
+      </div>
+      <section id="streaming-subview" class="streaming-subview" hidden>
+        <button id="streaming-back" class="secondary" type="button">← Retour au streaming</button>
+        <h2 id="streaming-subview-title"></h2>
+        <label class="streaming-subview-search" for="streaming-subview-search">
+          <span>Rechercher dans cette catégorie</span>
+          <input id="streaming-subview-search" type="search" placeholder="Titre d'un film ou d'une série" autocomplete="off">
+        </label>
+        <div class="streaming-subview-controls">
+          <label for="streaming-subview-sort">Trier par
+            <select id="streaming-subview-sort">
+              <option value="default">Ordre de la rubrique</option>
+              <option value="popularity">Popularité TMDB</option>
+              <option value="rating">Note publique</option>
+              <option value="user_rating">Ma note</option>
+              <option value="date_added">Date d'ajout</option>
+              <option value="title">Titre</option>
+              <option value="year">Année</option>
+            </select>
+          </label>
+          <label for="streaming-subview-order">Ordre
+            <select id="streaming-subview-order">
+              <option value="desc">Décroissant</option>
+              <option value="asc">Croissant</option>
+            </select>
+          </label>
+        </div>
+        <div id="streaming-subview-grid" class="streaming-grid"></div>
+        <button id="streaming-subview-more" class="secondary" type="button" hidden>Afficher davantage de titres</button>
+        <div id="streaming-subview-trigger" aria-hidden="true"></div>
+      </section>
+      <dialog id="streaming-title-dialog" class="streaming-title-dialog" aria-labelledby="streaming-detail-heading">
+        <button id="streaming-detail-close" type="button" class="dialog-close" aria-label="Fermer">×</button>
+        <div id="streaming-title-content"></div>
+      </dialog>
+      <dialog id="streaming-person-dialog" class="streaming-title-dialog streaming-person-dialog" aria-labelledby="streaming-person-heading">
+        <button id="streaming-person-close" type="button" class="dialog-close" aria-label="Fermer la fiche personne">×</button>
+        <div id="streaming-person-content"></div>
+      </dialog>
     </section>
     <section id="music-page" class="catalogue music-page" aria-labelledby="music-title" hidden>
         <p class="eyebrow">VOTRE DISCOTHÈQUE</p>

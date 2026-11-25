@@ -49,6 +49,7 @@ from .ai import (
 )
 from .ai_hybrid import hybrid_page
 from .ai_single_model import single_model_page
+from .ai_streaming import StreamingAIInput, recommend_streaming
 from .ai_usage import (
     AIBudgetExceeded,
     AIPriceUnavailable,
@@ -69,7 +70,7 @@ from .enrichment import (
     probe_tmdb,
     resolve_tmdb_poster,
     tmdb_connection,
-    tmdb_rating_lookup,
+    tmdb_metrics_lookup,
 )
 from .internal_catalog import (
     find_tmdb,
@@ -85,9 +86,9 @@ from .models import (
     CatalogueStatus,
     ConnectionResult,
     CustomTitleInput,
+    DeviceCollectionSnapshot,
     EditionHDRInput,
     EditionTechnicalFormatsInput,
-    DeviceCollectionSnapshot,
     EpisodeWatchInput,
     EpisodeWatchResult,
     ErrorResponse,
@@ -151,6 +152,16 @@ from .players import play
 from .players import probe as probe_player
 from .settings import Settings
 from .store import Store
+from .streaming import (
+    _bootstrap_catalogue_watch_progress,
+    _merge,
+    _mirror_catalogue_episode_edit,
+    _mirror_catalogue_personal,
+    _reconcile_streaming_catalogue,
+    _reconcile_catalogue_personal,
+    _reconcile_watch_progress,
+    build_streaming_router,
+)
 from .sync import BusyError, SyncManager
 from .utils import client_modified_at
 from .writeback import propagate_personal
@@ -201,6 +212,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
         await asyncio.to_thread(store.initialize)
+        # The catalogue tables exist only after initialize() within lifespan.
+        # Recover streaming hearts that arrived before local-first media uploads.
+        await asyncio.to_thread(
+            lambda: _reconcile_streaming_catalogue(store, _merge(store, []))
+        )
+        # Migrate legacy per-media and per-episode watch state once, before
+        # projecting any newer synced episode inventories.
+        await asyncio.to_thread(_bootstrap_catalogue_watch_progress, store)
+        # Replay locally committed iPhone ratings and film watch flags after
+        # server restart or catalogue reimport, then derive TV episode states.
+        await asyncio.to_thread(
+            lambda: _reconcile_catalogue_personal(store, _merge(store, []))
+        )
+        await asyncio.to_thread(
+            lambda: _reconcile_watch_progress(store, _merge(store, []))
+        )
         await asyncio.to_thread(auth.load_devices)
         await sync.bootstrap_empty_catalogue()
         # Reconcile the persisted vector index on every server start. Scheduling
@@ -272,6 +299,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         },
     )
     app.state.store, app.state.auth, app.state.sync = store, auth, sync
+    app.include_router(build_streaming_router(store, settings))
     app.state.playback_oauth = cloud_auth
     app.state.playback_nfs_mounts = settings.playback_nfs_mounts
     app.state.artwork = Artwork(settings)
@@ -363,6 +391,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and response.status_code == 200
         ):
             response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        elif (
+            "/api/v1/media/" in path
+            and "/artwork/" in path
+            and response.status_code in (200, 304)
+            and response.headers.get("ETag")
+        ):
+            # Media artwork is private (authenticated), but rarely changes.
+            # The content ETag avoids downloading unchanged bytes after one
+            # day; the artwork-change cursor busts only the affected browser
+            # URL immediately when an administrator replaces a poster.
+            response.headers["Cache-Control"] = "private, max-age=86400, must-revalidate"
+            # Never reuse an authenticated image across bearer/cookie sessions
+            # merely because the media URL happens to match.
+            response.headers["Vary"] = "Authorization, Cookie"
         else:
             response.headers["Cache-Control"] = "private, no-store"
         return response
@@ -435,8 +477,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return app.openapi()
 
     @app.get(API + "/discovery", include_in_schema=False)
-    def discovery_info():
-        # Deliberately public, with no credentials, file paths or catalogue data.
+    def discovery_info(response: Response):
+        # Negotiation must never use a stale reverse-proxy response after a
+        # Docker upgrade. No credentials or sensitive server data are exposed.
+        response.headers["Cache-Control"] = "no-store, max-age=0"
         return {
             "service": "home-kodi-library",
             "api_version": "v1",
@@ -448,6 +492,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # routes missing on an older, otherwise contract-compatible NAS.
             "capabilities": [
                 "ai_search",
+                "ai_streaming_recommendations",
                 "bulk_list_add",
                 "ai_refine_results",
                 "kodi_local_stream",
@@ -458,6 +503,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "media_details_batch",
                 "tmdb_device_credentials",
                 "tmdb_rating_refresh",
+                "streaming_tmdb_discovery",
+                "streaming_chart_fallback",
+                "streaming_state_sync",
+                "streaming_reference_unscoped",
+                "catalogue_popularity",
             ],
         }
 
@@ -895,10 +945,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     found = None
                                     if detail:
                                         async with enrichment_lock:
-                                            found = await tmdb_rating_lookup(get, detail)
+                                            found = await tmdb_metrics_lookup(get, detail)
                                     if found and found[1] is not None:
                                         outcome = await asyncio.to_thread(
-                                            store.save_tmdb_rating, media_id, found[1])
+                                            store.save_tmdb_rating, media_id, found[1], found[2])
                                         counts["updated" if outcome == "accepted" else "unchanged"] += 1
                                     else:
                                         counts["failed"] += 1
@@ -1276,6 +1326,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "retry_interval_minutes": 30,
         }
 
+    @app.get(API + "/ai/device-credentials", include_in_schema=False)
+    def read_ai_device_credential(
+        request: Request, response: Response, principal: Principal = Depends(authenticated),
+    ):
+        # Reuse the strict TLS + administrator bearer + pin-compatible relay
+        # policy already established for exchanging the TMDB device key.
+        require_secure_tmdb_device(request, principal)
+        private_credential_response(response)
+        return ai_config.device_credential()
+
+    @app.put(API + "/ai/device-credentials", include_in_schema=False)
+    async def provision_ai_device_credential(
+        request: Request, response: Response, principal: Principal = Depends(authenticated),
+    ):
+        require_secure_tmdb_device(request, principal)
+        private_credential_response(response)
+        try:
+            raw = await request.json()
+        except (ValueError, UnicodeError):
+            raise HTTPException(422, "Invalid AI credential request.") from None
+        if not isinstance(raw, dict) or not all(
+            isinstance(raw.get(field), str) for field in ("provider", "model", "api_key")
+        ):
+            raise HTTPException(422, "Invalid AI credential request.")
+        if raw.get("mode") == "replace":
+            revision = raw.get("expected_revision")
+            if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+                raise HTTPException(422, "Missing AI configuration revision.")
+            try:
+                updated = ai_config.replace_device_credential(
+                    raw["provider"], raw["model"], raw["api_key"], revision,
+                )
+            except ValueError:
+                raise HTTPException(422, "Invalid AI credential request.") from None
+            except RuntimeError:
+                raise HTTPException(409, "AI configuration changed; refresh before saving.") from None
+            return updated
+        if raw.get("mode") not in (None, "fill"):
+            raise HTTPException(422, "Invalid AI synchronization mode.")
+        try:
+            imported = ai_config.provision_device_credential(
+                raw["provider"], raw["model"], raw["api_key"],
+            )
+        except ValueError:
+            raise HTTPException(422, "Invalid AI credential request.") from None
+        return {"configured": True, "imported": imported}
+
     @app.get(API + "/ai/status", tags=["AI"], dependencies=[Depends(authenticated)])
     def ai_status():
         return {**ai_config.status(), "index": ai_index_status()}
@@ -1534,6 +1631,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             output.pop("index", None)
         return output
+
+
+    @app.post(API + "/ai/streaming/search", tags=["AI"], dependencies=[Depends(authenticated)])
+    async def search_streaming_with_ai(value: StreamingAIInput, request: Request):
+        """Personalized streaming results, without changing the local AI search contract."""
+        credentials = ai_config.credentials()
+        if not credentials:
+            raise HTTPException(503, "Configure the AI provider for streaming recommendations.")
+        if not settings.tmdb_api_token.strip():
+            raise HTTPException(503, "Configure TMDB for streaming recommendations.")
+        provider = ai_config.status()["provider"]
+        client_ip = request.client.host if request.client else "unknown"
+        async with ai_rate_lock:
+            attempts = ai_attempts[client_ip]
+            current = time.monotonic()
+            while attempts and attempts[0] < current - 60:
+                attempts.popleft()
+            if len(attempts) >= 10:
+                raise HTTPException(429, "AI search limit reached. Try again in one minute.")
+            attempts.append(current)
+        if ai_limit.locked():
+            raise HTTPException(429, "Too many AI searches in progress.")
+        async with ai_limit:
+            try:
+                with usage_session(ai_usage, ai_config.status()["monthly_budget_usd"], "search"):
+                    facets = await asyncio.to_thread(store.facets)
+                    prompt = value.prompt
+                    if value.previous_prompt:
+                        prompt = (
+                            "Previous search: " + value.previous_prompt + "\n"
+                            "Refine using: " + value.prompt
+                        )[:1000]
+                    plan = await interpret_prompt(
+                        prompt, *credentials, facets,
+                        **({"provider": provider} if provider != "openai" else {}),
+                    )
+                    return await recommend_streaming(
+                        store, settings.tmdb_api_token.strip(), value, plan,
+                        model=credentials[0], api_key=credentials[1], provider=provider,
+                    )
+            except AIBudgetExceeded as exc:
+                raise HTTPException(429, str(exc)) from None
+            except AIPriceUnavailable as exc:
+                raise HTTPException(422, str(exc)) from None
+            except (httpx.HTTPError, ValueError) as exc:
+                _LOG.warning("Streaming AI search failed: %s", type(exc).__name__)
+                raise HTTPException(502, "AI provider unavailable or invalid model.") from None
 
     @app.get(
         API + "/internal/search",
@@ -1809,11 +1953,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         collection: list[str] | None = Query(None, max_length=40),
         collection_id: str | None = Query(None, max_length=120),
         source_type: list[Literal["kodi", "clz", "mymovies", "filmotech", "icollect", "bluraycom", "moviebuddy", "dvdprofiler", "letterboxd", "imdb", "internal"]] | None = Query(None),
+        streaming_mode: Literal["all", "selected", "none"] = "all",
+        streaming_service: list[Literal["netflix", "disney_plus", "prime_video", "apple_tv_plus", "hbo_max", "paramount_plus", "crunchyroll", "rakuten_viki", "mubi"]] | None = Query(None),
+        include_streaming_personal: bool = True,
         source_id: str | None = None,
         parent_id: str | None = None,
         season: int | None = Query(None, ge=0, le=10000),
         year: int | None = Query(None, ge=1800, le=2200),
         recent_days: int | None = Query(None, ge=1, le=3650),
+        rating_min: float | None = Query(None, ge=0, le=10),
+        rating_max: float | None = Query(None, ge=0, le=10),
+        user_rating_min: float | None = Query(None, ge=0, le=10),
+        user_rating_max: float | None = Query(None, ge=0, le=10),
+        rating_gt: float | None = Query(None, ge=0, le=10),
+        rating_lt: float | None = Query(None, ge=0, le=10),
+        user_rating_gt: float | None = Query(None, ge=0, le=10),
+        user_rating_lt: float | None = Query(None, ge=0, le=10),
         sort: SortField = SortField.DATE_ADDED,
         order: Literal["asc", "desc"] = "desc",
         limit: int = Query(60, ge=1, le=200),
@@ -1833,11 +1988,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             collection=collection,
             collection_id=collection_id,
             source_type=source_type,
+            streaming_mode=streaming_mode,
+            streaming_service=streaming_service,
+            include_streaming_personal=include_streaming_personal,
             source_id=source_id,
             parent_id=parent_id,
             season=season,
             year=year,
             recent_days=recent_days,
+            rating_min=rating_min,
+            rating_max=rating_max,
+            user_rating_min=user_rating_min,
+            user_rating_max=user_rating_max,
+            rating_gt=rating_gt,
+            rating_lt=rating_lt,
+            user_rating_gt=user_rating_gt,
+            user_rating_lt=user_rating_lt,
             sort=sort,
             order=order,
             limit=limit,
@@ -2129,6 +2295,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 background_tasks.add_task(
                     finish_episode_watch_writebacks, result["ids"], data.watched
                 )
+            if result["updated"]:
+                # If journal reconciliation already applied the device edit,
+                # avoid rewriting its revision with a newer NAS timestamp.
+                await asyncio.to_thread(
+                    _mirror_catalogue_episode_edit, store, media_id,
+                    watched=data.watched, season=data.season,
+                    up_to_episode=data.up_to_episode,
+                )
             return {key: value for key, value in result.items() if key != "ids"}
 
     @app.get(
@@ -2298,6 +2472,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             if changes:
                 await asyncio.to_thread(store.update_personal, media_id, changes)
+                if detail["kind"] == "episode" and "watched" in changes:
+                    # A web/older-iOS single-episode edit must update the same
+                    # Streaming journal, not merely the canonical work table.
+                    parent = detail.get("parent_id")
+                    season = detail.get("season")
+                    number = detail.get("episode")
+                    if parent and isinstance(season, int) and isinstance(number, int):
+                        await asyncio.to_thread(
+                            _mirror_catalogue_episode_edit, store, parent,
+                            watched=changes["watched"], season=season,
+                            up_to_episode=None, targeted_episode=number,
+                        )
+                elif "watched" in changes or "user_rating" in changes:
+                    await asyncio.to_thread(
+                        _mirror_catalogue_personal, store, media_id,
+                        watched=changes.get("watched"),
+                        rating_changed="user_rating" in changes,
+                        rating=changes.get("user_rating"),
+                    )
                 if "user_rating" in changes:
                     # Personal ratings are embedded; watch-state-only edits are not.
                     pass  # No vector index in single-model mode.
@@ -2733,6 +2926,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             del payload
             async with personal_edit_lock:
                 previous, restored = await asyncio.to_thread(import_backup, store, document)
+                # Rebuild the canonical Streaming editions and personal/episode
+                # projections before the restore endpoint reports success. This
+                # is also idempotent when the backed-up works are already present.
+                restored_streaming = await asyncio.to_thread(_merge, store, [])
+                await asyncio.to_thread(
+                    _reconcile_streaming_catalogue, store, restored_streaming)
+                await asyncio.to_thread(
+                    _reconcile_catalogue_personal, store, restored_streaming)
+                await asyncio.to_thread(
+                    _reconcile_watch_progress, store, restored_streaming)
         except (ValueError, UnicodeError) as exc:
             raise HTTPException(422, str(exc)) from exc
         except RuntimeError as exc:
@@ -3616,20 +3819,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(authenticated)],
         responses={200: {"content": {"image/jpeg": {}, "image/png": {}, "image/webp": {}}}},
     )
-    async def media_artwork(media_id: str, aspect: Literal["poster", "fanart"]):
+    async def media_artwork(media_id: str, aspect: Literal["poster", "fanart"],
+                            request: Request):
         candidates = await asyncio.to_thread(store.artwork, media_id, aspect)
         try:
             data, content_type = await app.state.artwork.get(candidates)
-            return Response(data, media_type=content_type)
         except ArtworkError as exc:
-            if aspect == "poster":
-                repaired = await recover_poster_on_demand(
-                    media_id, broken_source=bool(candidates)
-                )
-                if repaired:
-                    data, content_type = repaired
-                    return Response(data, media_type=content_type)
-            raise HTTPException(404, str(exc)) from exc
+            if aspect != "poster":
+                raise HTTPException(404, str(exc)) from exc
+            repaired = await recover_poster_on_demand(
+                media_id, broken_source=bool(candidates)
+            )
+            if not repaired:
+                raise HTTPException(404, str(exc)) from exc
+            data, content_type = repaired
+        # The validator is derived from the actual image bytes. When its
+        # reference is updated without changing the media ID, clients still
+        # receive the new content instead of a stale unconditional 200.
+        etag = '"' + hashlib.sha256(data).hexdigest() + '"'
+        if etag in request.headers.get("if-none-match", "").split(","):
+            return Response(status_code=304, headers={"ETag": etag})
+        return Response(data, media_type=content_type, headers={"ETag": etag})
 
     @app.post(
         API + "/connections/mariadb/databases",

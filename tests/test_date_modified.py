@@ -67,3 +67,9 @@ def test_rescan_preserves_modification_date(store):
     stamp = store.detail(ids["Alpha"])["date_modified"]
     store.apply_snapshot(source_id, records)
     assert store.detail(ids["Alpha"])["date_modified"] == stamp
+
+
+def test_web_interface_offers_modification_sort(client):
+    page = client.get("/").text
+    assert '<option value="date_modified">Date de modification</option>' in page
+    assert '"Date de modification": "Date modified"' in client.get("/static/i18n.js").text
