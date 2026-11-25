@@ -27,6 +27,7 @@ class SortField(StrEnum):
     RATING = "rating"
     USER_RATING = "user_rating"
     LAST_PLAYED = "last_played"
+    DATE_MODIFIED = "date_modified"
     EPISODE = "episode"
 
 
@@ -285,6 +286,8 @@ class MediaSummary(BaseModel):
     user_rating: float | None = None
     date_added: str | None = None
     last_played: str | None = None
+    # Last edition/metadata/personal change; None until first modified.
+    date_modified: str | None = None
     watch_status: WatchStatus
     episode_count: int | None = None
     watched_episode_count: int | None = None

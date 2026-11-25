@@ -17,7 +17,7 @@ from .connectors.collection_xml import COLLECTION_TYPES, DEVICE_COLLECTION_TYPES
 from .media_formats import AUDIO_FORMAT_LABELS, canonical_format, canonical_source_format
 from .people import category as credit_category
 from .people import person_view, youtube_url
-from .utils import fold, now
+from .utils import fold, modification_time, now
 
 # Keep at most ten completed/failed writeback events in persistent history.
 # Pending work is separate and must never be discarded by history retention.
@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS works (
  total_seconds REAL DEFAULT 0, parent_id TEXT REFERENCES works(id) ON DELETE SET NULL,
  season INTEGER, episode INTEGER, genres TEXT DEFAULT '[]', formats TEXT DEFAULT '[]',
  collections TEXT DEFAULT '[]', source_types TEXT DEFAULT '[]', poster TEXT DEFAULT '[]',
- fanart TEXT DEFAULT '[]', search_text TEXT NOT NULL DEFAULT ''
+ fanart TEXT DEFAULT '[]', search_text TEXT NOT NULL DEFAULT '',
+ date_modified TEXT
 );
 -- Materialized collection index: provenance stays in works.collections, memberships
 -- are indexed for paging and fast grouping. Covers are revisioned independently.
@@ -285,6 +286,12 @@ class Store:
                 conn.execute(
                     "ALTER TABLE collections ADD COLUMN is_manual INTEGER NOT NULL DEFAULT 0"
                 )
+            # Last user-visible change (edition, metadata, watch status, rating).
+            # Never derived from sources, so rebuilds and rescans preserve it.
+            if "date_modified" not in {
+                row["name"] for row in conn.execute("PRAGMA table_info(works)")
+            }:
+                conn.execute("ALTER TABLE works ADD COLUMN date_modified TEXT")
             # Music tables are additive and independent from video works.
             from .music import MusicCatalogue
 
@@ -1116,6 +1123,7 @@ class Store:
             if not current:
                 raise RuntimeError("Internal edition was not saved.")
             work_id = current["work_id"]
+            self._touch(conn, [work_id])
         return {"id": work_id, "item_id": external_key}
 
     @staticmethod
@@ -1192,6 +1200,7 @@ class Store:
                              (work_id, now()))
             self._save_editor_payload(conn, work_id, payload)
             self._rebuild(conn, work_id)
+            self._touch(conn, [work_id])
 
     def set_edition_hdr(self, work_id: str, edition_id: str, formats: list[str] | None) -> None:
         with self.connect() as conn:
@@ -1208,6 +1217,7 @@ class Store:
             payload["edition_hdr_overrides"] = overrides
             self._save_editor_payload(conn, work_id, payload)
             self._rebuild(conn, work_id)
+            self._touch(conn, [work_id])
 
     def set_edition_technical_formats(
         self, work_id: str, edition_id: str, changes: dict[str, list[str] | None]
@@ -1239,6 +1249,7 @@ class Store:
             payload["edition_format_overrides"] = overrides
             self._save_editor_payload(conn, work_id, payload)
             self._rebuild(conn, work_id)
+            self._touch(conn, [work_id])
 
     @staticmethod
     def _edition_formats(
@@ -1386,6 +1397,7 @@ class Store:
                 (work_id, encode(payload), now()),
             )
             self._rebuild(conn, work_id)
+            self._touch(conn, [work_id])
 
     @staticmethod
     def _physical_edition_fields(details: dict | None) -> dict:
@@ -1546,6 +1558,7 @@ class Store:
             conn.execute("UPDATE records SET payload=? WHERE id=?",
                          (encode(payload), row["id"]))
             self._rebuild(conn, row["work_id"])
+            self._touch(conn, [row["work_id"]])
             return {"id": row["work_id"], "item_id": external_key.lower()}
 
     def delete_internal_media(self, external_key: str) -> None:
@@ -1559,6 +1572,7 @@ class Store:
                 raise KeyError(external_key)
             conn.execute("DELETE FROM records WHERE id=?", (row["id"],))
             self._rebuild(conn, row["work_id"])
+            self._touch(conn, [row["work_id"]])
             self._prune(conn)
 
     def has_multiple_kodi_movie_versions(self, source_id: str) -> bool:
@@ -1619,6 +1633,9 @@ class Store:
                 r["external_key"]: r
                 for r in conn.execute("SELECT * FROM records WHERE source_id=?", (source_id,))
             }
+            # A new edition of a known work, or a changed one (e.g. Kodi watch
+            # status), modifies that work; a newly created work is only added.
+            existing_works = {row[0] for row in conn.execute("SELECT id FROM works")}
             # Only changed/removed works need their metadata and FTS rebuilt.
             # A no-op snapshot must not rewrite thousands of SQLite rows.
             affected = set()
@@ -1706,6 +1723,7 @@ class Store:
                 raise RuntimeError("Snapshot reconciliation mismatch; transaction rolled back.")
             for work_id in affected:
                 self._rebuild(conn, work_id)
+            self._touch(conn, affected & existing_works)
             if deleted or reassigned:
                 self._prune(conn)
             # Includes legacy works imported before title matching existed. Only
@@ -2306,6 +2324,27 @@ class Store:
             "DELETE FROM collections WHERE is_manual=0 AND NOT EXISTS "
             "(SELECT 1 FROM collection_items WHERE collection_id=collections.id)"
         )
+
+    @staticmethod
+    def _touch(conn: sqlite3.Connection, work_ids) -> None:
+        """Record a modification of works, and of the series of any episode.
+
+        The time comes from the editing device when it replays a journaled
+        change, so offline edits keep their real date. Never move backwards.
+        """
+        ids = [work_id for work_id in dict.fromkeys(work_ids) if work_id]
+        if not ids:
+            return
+        stamp = modification_time()
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            slots = ",".join("?" for _ in chunk)
+            conn.execute(
+                "UPDATE works SET date_modified=? WHERE (id IN (" + slots + ") OR id IN "
+                "(SELECT parent_id FROM works WHERE kind='episode' AND id IN (" + slots + ")))"
+                " AND (date_modified IS NULL OR date_modified<?)",
+                (stamp, *chunk, *chunk, stamp),
+            )
 
     @staticmethod
     def _summary(row: sqlite3.Row) -> dict[str, Any]:
@@ -3024,6 +3063,7 @@ class Store:
             "rating": "rating",
             "user_rating": "user_rating",
             "last_played": "last_played",
+            "date_modified": "date_modified",
             "episode": "episode",
         }
         if (
@@ -3035,9 +3075,12 @@ class Store:
             raise ValueError("Invalid pagination or sort option.")
         # The original title is not always populated: retain the localized
         # title as fallback while ordering case-insensitively.
+        # Untouched works sort by their addition date.
         sort_expression = (
             "COALESCE(NULLIF(w.original_title, ''), w.title) COLLATE NOCASE"
-            if sort == "original_title" else f"w.{fields[sort]}"
+            if sort == "original_title"
+            else "COALESCE(w.date_modified, w.date_added)" if sort == "date_modified"
+            else f"w.{fields[sort]}"
         )
         with self.connect() as conn:
             conn.execute("BEGIN")  # count and page see the same snapshot
@@ -3296,6 +3339,7 @@ class Store:
                     (episode_id, int(watched)),
                 )
                 self._rebuild(conn, episode_id)
+            self._touch(conn, changed_ids)
         return {
             "total": len(rows),
             "updated": len(changed_ids),
@@ -3574,6 +3618,7 @@ class Store:
                         conn.execute("UPDATE records SET payload=? WHERE id=?",
                                      (encode(payload), record["id"]))
             self._rebuild(conn, work_id)
+            self._touch(conn, [work_id])
         return True
 
     def artwork_changes(self, after: int = 0, limit: int = 200) -> dict:

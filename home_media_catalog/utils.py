@@ -2,13 +2,33 @@
 
 import re
 import unicodedata
-from datetime import UTC, datetime
+from contextvars import ContextVar
+from datetime import UTC, datetime, timedelta
 from html import unescape
 from typing import Any
 
 
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+# Time of the change on the editing device (X-Modified-At), set per request.
+client_modified_at: ContextVar[str | None] = ContextVar("client_modified_at", default=None)
+
+
+def modification_time() -> str:
+    """Device time of a replayed edit, bounded so a wrong clock cannot
+    place a change in the future or before the last year."""
+    current = datetime.now(UTC)
+    value = client_modified_at.get()
+    if value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed and parsed.tzinfo and current - timedelta(days=365) <= parsed <= current:
+            return parsed.astimezone(UTC).isoformat(timespec="seconds")
+    return current.isoformat(timespec="seconds")
 
 
 def fold(value: str) -> str:

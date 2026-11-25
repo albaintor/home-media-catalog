@@ -152,6 +152,7 @@ from .players import probe as probe_player
 from .settings import Settings
 from .store import Store
 from .sync import BusyError, SyncManager
+from .utils import client_modified_at
 from .writeback import propagate_personal
 
 _LOG = logging.getLogger(__name__)
@@ -324,8 +325,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_origins=settings.cors_origins,
             allow_credentials=True,
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-            allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
+            allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Modified-At"],
         )
+
+    @app.middleware("http")
+    async def client_modification_time(request, call_next):
+        # Devices replaying journaled edits send the time of the original change.
+        token = client_modified_at.set(request.headers.get("X-Modified-At"))
+        try:
+            return await call_next(request)
+        finally:
+            client_modified_at.reset(token)
 
     @app.middleware("http")
     async def security_headers(request, call_next):
