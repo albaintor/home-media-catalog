@@ -1268,7 +1268,9 @@ function updateLoadingState() {
   $('load-more-status').textContent=state.loading?'Chargement de la suite…':state.loadError?'Le chargement a échoué. Vous pouvez réessayer.':!state.hasMore&&state.items.length?'Tous les résultats sont affichés.':'';
 }
 function collectionMetric(items, field) {
-  const values=items.map(item=>item[field]).filter(value=>value!==null&&value!==undefined&&value!=='');
+  // Like iOS, a work never modified counts from its addition date.
+  const values=items.map(item=>field==='date_modified'?(item.date_modified||item.date_added):item[field])
+    .filter(value=>value!==null&&value!==undefined&&value!=='');
   if(field==='rating'||field==='user_rating') {
     const ratings=values.map(Number).filter(value=>Number.isFinite(value)&&value>0);
     return ratings.length?ratings.reduce((sum,value)=>sum+value,0)/ratings.length:null;

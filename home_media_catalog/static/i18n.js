@@ -299,6 +299,7 @@ const EN = {
   "Synopsis, acteurs, genres et autres métadonnées": "Synopses, cast, genres and other metadata",
   "Tri": "Sort",
   "Date d’ajout": "Date added",
+  "Date de modification": "Date modified",
   "Titre": "Title",
   "Année": "Year",
   "Note": "Rating",
