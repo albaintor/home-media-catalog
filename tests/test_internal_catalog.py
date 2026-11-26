@@ -808,3 +808,44 @@ def test_rich_disc_details_are_saved_and_only_missing_fields_enriched(store):
     assert metadata["audio_streams"] == [{"language": "French", "codec": "DTS", "channels": "5.1"}]
     assert metadata["subtitles"] == ["French", "English"]
     assert metadata["region"] == "B"
+
+
+def test_confirmed_companion_disc_and_scan_replacement(store):
+    # An unlinked title without a year must still remain one work, and both
+    # editions may share the exact retail barcode.
+    wrong = entry(tmdb_id=None, year=None, format="4K Ultra HD Blu-ray",
+                  technical_formats=["4K", "1080p", "DTS", "Dolby TrueHD"],
+                  edition_details={"audio_streams": [
+                      {"name": "4K UHD", "language": "French", "codec": "DTS"},
+                      {"name": "Blu-ray", "language": "English", "codec": "Dolby TrueHD"}],
+                      "subtitles": ["French [4K UHD]", "English [Blu-ray]"]})
+    created = store.save_internal_media(wrong)
+    companion = entry(tmdb_id=None, year=None, format="Blu-ray",
+                      allow_duplicate=True, companion_edition_id=wrong["id"],
+                      technical_formats=["1080p", "Dolby TrueHD"],
+                      edition_details={"audio_streams": [
+                          {"language": "English", "codec": "Dolby TrueHD"}]})
+    saved = store.save_internal_media(companion)
+    assert created["id"] == saved["id"]
+    assert store.save_internal_media(companion) == saved
+
+    store.update_internal_edition(
+        wrong["id"], "4K Ultra HD Blu-ray", wrong["barcode"],
+        technical=["4K", "DTS-HD MA"],
+        edition_details={"audio_streams": [{"language": "English", "codec": "DTS-HD MA"}],
+                         "subtitles": ["French"]},
+        replace_scanned_metadata=True)
+    detail = store.detail(created["id"])
+    assert len(detail["editions"]) == 2
+    editions = {e["external_key"]: e["metadata"] for e in detail["editions"]}
+    uhd = editions[wrong["id"]]
+    bd = editions[companion["id"]]
+    assert uhd["audio_streams"] == [{"language": "English", "codec": "DTS-HD MA"}]
+    assert uhd["subtitles"] == ["French"]
+    assert "1080p" not in uhd["formats"]
+    assert "Dolby TrueHD" not in uhd["formats"]
+    assert bd["audio_streams"] == [{"language": "English", "codec": "Dolby TrueHD"}]
+    assert "4K" not in bd["formats"]
+    with pytest.raises(ValueError, match="barcode changed"):
+        store.update_internal_edition(wrong["id"], "Blu-ray", "036000291452",
+                                      replace_scanned_metadata=True)
