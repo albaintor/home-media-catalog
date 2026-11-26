@@ -155,11 +155,13 @@ class InternalEditionUpdate(StrictModel):
     technical_formats: list[Literal["480p", "480i", "576p", "576i", "720p", "1080p", "1080i", "4K", "HDR10", "HDR10+", "Dolby Vision", "HLG", "Dolby Atmos", "DTS:X", "Dolby TrueHD", "DTS-HD MA", "DTS-HD", "DTS-HD HR", "Dolby Digital+", "Dolby Digital", "DTS", "LPCM", "PCM", "Auro-3D"]] = Field(default_factory=list, max_length=32)
     edition_details: PhysicalEditionDetails | None = None
     fill_missing_only: bool = False
+    replace_scanned_metadata: bool = False
 
 
 class InternalMediaInput(StrictModel):
     """One physical edition, identified by a client-generated idempotency UUID."""
     allow_duplicate: bool = False
+    companion_edition_id: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
     id: str = Field(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
     kind: Literal["movie", "tvshow"] = "movie"
     title: str = Field(min_length=1, max_length=300)
