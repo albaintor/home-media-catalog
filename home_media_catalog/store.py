@@ -1111,9 +1111,28 @@ class Store:
                         } if kind == "tvshow" and physical_season is not None else {}),
                     },
                 )
-                work_id, _ = self._match_work(
-                    conn, record, source_type="internal"
-                )
+                companion = data.get("companion_edition_id")
+                if companion:
+                    anchor = conn.execute(
+                        "SELECT work_id,payload FROM records WHERE source_id='internal' AND external_key=?",
+                        (companion.lower(),),
+                    ).fetchone()
+                    if not anchor:
+                        raise ValueError("Companion edition not found for this barcode.")
+                    previous = json.loads(anchor["payload"])
+                    previous_barcode = (previous.get("metadata") or {}).get("barcode")
+                    if (previous.get("kind") != kind or
+                        (canonical_gtin(barcode) if barcode else None) !=
+                        (canonical_gtin(previous_barcode) if previous_barcode else None)):
+                        raise ValueError("Companion edition not found for this barcode.")
+                    if any(ids.get(key) and (previous.get("identifiers") or {}).get(key) and
+                           str(ids[key]) != str(previous["identifiers"][key]) for key in ("tmdb", "imdb")):
+                        raise ValueError("Companion edition belongs to a different title.")
+                    work_id = anchor["work_id"]
+                else:
+                    work_id, _ = self._match_work(
+                        conn, record, source_type="internal"
+                    )
                 conn.execute(
                     "INSERT INTO records(id,work_id,source_id,external_key,payload) "
                     "VALUES(?,?,?,?,?)",
@@ -1547,9 +1566,11 @@ class Store:
         self, external_key: str, disc_format: str, barcode: str | None,
         manual: dict[str, Any] | None = None,
         technical: list[str] | None = None, fill_missing_only: bool = False,
-        edition_details: dict | None = None,
+        edition_details: dict | None = None, replace_scanned_metadata: bool = False,
     ) -> dict[str, Any]:
         """Edit the existing record, retaining its work and edition identities."""
+        if replace_scanned_metadata and fill_missing_only:
+            raise ValueError("Cannot replace and fill missing metadata at the same time.")
         from .internal_catalog import canonical_gtin, edition_gtin, valid_barcode
 
         if barcode and not valid_barcode(barcode):
@@ -1614,20 +1635,31 @@ class Store:
                                  (row["work_id"], now()))
             else:
                 payload = json.loads(row["payload"])
-            from .media_formats import merge_disc_formats
+            from .media_formats import merge_disc_formats, DISC_TECHNICAL_GROUPS
             editor = self._editor_payload(conn, row["work_id"])
             overrides = editor.get("edition_hdr_overrides") or {}
+            previous_formats = payload.get("formats", [])
+            if replace_scanned_metadata:
+                groups = [{label.casefold() for label in group} for group in DISC_TECHNICAL_GROUPS]
+                previous_formats = [
+                    value for value in previous_formats
+                    if (row["id"] in overrides and value.casefold() in groups[1])
+                    or not any(value.casefold() in group for group in groups)
+                ]
             payload["formats"] = merge_disc_formats(
-                payload.get("formats", []), disc_format, technical or [],
+                previous_formats, disc_format, technical or [],
                 fill_missing_only=fill_missing_only, hdr_override=row["id"] in overrides,
             )
             metadata = payload.get("metadata") or {}
-            if not fill_missing_only:
+            if not fill_missing_only and not replace_scanned_metadata:
                 metadata["barcode"] = barcode or None
             elif not barcode or edition_gtin(metadata) != canonical_gtin(barcode):
                 # GTIN-12 / EAN-13 / zero-padded GTIN-14 identify the same
                 # disc. Reject genuine barcode changes, not representation aliases.
                 raise ValueError("Edition barcode changed; refresh again.")
+            if replace_scanned_metadata:
+                for key in ("audio_streams", "video_streams", "subtitles", "disc_count", "disc_metadata_source"):
+                    metadata.pop(key, None)
             for key, value in self._physical_edition_fields(edition_details).items():
                 if fill_missing_only and key == "audio_streams":
                     raw = metadata.get(key) or []
