@@ -2,7 +2,7 @@ import { startKodiRemote, stopKodiRemote, showKodiRemote } from './remote.js';
 import { startI18n, displayLocale, tr, localizedPrompt, localizedConfirm } from './i18n.js';
 import { MediaPlayer } from './player.js';
 import { startMusic, replayRecentMusic } from './music.js';
-import { startStreaming } from './streaming.js';
+import { startStreaming, editionProviderLogos, ensureEditionProviderLogos } from './streaming.js';
 import { bindRatingRange } from './rating-range.js';
 startI18n();
 startMusic();
@@ -2737,14 +2737,75 @@ async function convertExternalSource(sourceID,button){
   }
 }
 
-function editionMarkup(e) {
+// Summaries use the edition's own metadata, never a merged work's disc formats.
+function editionStringValues(value) {
+  if(Array.isArray(value))return value.flatMap(editionStringValues);
+  if(typeof value==='string')return value.split(/[,;]/).map(x=>x.trim()).filter(x=>x&&x!=='—'&&x.toLowerCase()!=='null');
+  if(value&&typeof value==='object')return editionStringValues(value.language||value.lang);
+  return [];
+}
+function uniqueEditionLanguages(values) {
+  const seen=new Set();
+  return values.filter(value=>{
+    const key=value.normalize('NFD').replace(/\p{M}/gu,'').toLowerCase();
+    if(seen.has(key))return false;
+    seen.add(key);return true;
+  });
+}
+function editionPhysicalSupport(metadata) {
+  const aliases=editionStringValues([metadata.formats,metadata.media,metadata.format])
+    .map(value=>canonicalFormat(value).toLowerCase().replace(/[\s-]+/g,''));
+  const supports=[
+    ['Blu-ray 4K',/^(bluray4k|4kbluray|uhdbluray|ultrahdbluray|4kultrahdbluray)$/],
+    ['Blu-ray 3D',/^bluray3d$/],['Blu-ray',/^bluray$/],['DVD',/^dvd$/]
+  ];
+  return supports.find(([,pattern])=>aliases.some(value=>pattern.test(value)))?.[0]||'';
+}
+function editionAudioLanguages(metadata) {
+  const streams=Array.isArray(metadata.audio_streams)?metadata.audio_streams:
+    Array.isArray(metadata.audio_streams?.streams)?metadata.audio_streams.streams:
+    metadata.audio_streams?[metadata.audio_streams]:[];
+  const values=streams.flatMap(track=>editionStringValues(track?.language||track?.lang));
+  // Legacy exports may have display names rather than structured languages.
+  // Only extract recognizable names or ISO codes, not codec/channel labels.
+  const names=streams.filter(track=>!track?.language&&!track?.lang)
+    .flatMap(track=>editionStringValues(typeof track==='string'?track:track?.name||track?.title));
+  if(!values.length)names.push(...editionStringValues(metadata.audio_tracks));
+  const languagePattern=/\b(?:french|français|francais|english|anglais|german|allemand|deutsch|spanish|espagnol|español|italian|italien|japanese|japonais|korean|coréen|portuguese|portugais|dutch|néerlandais|chinese|chinois|mandarin|cantonese|russian|russe|arabic|arabe|polish|polonais|czech|tchèque|swedish|suédois|danish|danois|finnish|finnois|norwegian|norvégien|greek|grec|turkish|turc|thai|thaï|hindi|hungarian|hongrois|hebrew|hébreu|romanian|roumain|ukrainian|ukrainien|catalan|fra|fre|eng|deu|ger|spa|ita|jpn|kor|por|nld|dut|zho|chi|rus|ara|pol|ces|cze|swe|dan|fin|nor|ell|gre|tur|tha|hin|hun|heb|ron|rum|ukr|FR|EN|DE|ES|IT|JA|KO|PT|NL|ZH)\b/giu;
+  for(const name of names)values.push(...(name.match(languagePattern)||[]));
+  return uniqueEditionLanguages(values.length?values:editionStringValues(metadata.languages));
+}
+function internalEditionSummary(e,item) {
+  const m=e.metadata||{},support=editionPhysicalSupport(m);
+  const ownServices=editionStringValues(m.streaming_services);
+  // Availability of the same film on a provider does not turn its disc into
+  // a streaming edition. Only the record's explicit streaming provenance does.
+  const streaming=!support&&(m.streaming_reference===true||ownServices.length>0);
+  const season=Number.isInteger(m.physical_season)?'<span class="edition-source-season">'+esc(tr('Saison'))+' '+m.physical_season+'</span>':'';
+  if(streaming){
+    const logos=editionProviderLogos([...ownServices,...editionStringValues(item?.streaming_services)]);
+    return '<span class="edition-source-header">'+sourceIcon('internal')+
+      (logos||'<b>Streaming</b>')+'</span>';
+  }
+  const audio=editionAudioLanguages(m),subs=uniqueEditionLanguages(editionStringValues(m.subtitles));
+  const languageParts=[];
+  if(audio.length)languageParts.push(esc(tr('Audio'))+' : <span data-i18n-ignore>'+esc(audio.join(', '))+'</span>');
+  if(subs.length)languageParts.push(esc(tr('Sous-titres'))+' : <span data-i18n-ignore>'+esc(subs.join(', '))+'</span>');
+  return '<span class="edition-source-header">'+sourceIcon('internal')+'<b>'+
+    esc(support||tr('Édition physique'))+'</b>'+season+'</span>'+
+    (languageParts.length?'<span class="edition-source-languages">'+languageParts.join(' · ')+'</span>':'');
+}
+
+function editionMarkup(e,item=state.detail) {
   const m=e.metadata||{};
   const hdrOverride=Array.isArray(m.hdr_override)?m.hdr_override:null;
   const seasonNumber=Number.isInteger(m.physical_season)?m.physical_season:null;
   const fields=[['Saison physique',seasonNumber===null?null:'Saison '+seasonNumber],['Format',m.formats?.join(', ')],['Vidéo',m.video_streams?.map(v=>[v.width&&v.height?`${v.width} × ${v.height}`:'',v.codec,...(hdrOverride===null?[v.hdr_type,v.hdr_detail]:[]),v.stereo_mode].filter(Boolean).join(' · ')).join(' / ')],['HDR',hdrOverride===null?null:(hdrOverride.join(' · ')||'SDR')],['Édition',m.edition||m.version],['Code-barres',m.barcode],['Disques',m.disc_count],['Quantité',m.quantity],['Coffret',m.boxset],['Collection',m.collections?.map(collectionName).join(', ')],['Régions',m.regions?.join(', ')],['Audio',m.audio_tracks?.join(', ')],['Sous-titres',m.subtitles?.join(', ')],['Dernier visionnage',e.last_played?date(e.last_played):null],['Historique CLZ',m.seen_dates?.map(date).join(', ')],['Lectures',e.play_count],['Reprise',e.resume_seconds?`${Math.floor(e.resume_seconds/60)} min`:null],['Fichier',m.file],['Ajout',e.date_added?date(e.date_added):null],['Identifiants',Object.entries(e.identifiers||{}).map(([k,v])=>`${k}: ${v}`).join(' · ')]];
   const label=(seasonNumber===null?'':'Saison '+seasonNumber+' · ')+
     ((e.source_type==='internal'||collectionTypes.includes(e.source_type))?(m.formats?.join(' / ')||'Édition physique'):(m.version||'Fichier Kodi'));
-  return `<details class="edition"><summary><b>${esc(label)}</b> <span class="muted">· ${sourceIcon(e.source_type)} ${esc(e.source_name)}</span></summary><div class="format-badges edition-formats">${formatBadges(m.formats||[])}</div><dl class="edition-grid">${fields.filter(([,v])=>v!==null&&v!==undefined&&v!=='').map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>${state.role==='admin'&&['movie','tvshow'].includes(state.detail?.kind)?`<div class="edition-edit-actions">${e.source_type==='internal'&&isInternalEditionKey(e.external_key)?`<button type="button" class="secondary" data-edit-disc="${esc(e.id)}">Modifier le disque</button>`:''}<button type="button" class="secondary" data-edit-hdr="${esc(e.id)}">Modifier le HDR</button></div>`:''}</details>`;
+  const internal=e.source_type==='internal';
+  const summary=internal?internalEditionSummary(e,item):`<b>${esc(label)}</b> <span class="muted">· ${sourceIcon(e.source_type)} ${esc(e.source_name)}</span>`;
+  return `<details class="edition${internal?' edition-internal':''}"><summary>${summary}</summary><div class="format-badges edition-formats">${formatBadges(m.formats||[])}</div><dl class="edition-grid">${fields.filter(([,v])=>v!==null&&v!==undefined&&v!=='').map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>${state.role==='admin'&&['movie','tvshow'].includes(state.detail?.kind)?`<div class="edition-edit-actions">${e.source_type==='internal'&&isInternalEditionKey(e.external_key)?`<button type="button" class="secondary" data-edit-disc="${esc(e.id)}">Modifier le disque</button>`:''}<button type="button" class="secondary" data-edit-hdr="${esc(e.id)}">Modifier le HDR</button></div>`:''}</details>`;
 }
 function tmdbAttribution(item) {
   if(!item.enriched_at)return '';
@@ -2911,9 +2972,10 @@ function renderDetail(item) {
   hideRatingPopover();
   state.detail=item;
   const backdropPath=item.artwork?.fanart||mediaPosterPath(item);
-  $('detail-content').innerHTML=`${metadataAction(item)}${backdropPath?`<div class="detail-backdrop${rerender?' is-loaded':''}" aria-hidden="true"><img src="${esc(url(backdropPath))}" alt=""></div>`:''}<div class="detail-layout"><div class="detail-poster"><button type="button" id="open-artwork-gallery" class="detail-poster-trigger" title="${esc(tr('Agrandir les images du média'))}" aria-label="${esc(tr('Agrandir les images du média'))}" ${mediaArtworkImages(item).length?'':'disabled'}>${poster(item,true)}</button></div><div class="detail-intro"><p class="eyebrow">${esc(kindLabels[item.kind])}</p><div class="detail-heading"><h2><button type="button" id="copy-media-title" class="detail-copy-title" title="${esc(tr('Copier le titre'))}" aria-label="${esc(tr('Copier le titre'))}">${esc(item.title)}</button></h2>${item.original_title&&item.original_title!==item.title?`<p class="original-title">${esc(item.original_title)}</p>`:''}</div><div class="detail-info">${item.year?`<span>${item.year}</span>`:''}${item.runtime_minutes?`<span>${item.runtime_minutes} min</span>`:''}${item.rating?`<span class="score" title="Note publique : ${Number(item.rating).toFixed(1)}/10">★ ${Number(item.rating).toFixed(1)}</span>`:''}</div>${detailActions(item)}<div class="format-badges" aria-label="Formats disponibles selon les éditions">${detailFormatBadges(item)}</div> ${resumeProgress(item)}<div class="detail-meta-row">${watchMarkup(item)}${seriesProgressMarkup(item)}<div class="card-meta">${badges(item)}</div></div>${!item.source_types.includes('kodi')?'<p class="hint">Cette fiche provient uniquement de collections importées. Aucun fichier Kodi ne lui est actuellement associé dans le catalogue.</p>':''}<button id="add-to-list" class="secondary" ${state.role==='admin'?'':'disabled title="Un accès administrateur est nécessaire pour modifier les listes."'}>+ Ajouter à une liste</button>${item.lists?.length?`<p class="hint">Listes : ${item.lists.map(l=>`<button class="text-button" data-open-list="${esc(l.id)}">${esc(l.name)} ↗</button>`).join(' · ')}</p>`:''}${manualMembershipMarkup(item)}</div><div class="detail-body">${item.kind==='episode'&&item.parent_id?`<button class="text-button" type="button" data-return-to-series="${esc(item.parent_id)}" data-return-season="${item.season??0}">← Série · Saison ${item.season??0} · Épisode ${item.episode??0}</button>`:''}<div class="genre-chips">${item.genres.map(g=>`<button data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div>${item.country?`<p class="hint">Pays : <span data-i18n-ignore>${esc(item.country)}</span></p>`:''}${item.studios?.length?`<p class="hint">Studios : <span data-i18n-ignore>${esc(item.studios.join(' · '))}</span></p>`:''}<p class="synopsis">${esc(item.plot||'Synopsis non renseigné.')}</p>${detailDatesMarkup(item)}${item.kind==='tvshow'?'<section class="detail-section"><p class="section-label">SAISONS</p><div id="season-list" class="season-links">Chargement…</div><div id="episode-list" class="episode-links"></div></section>':''}${castMarkup(item.people||item.cast)}${trailerThumbnailMarkup(item)}<section class="detail-section"><p class="section-label">FICHIERS & ÉDITIONS · ${item.editions.length}</p>${item.editions.map(editionMarkup).join('')}${state.role==='admin'&&item.kind==='movie'?'<button id="diagnose-kodi" class="secondary" type="button">Vérifier la présence dans la vidéothèque</button><div id="kodi-diagnostic" class="metadata-status" role="status" aria-live="polite" hidden></div>':''}</section>${state.role==='admin'&&item.editions.some(e=>e.source_type==='internal')?
+  $('detail-content').innerHTML=`${metadataAction(item)}${backdropPath?`<div class="detail-backdrop${rerender?' is-loaded':''}" aria-hidden="true"><img src="${esc(url(backdropPath))}" alt=""></div>`:''}<div class="detail-layout"><div class="detail-poster"><button type="button" id="open-artwork-gallery" class="detail-poster-trigger" title="${esc(tr('Agrandir les images du média'))}" aria-label="${esc(tr('Agrandir les images du média'))}" ${mediaArtworkImages(item).length?'':'disabled'}>${poster(item,true)}</button></div><div class="detail-intro"><p class="eyebrow">${esc(kindLabels[item.kind])}</p><div class="detail-heading"><h2><button type="button" id="copy-media-title" class="detail-copy-title" title="${esc(tr('Copier le titre'))}" aria-label="${esc(tr('Copier le titre'))}">${esc(item.title)}</button></h2>${item.original_title&&item.original_title!==item.title?`<p class="original-title">${esc(item.original_title)}</p>`:''}</div><div class="detail-info">${item.year?`<span>${item.year}</span>`:''}${item.runtime_minutes?`<span>${item.runtime_minutes} min</span>`:''}${item.rating?`<span class="score" title="Note publique : ${Number(item.rating).toFixed(1)}/10">★ ${Number(item.rating).toFixed(1)}</span>`:''}</div>${detailActions(item)}<div class="format-badges" aria-label="Formats disponibles selon les éditions">${detailFormatBadges(item)}</div> ${resumeProgress(item)}<div class="detail-meta-row">${watchMarkup(item)}${seriesProgressMarkup(item)}<div class="card-meta">${badges(item)}</div></div>${!item.source_types.includes('kodi')?'<p class="hint">Cette fiche provient uniquement de collections importées. Aucun fichier Kodi ne lui est actuellement associé dans le catalogue.</p>':''}<button id="add-to-list" class="secondary" ${state.role==='admin'?'':'disabled title="Un accès administrateur est nécessaire pour modifier les listes."'}>+ Ajouter à une liste</button>${item.lists?.length?`<p class="hint">Listes : ${item.lists.map(l=>`<button class="text-button" data-open-list="${esc(l.id)}">${esc(l.name)} ↗</button>`).join(' · ')}</p>`:''}${manualMembershipMarkup(item)}</div><div class="detail-body">${item.kind==='episode'&&item.parent_id?`<button class="text-button" type="button" data-return-to-series="${esc(item.parent_id)}" data-return-season="${item.season??0}">← Série · Saison ${item.season??0} · Épisode ${item.episode??0}</button>`:''}<div class="genre-chips">${item.genres.map(g=>`<button data-genre="${esc(g)}">${esc(g)}</button>`).join('')}</div>${item.country?`<p class="hint">Pays : <span data-i18n-ignore>${esc(item.country)}</span></p>`:''}${item.studios?.length?`<p class="hint">Studios : <span data-i18n-ignore>${esc(item.studios.join(' · '))}</span></p>`:''}<p class="synopsis">${esc(item.plot||'Synopsis non renseigné.')}</p>${detailDatesMarkup(item)}${item.kind==='tvshow'?'<section class="detail-section"><p class="section-label">SAISONS</p><div id="season-list" class="season-links">Chargement…</div><div id="episode-list" class="episode-links"></div></section>':''}${castMarkup(item.people||item.cast)}${trailerThumbnailMarkup(item)}<section class="detail-section"><p class="section-label">FICHIERS & ÉDITIONS · ${item.editions.length}</p>${item.editions.map(e=>editionMarkup(e,item)).join('')}${state.role==='admin'&&item.kind==='movie'?'<button id="diagnose-kodi" class="secondary" type="button">Vérifier la présence dans la vidéothèque</button><div id="kodi-diagnostic" class="metadata-status" role="status" aria-live="polite" hidden></div>':''}</section>${state.role==='admin'&&item.editions.some(e=>e.source_type==='internal')?
   '<section class="detail-section internal-delete-section"><button id="remove-internal-edition" class="secondary" type="button">Supprimer une édition du catalogue interne…</button></section>':''}${tmdbAttribution(item)}</div></div>`;
   attachImageFallbacks($('detail-content'));syncPersonalControls();$('detail-dialog').scrollTop=previousScroll;
+  void ensureEditionProviderLogos();
   animateDetailBackdrop($('detail-content').querySelector('.detail-backdrop'));
 }
 // Like the iOS card: the blurred, enlarged artwork settles into place once loaded.

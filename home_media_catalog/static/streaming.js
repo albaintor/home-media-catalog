@@ -377,26 +377,47 @@ function providerLogo(key) {
   return '<span class="streaming-logo" data-provider-logo="'+esc(key)+
     '" title="'+esc(names[key]||key)+'">'+providerIcon(key)+'</span>';
 }
+// Shared provider artwork for the video catalogue and the Streaming browser.
+export function editionProviderLogos(keys) {
+  const known=Object.keys(names).filter(key=>keys.includes(key));
+  return known.length?'<span class="edition-provider-logos" aria-label="Streaming">'+
+    known.map(key=>providerLogo(key).replace(' title=', ' role="img" aria-label="'+esc(names[key])+'" title=')).join('')+'</span>':'';
+}
+let editionLogoRegion=null,editionLogoRequest=null;
+export async function ensureEditionProviderLogos() {
+  if(!document.querySelector('#detail-content [data-provider-logo]'))return;
+  const region=validRegion();
+  if(editionLogoRegion===region){refreshProviderLogos();return;}
+  if(editionLogoRequest?.region===region)return editionLogoRequest.promise;
+  const promise=loadProviderLogos();
+  editionLogoRequest={region,promise};
+  try{await promise;}finally{
+    if(editionLogoRequest?.promise===promise)editionLogoRequest=null;
+  }
+}
 function refreshProviderLogos() {
-  document.querySelectorAll('#streaming-page [data-provider-logo]').forEach(node=>{
+  document.querySelectorAll('#streaming-page [data-provider-logo], #detail-content [data-provider-logo]').forEach(node=>{
     node.innerHTML=providerIcon(node.dataset.providerLogo);
   });
 }
 async function loadProviderLogos() {
+  const region=validRegion();
   try {
-    const stored=sessionStorage.getItem('hmc-streaming-logos-'+validRegion());
+    const stored=sessionStorage.getItem('hmc-streaming-logos-'+region);
     if(stored)state.logos=JSON.parse(stored);
   } catch {}
   refreshProviderLogos();
   try {
-    const result=await api('streaming/providers?'+new URLSearchParams({region:validRegion()}));
+    const result=await api('streaming/providers?'+new URLSearchParams({region}));
+    if(validRegion()!==region)return;
     const logos={};
     for(const item of result.providers||[])
       if(names[item.key] && typeof item.logo_path==='string' &&
          /^\/[A-Za-z0-9_.-]{1,150}$/.test(item.logo_path))
         logos[item.key]=item.logo_path;
     state.logos=logos;
-    try{sessionStorage.setItem('hmc-streaming-logos-'+validRegion(),JSON.stringify(logos));}catch{}
+    editionLogoRegion=region;
+    try{sessionStorage.setItem('hmc-streaming-logos-'+region,JSON.stringify(logos));}catch{}
     refreshProviderLogos();
   } catch {
     // Keep previously obtained provider artwork and fallbacks.

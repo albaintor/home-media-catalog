@@ -1055,3 +1055,12 @@ dialog::backdrop{background:#080b13e0;backdrop-filter:none}
   .catalogue-filter-primary,.catalogue-filter-secondary{grid-template-columns:minmax(0,1fr)}
   .catalogue-filter-primary>.multi-filter>summary{min-height:48px}
 }
+
+/* Compact, edition-specific internal source summaries. */
+.edition-internal>summary{line-height:1.45}
+.edition-source-header{display:inline-flex;align-items:center;gap:8px;vertical-align:middle;flex-wrap:wrap;max-width:calc(100% - 20px);font-size:14px}
+.edition-source-header>.source-icon{width:20px;height:20px}
+.edition-source-season{color:var(--muted);font-size:12px}
+.edition-source-languages{display:block;margin:5px 0 0 20px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
+.edition-provider-logos{display:inline-flex;flex-wrap:wrap;align-items:center;gap:5px;max-width:100%}
+.edition-provider-logos .streaming-logo{width:27px;height:27px;background:transparent;border:0;padding:0}

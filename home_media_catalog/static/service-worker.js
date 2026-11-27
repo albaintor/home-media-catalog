@@ -1,5 +1,5 @@
 /* Offline fallback for the public application shell; API and media remain network-only. */
-const SHELL_CACHE='media-catalog-shell-v27';
+const SHELL_CACHE='media-catalog-shell-v28';
 const SHELL=['./','static/app.css','static/app.js','static/i18n.js','static/remote.js','static/player.js','static/music.js','static/music.css','static/streaming.js','static/streaming.css','static/cinema.svg','static/kodi-logo.svg','static/app-store-badge.svg'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(SHELL_CACHE).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting()));
